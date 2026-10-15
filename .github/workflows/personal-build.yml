@@ -1,0 +1,60 @@
+name: Personal build
+
+# Builds the Windows installer on every push to main and puts it on the
+# "personal-build" release, replacing the previous one.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: personal-build
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build installer
+        run: bun run tauri build --bundles nsis
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          INSTALLER=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe | head -n 1)
+          if [ -z "$INSTALLER" ]; then
+            echo "::error::No installer was built."
+            exit 1
+          fi
+          cp "$INSTALLER" Bloom-personal-setup.exe
+          STAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+          gh release delete personal-build --yes --cleanup-tag || true
+          gh release create personal-build Bloom-personal-setup.exe \
+            --target "$GITHUB_SHA" \
+            --title "Bloom personal build" \
+            --notes "Built $STAMP from ${GITHUB_SHA::7}. Download Bloom-personal-setup.exe and run it to install or update." \
+            --prerelease
