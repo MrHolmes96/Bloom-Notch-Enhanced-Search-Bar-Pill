@@ -3,6 +3,7 @@
 mod bluetooth;
 mod commands;
 mod dock_extras;
+mod jumplist;
 mod services;
 mod shelf;
 mod shelf_preview;
@@ -195,6 +196,8 @@ fn main() {
             updater::check_for_updates,
             updater::install_update,
             updater::get_update_state,
+            jumplist::get_jump_list,
+            jumplist::open_jump_item,
             dock_extras::get_dock_extras,
             dock_extras::open_dock_extra,
             dock_extras::eject_dock_extra,

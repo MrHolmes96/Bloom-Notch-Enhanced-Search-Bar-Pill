@@ -396,6 +396,35 @@ body {
 	margin: 4px 8px;
 }
 
+/* Native jump list (pinned, recent, the app's own categories and tasks). */
+.jump-list {
+	display: flex;
+	flex-direction: column;
+	overflow-y: auto;
+	max-width: 320px;
+}
+
+.jump-group + .jump-group {
+	margin-top: 4px;
+}
+
+.menu-heading {
+	padding: 6px 12px 2px;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	color: var(--bloom-text, white);
+	opacity: 0.55;
+	cursor: default;
+	user-select: none;
+}
+
+.menu-item.jump-item {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
 .menu-item.has-submenu {
 	display: flex;
 	justify-content: space-between;

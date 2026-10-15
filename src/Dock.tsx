@@ -10,6 +10,7 @@ import { reloadIfMirrorWasStale } from "./hooks/settingsMirror";
 
 import { mergeTrayApps, selectDockTrayApps, type AppInfo, type TrayApp } from "./dockApps";
 import { removeCustomFolder, type DockExtra } from "./dockExtras";
+import { fetchJumpList, hasJumpList, openJumpItem, type JumpGroup } from "./jumpList";
 
 // Host processes (Edge/Chrome/Brave/ApplicationFrameHost) run every PWA/UWP
 // window, so their window title must be part of their identity — otherwise two
@@ -167,6 +168,9 @@ const Dock = memo(function Dock() {
 		extra?: DockExtra | null;
 	} | null>(null);
 	const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null);
+	const [jumpList, setJumpList] = useState<JumpGroup[]>([]);
+	// Ignores a jump list that arrives after its menu was closed or replaced.
+	const jumpListRequestRef = useRef(0);
 	const [activeOrder, setActiveOrder] = useState<string[]>([]);
 	const observedTrayPathsRef = useRef(new Set<string>());
 	const [isDragging, setIsDragging] = useState(false);
@@ -693,6 +697,13 @@ const Dock = memo(function Dock() {
 			return;
 		}
 		setContextMenu({ x: e.clientX, y: e.clientY, app });
+		const request = ++jumpListRequestRef.current;
+		setJumpList([]);
+		if (hasJumpList(app)) {
+			void fetchJumpList(app).then((groups) => {
+				if (jumpListRequestRef.current === request) setJumpList(groups);
+			});
+		}
 	};
 
 	const handleExtraClick = (extra: DockExtra) => {
@@ -702,6 +713,8 @@ const Dock = memo(function Dock() {
 	const handleExtraContextMenu = (e: React.MouseEvent, extra: DockExtra) => {
 		e.stopPropagation();
 		e.preventDefault();
+		jumpListRequestRef.current++;
+		setJumpList([]);
 		setContextMenu({ x: e.clientX, y: e.clientY, app: null, extra });
 	};
 
@@ -738,11 +751,13 @@ const Dock = memo(function Dock() {
 			left: Math.max(margin, Math.min(contextMenu.x, window.innerWidth - r.width - margin)),
 			top: Math.max(margin, contextMenu.y - r.height - margin)
 		});
-	}, [contextMenu, scale]);
+	}, [contextMenu, scale, jumpList]);
 
 	const closeMenu = () => {
 		setContextMenu(null);
 		setActiveSubmenu(null);
+		jumpListRequestRef.current++;
+		setJumpList([]);
 		invoke("set_menu_open", { open: false, rect: null }).catch(() => {});
 	};
 
@@ -776,7 +791,7 @@ const Dock = memo(function Dock() {
 		}
 
 		invoke("set_menu_open", { open, rect }).catch(() => {});
-	}, [contextMenu, menuPos, showAddPopup, pinnedApps, activeApps, activeSubmenu, scale]);
+	}, [contextMenu, menuPos, showAddPopup, pinnedApps, activeApps, activeSubmenu, scale, jumpList]);
 
 	const dockItems = useMemo(() => {
 		const runningMap = new Map();
@@ -1602,6 +1617,38 @@ const Dock = memo(function Dock() {
 						</>
 					) : contextMenu.app ? (
 						<>
+							{jumpList.length > 0 && (
+								<>
+									<div
+										className="jump-list"
+										style={{ maxHeight: Math.max(120, window.innerHeight / scale - 260) }}
+									>
+										{jumpList.map((group) => (
+											<div key={`${group.kind}:${group.name}`} className="jump-group">
+												<div className="menu-heading">{group.name}</div>
+												{group.items.map((item, index) =>
+													item.separator ? (
+														<div key={`sep-${index}`} className="menu-divider" />
+													) : (
+														<div
+															key={item.id}
+															className="menu-item jump-item"
+															title={item.title}
+															onClick={() => {
+																closeMenu();
+																openJumpItem(item.id);
+															}}
+														>
+															{item.title}
+														</div>
+													)
+												)}
+											</div>
+										))}
+									</div>
+									<div className="menu-divider" />
+								</>
+							)}
 							<div className="menu-item" onClick={() => togglePin(contextMenu.app!)}>
 								{contextMenu.app.is_pinned ? "Unpin from Dock" : "Pin to Dock"}
 							</div>
