@@ -1309,11 +1309,9 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
     let tx_clone = tx.clone();
     let handle_visibility = app_handle.clone();
     std::thread::spawn(move || {
-        use windows::Win32::Foundation::{POINT, RECT};
-        use windows::Win32::Graphics::Gdi::ClientToScreen;
+        use windows::Win32::Foundation::RECT;
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetClientRect, GetForegroundWindow, GetWindowLongW, GetWindowRect, IsIconic, IsZoomed,
-            GWL_STYLE, WS_CAPTION, WS_MAXIMIZE,
+            GetForegroundWindow, GetWindowRect, IsIconic, IsZoomed,
         };
         let mut last_visible = true;
         let mut last_dock_overlap: Option<bool> = None;
@@ -1343,9 +1341,6 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         last_monitor_update = now;
                     }
                 }
-                use windows::Win32::Graphics::Gdi::{
-                    GetMonitorInfoA, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-                };
                 let mut hwnd = GetForegroundWindow();
 
                 // Find the first meaningful window for overlap detection.
@@ -1433,125 +1428,19 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                 }
 
                 if !hwnd.is_invalid() {
-                    if is_known_shell {
-                        should_overlap = false;
-                        current_is_fs = false;
-                    } else {
-                        // Current hwnd is now guaranteed to be visible, non-iconic and non-cloaked
-                        use windows::Win32::UI::WindowsAndMessaging::{
-                            GWL_EXSTYLE, WS_EX_TOOLWINDOW,
-                        };
-                        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-
-                        let is_transient = (ex_style & WS_EX_TOOLWINDOW.0) != 0;
-
-                        if !is_transient {
-                            let mut rect = RECT::default();
-                            let dwm_res = DwmGetWindowAttribute(
-                                hwnd,
-                                DWMWA_EXTENDED_FRAME_BOUNDS,
-                                &mut rect as *mut _ as *mut _,
-                                std::mem::size_of::<RECT>() as u32,
-                            );
-                            let has_rect =
-                                dwm_res.is_ok() || GetWindowRect(hwnd, &mut rect).is_ok();
-
-                            if has_rect {
-                                let h_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-                                let mut mi = MONITORINFO {
-                                    cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                                    ..Default::default()
-                                };
-
-                                if GetMonitorInfoA(h_monitor, &mut mi).as_bool() {
-                                    let screen_rect = mi.rcMonitor;
-                                    let is_maximized =
-                                        IsZoomed(hwnd).as_bool() || (style & WS_MAXIMIZE.0) != 0;
-                                    let is_maximized_standard =
-                                        is_maximized && (style & WS_CAPTION.0) != 0;
-
-                                    let mut is_client_fullscreen = false;
-                                    let mut client_rect = RECT::default();
-                                    if GetClientRect(hwnd, &mut client_rect).is_ok() {
-                                        let mut top_left = POINT {
-                                            x: client_rect.left,
-                                            y: client_rect.top,
-                                        };
-                                        let mut bottom_right = POINT {
-                                            x: client_rect.right,
-                                            y: client_rect.bottom,
-                                        };
-                                        let _ = ClientToScreen(hwnd, &mut top_left);
-                                        let _ = ClientToScreen(hwnd, &mut bottom_right);
-
-                                        is_client_fullscreen = top_left.x <= screen_rect.left
-                                            && top_left.y <= screen_rect.top
-                                            && bottom_right.x >= screen_rect.right
-                                            && bottom_right.y >= screen_rect.bottom;
-                                    }
-
-                                    let is_matches_screen = rect.left <= screen_rect.left
-                                        && rect.top <= screen_rect.top
-                                        && rect.right >= screen_rect.right
-                                        && rect.bottom >= screen_rect.bottom;
-
-                                    // Truly fullscreen means client covers screen, OR window matches screen but is not just a standard maximized window
-                                    current_is_fs = (is_client_fullscreen || is_matches_screen)
-                                        && !is_maximized_standard;
-
-                                    if current_is_fs || is_maximized {
-                                        should_overlap = true;
-                                        should_notch_overlap = true;
-                                        // Standard maximized windows leave the dock's
-                                        // reserved strip empty on both sides, so the dock
-                                        // can stretch to a full taskbar. True fullscreen
-                                        // windows cover the screen and should not.
-                                        should_maximized = is_maximized && !current_is_fs;
-                                    } else {
-                                        should_overlap = false;
-                                        if let Ok(dock_rect_lock) = DOCK_RECT.lock() {
-                                            if let Some(dr) = *dock_rect_lock {
-                                                let scale = cached_scale;
-                                                let d_left = (dr.x as f64 * scale) as i32;
-                                                let d_right =
-                                                    d_left + (dr.width as f64 * scale) as i32;
-                                                let res_h = (56.0 * scale) as i32;
-                                                let trigger_y = screen_rect.bottom - res_h;
-
-                                                if rect.left < d_right - 4
-                                                    && rect.right > d_left + 4
-                                                    && rect.bottom > trigger_y + 4
-                                                {
-                                                    should_overlap = true;
-                                                }
-                                            }
-                                        }
-
-                                        if let Ok(notch_rect_lock) = NOTCH_RECT.lock() {
-                                            if let Some(nr) = *notch_rect_lock {
-                                                let scale = cached_scale;
-                                                let n_left = (nr.x as f64 * scale) as i32;
-                                                let n_right =
-                                                    n_left + (nr.width as f64 * scale) as i32;
-                                                let res_h = (36.0 * scale) as i32;
-                                                let trigger_y = screen_rect.top + res_h;
-
-                                                if rect.left < n_right - 4
-                                                    && rect.right > n_left + 4
-                                                    && rect.top < trigger_y - 4
-                                                {
-                                                    should_notch_overlap = true;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            should_overlap = false;
-                            current_is_fs = false;
+                    if !is_known_shell {
+                        let mut state = window_overlap_state(hwnd, cached_scale);
+                        // A pop-up (a dialog, a browser bubble, a tool window)
+                        // sits on top of the window it belongs to. It must not
+                        // bring the notch or dock back over that window, for
+                        // example over a full-screen video in the browser.
+                        if let Some(base) = popup_base_window(hwnd, my_process_id) {
+                            state = state.merge(window_overlap_state(base, cached_scale));
                         }
+                        should_overlap = state.dock;
+                        should_notch_overlap = state.notch;
+                        should_maximized = state.maximized;
+                        current_is_fs = state.fullscreen;
                     }
                 } else {
                     last_hwnd = hwnd;
@@ -1669,6 +1558,232 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
     });
 
     tx
+}
+
+/// What the window in front means for the dock and notch.
+#[derive(Clone, Copy, Default)]
+struct OverlapState {
+    /// The dock should get out of the way.
+    dock: bool,
+    /// The notch should get out of the way.
+    notch: bool,
+    /// A standard maximized window (the adaptive dock stretches).
+    maximized: bool,
+    /// A true full-screen window.
+    fullscreen: bool,
+}
+
+impl OverlapState {
+    /// Combines a pop-up's own state with the window it sits on.
+    fn merge(self, other: OverlapState) -> OverlapState {
+        let fullscreen = self.fullscreen || other.fullscreen;
+        OverlapState {
+            dock: self.dock || other.dock,
+            notch: self.notch || other.notch,
+            maximized: (self.maximized || other.maximized) && !fullscreen,
+            fullscreen,
+        }
+    }
+}
+
+/// Whether a window covers its monitor, is maximized, or reaches into the
+/// dock or notch area.
+unsafe fn window_overlap_state(hwnd: HWND, cached_scale: f64) -> OverlapState {
+    use windows::Win32::Foundation::{POINT, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        ClientToScreen, GetMonitorInfoA, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClientRect, GetWindowRect, IsZoomed, GWL_STYLE, WS_CAPTION, WS_MAXIMIZE,
+    };
+
+    let mut state = OverlapState::default();
+    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+    let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+    // Tool windows float above other windows and never decide anything on
+    // their own; popup_base_window finds what they sit on.
+    if (ex_style & WS_EX_TOOLWINDOW.0) != 0 {
+        return state;
+    }
+
+    let mut rect = RECT::default();
+    let dwm_res = DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_EXTENDED_FRAME_BOUNDS,
+        &mut rect as *mut _ as *mut _,
+        std::mem::size_of::<RECT>() as u32,
+    );
+    if dwm_res.is_err() && GetWindowRect(hwnd, &mut rect).is_err() {
+        return state;
+    }
+
+    let h_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    let mut mi = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !GetMonitorInfoA(h_monitor, &mut mi).as_bool() {
+        return state;
+    }
+    let screen_rect = mi.rcMonitor;
+    let is_maximized = IsZoomed(hwnd).as_bool() || (style & WS_MAXIMIZE.0) != 0;
+    let is_maximized_standard = is_maximized && (style & WS_CAPTION.0) != 0;
+
+    let mut is_client_fullscreen = false;
+    let mut client_rect = RECT::default();
+    if GetClientRect(hwnd, &mut client_rect).is_ok() {
+        let mut top_left = POINT {
+            x: client_rect.left,
+            y: client_rect.top,
+        };
+        let mut bottom_right = POINT {
+            x: client_rect.right,
+            y: client_rect.bottom,
+        };
+        let _ = ClientToScreen(hwnd, &mut top_left);
+        let _ = ClientToScreen(hwnd, &mut bottom_right);
+
+        is_client_fullscreen = top_left.x <= screen_rect.left
+            && top_left.y <= screen_rect.top
+            && bottom_right.x >= screen_rect.right
+            && bottom_right.y >= screen_rect.bottom;
+    }
+
+    let is_matches_screen = rect.left <= screen_rect.left
+        && rect.top <= screen_rect.top
+        && rect.right >= screen_rect.right
+        && rect.bottom >= screen_rect.bottom;
+
+    // Truly fullscreen means client covers screen, OR window matches screen but is not just a standard maximized window
+    state.fullscreen = (is_client_fullscreen || is_matches_screen) && !is_maximized_standard;
+
+    if state.fullscreen || is_maximized {
+        state.dock = true;
+        state.notch = true;
+        // Standard maximized windows leave the dock's reserved strip empty on
+        // both sides, so the dock can stretch to a full taskbar. True
+        // fullscreen windows cover the screen and should not.
+        state.maximized = is_maximized && !state.fullscreen;
+        return state;
+    }
+
+    if let Ok(dock_rect_lock) = DOCK_RECT.lock() {
+        if let Some(dr) = *dock_rect_lock {
+            let d_left = (dr.x as f64 * cached_scale) as i32;
+            let d_right = d_left + (dr.width as f64 * cached_scale) as i32;
+            let res_h = (56.0 * cached_scale) as i32;
+            let trigger_y = screen_rect.bottom - res_h;
+
+            if rect.left < d_right - 4 && rect.right > d_left + 4 && rect.bottom > trigger_y + 4 {
+                state.dock = true;
+            }
+        }
+    }
+
+    if let Ok(notch_rect_lock) = NOTCH_RECT.lock() {
+        if let Some(nr) = *notch_rect_lock {
+            let n_left = (nr.x as f64 * cached_scale) as i32;
+            let n_right = n_left + (nr.width as f64 * cached_scale) as i32;
+            let res_h = (36.0 * cached_scale) as i32;
+            let trigger_y = screen_rect.top + res_h;
+
+            if rect.left < n_right - 4 && rect.right > n_left + 4 && rect.top < trigger_y - 4 {
+                state.notch = true;
+            }
+        }
+    }
+    state
+}
+
+/// A visible app window that can be the one a pop-up belongs to: not Bloom,
+/// not hidden, minimized or cloaked, and not the desktop or the taskbar.
+unsafe fn is_base_candidate(hwnd: HWND, my_process_id: u32) -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{GetClassNameA, GetWindowRect, IsIconic};
+    if hwnd.is_invalid() || !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+        return false;
+    }
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    if pid == my_process_id {
+        return false;
+    }
+    let mut cloaked = 0u32;
+    if DwmGetWindowAttribute(
+        hwnd,
+        windows::Win32::Graphics::Dwm::DWMWA_CLOAKED,
+        &mut cloaked as *mut _ as *mut _,
+        4,
+    )
+    .is_ok()
+        && cloaked != 0
+    {
+        return false;
+    }
+    let mut class_name = [0u8; 256];
+    let len = GetClassNameA(hwnd, &mut class_name);
+    let class = std::str::from_utf8(&class_name[..len as usize]).unwrap_or("");
+    if matches!(
+        class,
+        "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+    ) {
+        return false;
+    }
+    let mut rect = RECT::default();
+    GetWindowRect(hwnd, &mut rect).is_ok() && rect.right > rect.left && rect.bottom > rect.top
+}
+
+/// For a pop-up in front, the app window it belongs to: the window that owns
+/// it (dialogs, browser bubbles, find bars), or for a free-floating tool
+/// window or dialog the app window right underneath it. None for an ordinary
+/// window.
+unsafe fn popup_base_window(hwnd: HWND, my_process_id: u32) -> Option<HWND> {
+    use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetAncestor, GetClassNameA, GetWindow, GA_ROOTOWNER, GW_HWNDNEXT,
+    };
+
+    let root_owner = GetAncestor(hwnd, GA_ROOTOWNER);
+    let owned = !root_owner.is_invalid() && root_owner != hwnd;
+    if owned && is_base_candidate(root_owner, my_process_id) {
+        return Some(root_owner);
+    }
+
+    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+    let mut class_name = [0u8; 256];
+    let len = GetClassNameA(hwnd, &mut class_name);
+    let is_dialog = std::str::from_utf8(&class_name[..len as usize]).unwrap_or("") == "#32770";
+    let floats = (ex_style & WS_EX_TOOLWINDOW.0) != 0 || is_dialog;
+    // An owned pop-up whose owner is hidden (a common pattern for dialogs)
+    // is treated like a free-floating one.
+    if !(owned || floats) {
+        return None;
+    }
+
+    // The window directly underneath, on the same monitor.
+    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    let mut next = GetWindow(hwnd, GW_HWNDNEXT).unwrap_or_default();
+    for _ in 0..40 {
+        if next.is_invalid() {
+            break;
+        }
+        let next_ex = GetWindowLongW(next, GWL_EXSTYLE) as u32;
+        if (next_ex & WS_EX_TOOLWINDOW.0) == 0 && is_base_candidate(next, my_process_id) {
+            if MonitorFromWindow(next, MONITOR_DEFAULTTONEAREST) == monitor {
+                return Some(next);
+            }
+        } else {
+            let mut class_name = [0u8; 256];
+            let len = GetClassNameA(next, &mut class_name);
+            let class = std::str::from_utf8(&class_name[..len as usize]).unwrap_or("");
+            // Reached the desktop: the pop-up sits on nothing.
+            if class == "Progman" || class == "WorkerW" {
+                break;
+            }
+        }
+        next = GetWindow(next, GW_HWNDNEXT).unwrap_or_default();
+    }
+    None
 }
 
 fn set_physical_monitors_brightness(brightness: u32) {
