@@ -93,6 +93,18 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-brightness-overlay-enabled` | `"true"` / `"false"` | `"true"` | Show Bloom brightness HUD when brightness changes.                       |
 | `bloom-brightness-edge-enabled`    | `"true"` / `"false"` | `"true"` | Trigger brightness HUD by hovering the right screen edge.                |
 
+### Search Bar Pill
+
+| Key                                | Type                                   | Default       | Description                                                                                                       |
+| ---------------------------------- | -------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `bloom-launcher-enabled`           | `"true"` / `"false"`                   | `"true"`      | Turn the search bar and its shortcuts on or off.                                                                  |
+| `bloom-launcher-hotkey`            | string                                 | `"Alt+Space"` | Shortcut that opens the search bar, e.g. `"Alt+Space"`, `"Ctrl+Shift+K"`, `"Win+F2"`.                             |
+| `bloom-launcher-ignore-fullscreen` | `"true"` / `"false"`                   | `"false"`     | Ignore the shortcut while a full-screen app or game is in front.                                                  |
+| `bloom-launcher-position`          | `"notch"` / `"upper"` / `"center"`     | `"notch"`     | Where the search bar opens: under the notch, a quarter down the screen, or near the middle.                       |
+| `bloom-launcher-screen`            | `"cursor"` / `"focus"` / `"primary"`   | `"cursor"`    | Which monitor it opens on: the one with the mouse, the one with the active window, or the main monitor.           |
+| `bloom-launcher-query-hotkeys`     | JSON array of `{ "hotkey", "query" }`  | `"[]"`        | Extra shortcuts that open the search bar with a search already typed in.                                          |
+| `bloom-launcher-config`            | JSON object                            | (built in)    | Everything else on the Search Bar Pill page: plugins, keywords, web searches, file search, shell and more.        |
+
 ### Appearance
 
 | Key                      | Type                                             | Default     | Description                                                                                                                                                 |

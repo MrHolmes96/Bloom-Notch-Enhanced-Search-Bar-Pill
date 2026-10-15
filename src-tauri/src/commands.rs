@@ -3003,6 +3003,9 @@ pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Re
     if key == "bloom-scale" {
         re_register_appbars(&app, &settings);
     }
+    if key.starts_with("bloom-launcher-") {
+        crate::launcher::reload_hotkeys();
+    }
     Ok(())
 }
 
@@ -3786,6 +3789,14 @@ pub fn setup_settings_watcher(app: AppHandle) {
                             (changed, removed)
                         };
                         // Lock dropped — safe to emit without blocking save_setting
+                        if changed
+                            .iter()
+                            .map(|(key, _)| key)
+                            .chain(removed.iter())
+                            .any(|key| key.starts_with("bloom-launcher-"))
+                        {
+                            crate::launcher::reload_hotkeys();
+                        }
                         for (key, value) in &changed {
                             let _ = app.emit(
                                 "settings-external-changed",

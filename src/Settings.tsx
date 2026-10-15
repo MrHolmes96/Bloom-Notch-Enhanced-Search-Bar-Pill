@@ -3,8 +3,9 @@ import { createRoot } from "react-dom/client";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Effect } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { X, Settings, Palette, PanelTop, Monitor, Layers, Info, Megaphone } from "lucide-react";
+import { X, Settings, Palette, PanelTop, Monitor, Layers, Search, Info, Megaphone } from "lucide-react";
 import {
 	useSettings,
 	GeneralTab,
@@ -12,6 +13,7 @@ import {
 	NotchTab,
 	DockTab,
 	OverlaysTab,
+	SearchBarTab,
 	AboutTab
 } from "./settings/index";
 import type { SettingsTab } from "./settings/index";
@@ -27,6 +29,7 @@ const TABS: { id: SettingsTab; label: string; icon: typeof Settings }[] = [
 	{ id: "notch", label: "Notch", icon: PanelTop },
 	{ id: "dock", label: "Dock", icon: Monitor },
 	{ id: "overlays", label: "Overlays", icon: Layers },
+	{ id: "search-bar", label: "Search Bar Pill", icon: Search },
 	{ id: "about", label: "About", icon: Info }
 ];
 
@@ -37,6 +40,13 @@ function SettingsApp() {
 
 	useEffect(() => {
 		return initTheme();
+	}, []);
+
+	useEffect(() => {
+		const unlisten = listen<SettingsTab>("settings-open-tab", (e) => setActiveTab(e.payload));
+		return () => {
+			void unlisten.then((fn) => fn());
+		};
 	}, []);
 
 	useEffect(() => {
@@ -241,6 +251,7 @@ function SettingsApp() {
 							toggleBrightnessEdge={settings.toggleBrightnessEdge}
 						/>
 					)}
+					{activeTab === "search-bar" && <SearchBarTab />}
 					{activeTab === "about" && (
 						<AboutTab
 							appVersion={settings.appVersion}

@@ -4,6 +4,7 @@ mod bluetooth;
 mod commands;
 mod dock_extras;
 mod jumplist;
+mod launcher;
 mod services;
 mod shelf;
 mod shelf_preview;
@@ -198,6 +199,32 @@ fn main() {
             updater::get_update_state,
             jumplist::get_jump_list,
             jumplist::open_jump_item,
+            launcher::launcher_hotkey_status,
+            launcher::launcher_hide,
+            launcher::launcher_set_size,
+            launcher::launcher_set_game_mode,
+            launcher::launcher_game_mode,
+            launcher::launcher_open_settings,
+            launcher::launcher_reindex,
+            launcher::launcher_open_config_dir,
+            launcher::actions::launcher_open,
+            launcher::actions::launcher_run_command_line,
+            launcher::actions::launcher_reveal,
+            launcher::actions::launcher_copy_files,
+            launcher::actions::launcher_recycle,
+            launcher::actions::launcher_run_shell,
+            launcher::actions::launcher_file_info,
+            launcher::actions::launcher_list_dir,
+            launcher::actions::launcher_path_programs,
+            launcher::actions::launcher_resolve_app_path,
+            launcher::bookmarks::launcher_bookmarks,
+            launcher::icons::launcher_file_icon,
+            launcher::icons::launcher_thumbnail,
+            launcher::index::launcher_search_index,
+            launcher::suggest::launcher_web_suggestions,
+            launcher::system::launcher_system_command,
+            launcher::system::launcher_processes,
+            launcher::system::launcher_kill,
             dock_extras::get_dock_extras,
             dock_extras::open_dock_extra,
             dock_extras::eject_dock_extra,
@@ -351,6 +378,7 @@ fn main() {
             let tx = setup_system_worker(app.handle().clone());
             let _ = COMMAND_SENDER.set(tx.clone());
             services::setup_keyboard_hook(app.handle().clone());
+            launcher::start_hotkey_listener(app.handle().clone());
             setup_taskbar_hook();
             setup_audio_visualization(app.handle().clone());
             setup_settings_watcher(app.handle().clone());

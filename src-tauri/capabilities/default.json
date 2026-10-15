@@ -2,7 +2,7 @@
 	"$schema": "../gen/schemas/desktop-schema.json",
 	"identifier": "default",
 	"description": "Capability for all windows",
-	"windows": ["main", "overlay", "settings", "dock"],
+	"windows": ["main", "overlay", "settings", "dock", "launcher"],
 	"permissions": [
 		"core:default",
 		"opener:default",
@@ -16,6 +16,7 @@
 		"core:app:default",
 		"dialog:default",
 		"drag:default",
-		"clipboard-manager:allow-write-text"
+		"clipboard-manager:allow-write-text",
+		"clipboard-manager:allow-read-text"
 	]
 }

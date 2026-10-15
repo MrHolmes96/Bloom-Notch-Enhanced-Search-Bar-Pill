@@ -1123,3 +1123,161 @@ input:checked + .slider:before {
 	background: rgba(239, 68, 68, 0.25);
 	color: #ef4444;
 }
+
+/* Search Bar Pill tab */
+
+.sb-input {
+	box-sizing: border-box;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.1));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.08));
+	color: var(--bloom-text, white);
+	font-size: 12px;
+	font-family: inherit;
+	border-radius: 6px;
+	padding: 4px 8px;
+	outline: none;
+	user-select: text;
+}
+
+.sb-input:focus {
+	border-color: var(--bloom-accent, #007aff);
+}
+
+.sb-input::placeholder {
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.3));
+}
+
+.sb-hotkey {
+	min-width: 110px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.1));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.08));
+	color: var(--bloom-text, white);
+	font-size: 12px;
+	font-family: inherit;
+	font-weight: 500;
+	border-radius: 6px;
+	padding: 4px 10px;
+	cursor: pointer;
+	outline: none;
+}
+
+.sb-hotkey:hover {
+	background: var(--bloom-border, rgba(255, 255, 255, 0.15));
+}
+
+.sb-hotkey.recording {
+	border-color: var(--bloom-accent, #007aff);
+	background: color-mix(in srgb, var(--bloom-accent, #007aff) 18%, transparent);
+}
+
+.sb-inline {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+/* A row whose control sits underneath the label, for lists and editors. */
+.sb-block {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 8px;
+}
+
+.sb-block-head {
+	display: flex;
+	align-items: center;
+}
+
+.sb-block-body {
+	padding-left: 40px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.sb-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.sb-source {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.sb-source.off .sb-source-title,
+.sb-source.off .sb-keyword {
+	opacity: 0.45;
+}
+
+.sb-source-title {
+	flex: 1;
+	min-width: 0;
+	font-size: 12px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sb-keyword {
+	flex-shrink: 0;
+	font-size: 11px;
+	font-weight: 600;
+	font-family: "Cascadia Mono", Consolas, monospace;
+	padding: 1px 7px;
+	border-radius: 5px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.08));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.08));
+}
+
+.sb-editor {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 8px;
+	border-radius: 8px;
+	background: rgba(255, 255, 255, 0.03);
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.08));
+}
+
+.sb-editor .sb-input {
+	width: 100%;
+}
+
+.sb-row-buttons,
+.sb-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.sb-note {
+	font-size: 11px;
+	color: var(--text-muted);
+	opacity: 0.8;
+	margin: 6px 6px 0;
+	line-height: 1.4;
+}
+
+/* Hides a divider left at the end of a group. */
+.sb-group-end {
+	display: none;
+}
+
+.setting-group > .setting-divider:last-child,
+.setting-group > .setting-divider:has(+ .sb-group-end) {
+	display: none;
+}
+
+.light-mode .sb-input,
+.light-mode .sb-hotkey,
+.light-mode .sb-keyword {
+	background: rgba(0, 0, 0, 0.04);
+	color: var(--text-color, #1d1d1f);
+}
+
+.light-mode .sb-editor {
+	background: rgba(0, 0, 0, 0.02);
+}

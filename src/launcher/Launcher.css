@@ -1,0 +1,253 @@
+html,
+body {
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+	background: transparent;
+	user-select: none;
+	-webkit-user-select: none;
+	font-family:
+		"Inter",
+		-apple-system,
+		BlinkMacSystemFont,
+		"Segoe UI",
+		sans-serif;
+}
+
+/* Room around the pill for its shadow; the window is sized to this. */
+.launcher-shell {
+	box-sizing: border-box;
+	padding: 6px 12px 0;
+	margin: 0 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+/* Same surface as the notch, so the bar reads as part of it. */
+.launcher-pill {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	height: 52px;
+	padding: 0 22px;
+	border-radius: 999px;
+	background: var(--bloom-bg, rgba(0, 0, 0, 0.92));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+	backdrop-filter: blur(20px);
+	color: var(--bloom-text, #fff);
+}
+
+.launcher-search-icon {
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.6));
+	flex-shrink: 0;
+}
+
+.launcher-chip {
+	flex-shrink: 0;
+	max-width: 40%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
+	font-weight: 600;
+	padding: 4px 10px;
+	border-radius: 999px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.08));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
+}
+
+.launcher-input {
+	flex: 1;
+	min-width: 0;
+	background: transparent;
+	border: none;
+	outline: none;
+	color: var(--bloom-text, #fff);
+	font-size: 17px;
+	font-family: inherit;
+	caret-color: var(--bloom-accent, #007aff);
+	user-select: text;
+	-webkit-user-select: text;
+}
+
+.launcher-input::placeholder {
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.45));
+}
+
+.launcher-clock {
+	flex-shrink: 0;
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.6));
+}
+
+.launcher-panel {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.launcher-results-column {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	padding: 6px;
+	border-radius: 22px;
+	background: var(--bloom-bg-expanded, rgba(0, 0, 0, 0.92));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+	backdrop-filter: blur(20px);
+}
+
+.launcher-message {
+	font-size: 12px;
+	padding: 8px 12px;
+	color: var(--bloom-text, #fff);
+	opacity: 0.85;
+}
+
+.launcher-results {
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bloom-scrollbar-thumb, rgba(255, 255, 255, 0.15)) transparent;
+}
+
+.launcher-row {
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 0 12px;
+	border-radius: 16px;
+	cursor: pointer;
+	color: var(--bloom-text, #fff);
+}
+
+.launcher-row.selected {
+	background: var(--bloom-accent, #007aff);
+	color: #fff;
+}
+
+.launcher-row.selected.confirm {
+	background: #d93025;
+}
+
+.launcher-row-icon {
+	width: 28px;
+	height: 28px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+}
+
+.launcher-row-icon img {
+	width: 28px;
+	height: 28px;
+	object-fit: contain;
+}
+
+.launcher-icon-placeholder {
+	width: 22px;
+	height: 22px;
+	border-radius: 6px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.06));
+}
+
+.launcher-row-text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	flex: 1;
+}
+
+.launcher-row-title,
+.launcher-row-subtitle {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.launcher-row-title {
+	font-size: 14px;
+	font-weight: 500;
+}
+
+.launcher-row-subtitle {
+	font-size: 11px;
+	opacity: 0.6;
+}
+
+.launcher-row.selected .launcher-row-subtitle {
+	opacity: 0.85;
+}
+
+.launcher-row-hint {
+	flex-shrink: 0;
+	display: flex;
+	opacity: 0.7;
+}
+
+.launcher-preview {
+	width: 272px;
+	flex-shrink: 0;
+	box-sizing: border-box;
+	padding: 16px;
+	border-radius: 22px;
+	background: var(--bloom-bg-expanded, rgba(0, 0, 0, 0.92));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+	color: var(--bloom-text, #fff);
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	overflow: hidden;
+}
+
+.launcher-preview-image {
+	height: 150px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.launcher-preview-image img {
+	max-width: 100%;
+	max-height: 150px;
+	object-fit: contain;
+	border-radius: 8px;
+}
+
+.launcher-preview-title {
+	font-size: 14px;
+	font-weight: 600;
+	word-break: break-word;
+}
+
+.launcher-preview-path {
+	font-size: 11px;
+	opacity: 0.6;
+	word-break: break-all;
+	user-select: text;
+	-webkit-user-select: text;
+}
+
+.launcher-preview-facts {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 4px 10px;
+	margin: 4px 0 0;
+	font-size: 12px;
+}
+
+.launcher-preview-facts dt {
+	opacity: 0.6;
+}
+
+.launcher-preview-facts dd {
+	margin: 0;
+	font-variant-numeric: tabular-nums;
+}
