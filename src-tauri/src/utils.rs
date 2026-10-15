@@ -372,24 +372,12 @@ pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) -> bool {
         let mut primary_positioned = true;
         {
             use windows::Win32::UI::WindowsAndMessaging::{
-                GetWindowLongA, SetLayeredWindowAttributes, SetWindowLongA, SetWindowPos,
-                GWL_EXSTYLE, LWA_ALPHA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_LAYERED,
-                WS_EX_TRANSPARENT,
+                SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
             };
             if visible {
-                // Revert any lingering WS_EX_LAYERED / WS_EX_TRANSPARENT left by
-                // open_system_tray if the user quit before the tray thread cleaned up.
-                let ex = GetWindowLongA(tray_hwnd, GWL_EXSTYLE);
-                let cleaned = ex & !(WS_EX_LAYERED.0 as i32) & !(WS_EX_TRANSPARENT.0 as i32);
-                if cleaned != ex {
-                    let _ = SetWindowLongA(tray_hwnd, GWL_EXSTYLE, cleaned);
-                    let _ = SetLayeredWindowAttributes(
-                        tray_hwnd,
-                        windows::Win32::Foundation::COLORREF(0),
-                        255,
-                        LWA_ALPHA,
-                    );
-                }
+                // Also reverts a ghost left by open_system_tray if the user quit
+                // before the tray thread cleaned up.
+                set_taskbar_ghost(tray_hwnd, false);
                 if let Ok(guard) = ORIGINAL_TRAY_RECT.lock() {
                     if let Some(rect) = *guard {
                         primary_positioned = SetWindowPos(
@@ -417,6 +405,7 @@ pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) -> bool {
                         *guard = Some(rect);
                     }
                 }
+                set_taskbar_ghost(tray_hwnd, true);
                 let _ = ShowWindow(tray_hwnd, SW_HIDE);
                 // Move it far off-screen to prevent any "thin line" artifacts or flashes
                 let _ = SetWindowPos(
@@ -438,6 +427,7 @@ pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) -> bool {
                 SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
             };
             if visible {
+                set_taskbar_ghost(secondary_tray_hwnd, false);
                 if let Ok(guard) = ORIGINAL_SEC_TRAY_RECT.lock() {
                     if let Some(rect) = *guard {
                         secondary_positioned = SetWindowPos(
@@ -465,6 +455,7 @@ pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) -> bool {
                         *guard = Some(rect);
                     }
                 }
+                set_taskbar_ghost(secondary_tray_hwnd, true);
                 let _ = ShowWindow(secondary_tray_hwnd, SW_HIDE);
                 let _ = SetWindowPos(
                     secondary_tray_hwnd,
@@ -496,6 +487,33 @@ pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) -> bool {
             }
         }
         primary_matches && secondary_matches
+    }
+}
+
+/// Makes a taskbar window fully transparent and click-through, or reverts it.
+///
+/// While the dock replaces it, the taskbar is kept in auto-hide and hidden, but
+/// Explorer still slides it back in when the cursor touches the screen edge or
+/// the Windows key is pressed. The hide hook only reacts after Explorer has
+/// already drawn it, so the reveal flashes on screen. A ghosted taskbar draws
+/// nothing and passes clicks through, so those reveals are never seen.
+unsafe fn set_taskbar_ghost(hwnd: HWND, ghost: bool) {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongA, SetLayeredWindowAttributes, SetWindowLongA, GWL_EXSTYLE, LWA_ALPHA,
+        WS_EX_LAYERED, WS_EX_TRANSPARENT,
+    };
+    let flags = WS_EX_LAYERED.0 as i32 | WS_EX_TRANSPARENT.0 as i32;
+    let ex = GetWindowLongA(hwnd, GWL_EXSTYLE);
+    if ghost {
+        if ex & flags != flags {
+            let _ = SetWindowLongA(hwnd, GWL_EXSTYLE, ex | flags);
+        }
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA);
+    } else if ex & flags != 0 {
+        // Opaque first: alpha can only be set while the window is still layered.
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
+        let _ = SetWindowLongA(hwnd, GWL_EXSTYLE, ex & !flags);
     }
 }
 
