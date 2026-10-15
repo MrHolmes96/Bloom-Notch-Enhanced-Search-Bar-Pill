@@ -3726,6 +3726,22 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                 return true.into();
             }
 
+            // The native taskbar's own rule: a window owned by another window
+            // (a dialog, a pop-up, a find bar) and a non-activating window only
+            // get a taskbar button when they opt in with WS_EX_APPWINDOW. Without
+            // this, an app's dialogs show up in the dock next to the app itself.
+            {
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    GetWindow, GW_OWNER, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+                };
+                let app_window = (ex_style & WS_EX_APPWINDOW.0) != 0;
+                let owned = GetWindow(hwnd, GW_OWNER).is_ok_and(|owner| !owner.0.is_null());
+                let no_activate = (ex_style & WS_EX_NOACTIVATE.0) != 0;
+                if !app_window && (owned || no_activate) {
+                    return true.into();
+                }
+            }
+
             // Filter out system containers and background stuff
             if title == "Program Manager" || title == "Bloom" || title == "Bloom Dock" {
                 return true.into();
