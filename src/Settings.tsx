@@ -171,6 +171,8 @@ function SettingsApp() {
 							toggleMusicMode={settings.toggleMusicMode}
 							musicCompactNotch={settings.musicCompactNotch}
 							toggleMusicCompactNotch={settings.toggleMusicCompactNotch}
+							notchWidgetsOnHover={settings.notchWidgetsOnHover}
+							toggleNotchWidgetsOnHover={settings.toggleNotchWidgetsOnHover}
 							shelfPersist={settings.shelfPersist}
 							toggleShelfPersist={settings.toggleShelfPersist}
 							mediaLayout={settings.mediaLayout}

@@ -41,6 +41,7 @@ export function useSettings() {
 			? "command-center" : "calendar"
 	);
 	const [musicCompactNotch, setMusicCompactNotch] = useState(true);
+	const [notchWidgetsOnHover, setNotchWidgetsOnHover] = useState(true);
 	const [shelfPersist, setShelfPersist] = useState(
 		() => localStorage.getItem("bloom-shelf-persist") === "true"
 	);
@@ -190,6 +191,7 @@ export function useSettings() {
 			apply(getVal("bloom-notch-default-panel"), setNotchDefaultPanel,
 				(v) => v === "command-center" ? "command-center" : "calendar");
 			apply(getVal("bloom-music-compact-notch"), setMusicCompactNotch, readBool);
+			apply(getVal("bloom-notch-widgets-on-hover"), setNotchWidgetsOnHover, readBool);
 			apply(getVal("bloom-shelf-persist"), setShelfPersist, readBool);
 			apply(getVal("bloom-volume-overlay-enabled"), setVolumeOverlayEnabled, readBool);
 			apply(getVal("bloom-brightness-overlay-enabled"), setBrightnessOverlayEnabled, readBool);
@@ -287,6 +289,7 @@ export function useSettings() {
 		"bloom-notch-default-panel": (v: unknown) =>
 			setNotchDefaultPanel(v === "command-center" ? "command-center" : "calendar"),
 		"bloom-music-compact-notch": setMusicCompactNotch,
+		"bloom-notch-widgets-on-hover": setNotchWidgetsOnHover,
 		"bloom-media-ambience-enabled": setMediaAmbienceEnabled,
 		"bloom-media-compact-glow-enabled": setMediaCompactGlowEnabled,
 		"bloom-media-layout": setMediaLayout,
@@ -464,6 +467,12 @@ export function useSettings() {
 	const changeNotchDefaultPanel = (panel: "calendar" | "command-center") => {
 		setNotchDefaultPanel(panel);
 		saveSetting("bloom-notch-default-panel", panel);
+	};
+
+	const toggleNotchWidgetsOnHover = () => {
+		const next = !notchWidgetsOnHover;
+		setNotchWidgetsOnHover(next);
+		saveSetting("bloom-notch-widgets-on-hover", String(next));
 	};
 
 	const toggleMusicCompactNotch = () => {
@@ -891,6 +900,8 @@ export function useSettings() {
 		changeNotchDefaultPanel,
 		musicCompactNotch,
 		toggleMusicCompactNotch,
+		notchWidgetsOnHover,
+		toggleNotchWidgetsOnHover,
 		shelfPersist,
 		toggleShelfPersist,
 		mediaLayout,

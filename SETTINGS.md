@@ -42,6 +42,7 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | ------------------------ | -------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `bloom-notch-mode`       | `"fixed"` / `"smart"` / `"peek"` | `"fixed"` | Notch (top bar) visibility behavior. Same modes as dock. **peek** shows the notch briefly on media events and notifications.   |
 | `bloom-notch-edge-delay` | milliseconds `"0"`–`"2000"`      | `"200"`   | In smart/peek mode, how long the cursor must rest against the top screen edge before the notch peeks. `"0"` reveals instantly. |
+| `bloom-notch-widgets-on-hover` | `"true"` / `"false"`  | `"true"`  | Only show the status widgets (battery, weather, ...) while the notch is hovered. `"false"` shows them whenever the notch is visible, including when a hidden notch is revealed from the top edge. |
 
 ### Weather
 

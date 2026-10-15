@@ -883,6 +883,11 @@ function App() {
 	const [settingsMusicCompactNotch, setSettingsMusicCompactNotch] = useState(
 		() => localStorage.getItem("bloom-music-compact-notch") !== "false"
 	);
+	// Off: the status widgets show whenever the notch is on screen, including
+	// when a hidden notch is revealed from the top edge, without hovering it.
+	const [widgetsOnHoverOnly, setWidgetsOnHoverOnly] = useState(
+		() => localStorage.getItem("bloom-notch-widgets-on-hover") !== "false"
+	);
 	const [shelfPersist, setShelfPersist] = useState(
 		() => localStorage.getItem("bloom-shelf-persist") === "true"
 	);
@@ -939,6 +944,7 @@ function App() {
 				setDefaultPanel(asNotchPanel(getVal("bloom-notch-default-panel")) ?? "calendar");
 				setShelfPersist(getVal("bloom-shelf-persist", "false") === "true");
 				setSettingsMusicCompactNotch(getVal("bloom-music-compact-notch", "true") !== "false");
+				setWidgetsOnHoverOnly(getVal("bloom-notch-widgets-on-hover", "true") !== "false");
 				setLastPanel(asNotchPanel(getVal("bloom-notch-last-panel")));
 				const viz =
 					getVal("bloom-media-visualizer-enabled") ?? getVal("bloom-visualizer-enabled", "true");
@@ -1092,6 +1098,7 @@ function App() {
 				setDefaultPanel(asNotchPanel(v) ?? "calendar"),
 			"bloom-shelf-persist": setShelfPersist,
 			"bloom-music-compact-notch": setSettingsMusicCompactNotch,
+			"bloom-notch-widgets-on-hover": setWidgetsOnHoverOnly,
 			"bloom-notch-last-panel": (v: unknown) => setLastPanel(asNotchPanel(v)),
 			"bloom-media-visualizer-enabled": setSettingsVisualizerEnabled,
 			"bloom-visualizer-enabled": setSettingsVisualizerEnabled,
@@ -2487,6 +2494,11 @@ function App() {
 		!isOpen && isHovered && bloomMode === "status" && settingsMusicModeEnabled &&
 		mediaInfo.has_media && (!musicActivityVisible || !settingsMusicCompactNotch);
 	const showCompactMusicIcons = isMusicMode || showMusicOnStatusHover;
+	// Status widgets: on hover, or always when "Only Show Widgets on Hover" is
+	// off. A battery or update pulse still takes the collapsed notch while it runs.
+	const showStatusWidgets =
+		isHovered ||
+		(!widgetsOnHoverOnly && !(showPowerPulse || showLowBatteryPulse || showUpdatePulse));
 
 	// The 24-hour clock is ~16px narrower than the 12-hour one.
 	const clock24hTrim = timeFormat24h ? 16 : 0;
@@ -2501,7 +2513,7 @@ function App() {
 		if (showMusicOnStatusHover) {
 			return 170 + (settingsVisualizerEnabled ? 30 : 0);
 		}
-		if (bloomMode === "status" && isHovered) {
+		if (bloomMode === "status" && showStatusWidgets) {
 			const totalWidgets = statusWidgets.left.length + statusWidgets.right.length;
 			return Math.min(200 + totalWidgets * 50, 380) - clock24hTrim;
 		}
@@ -3035,7 +3047,7 @@ function App() {
 																			</motion.div>
 																		)}
 																	</AnimatePresence>
-																) : !showCompactMusicIcons && isHovered && statusWidgets.left.length > 0 ? (
+																) : !showCompactMusicIcons && showStatusWidgets && statusWidgets.left.length > 0 ? (
 																	<motion.div
 																		key="left-widgets"
 																		className="passive-features-group"
@@ -3198,7 +3210,7 @@ function App() {
 																			</button>
 																		</motion.div>
 																	</AnimatePresence>
-																) : !showCompactMusicIcons && isHovered && statusWidgets.right.length > 0 ? (
+																) : !showCompactMusicIcons && showStatusWidgets && statusWidgets.right.length > 0 ? (
 																	<motion.div
 																		key="right-widgets"
 																		className="passive-features-group"

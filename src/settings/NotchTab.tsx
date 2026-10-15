@@ -10,6 +10,7 @@ import {
 	CloudSun,
 	Timer,
 	Archive,
+	MousePointer2,
 	X
 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
@@ -33,6 +34,8 @@ interface NotchTabProps {
 	toggleMusicMode: () => void;
 	musicCompactNotch: boolean;
 	toggleMusicCompactNotch: () => void;
+	notchWidgetsOnHover: boolean;
+	toggleNotchWidgetsOnHover: () => void;
 	shelfPersist: boolean;
 	toggleShelfPersist: () => void;
 	mediaLayout: "classic" | "compact";
@@ -78,6 +81,8 @@ export function NotchTab({
 	toggleMusicMode,
 	musicCompactNotch,
 	toggleMusicCompactNotch,
+	notchWidgetsOnHover,
+	toggleNotchWidgetsOnHover,
 	shelfPersist,
 	toggleShelfPersist,
 	mediaLayout,
@@ -144,13 +149,21 @@ export function NotchTab({
 					desc="Reopen the panel you last used; turn off to choose a fixed default"
 				>
 					<label className="toggle-switch">
-						<input type="checkbox" checked={notchRememberPanel} onChange={toggleNotchRememberPanel} />
+						<input
+							type="checkbox"
+							checked={notchRememberPanel}
+							onChange={toggleNotchRememberPanel}
+						/>
 						<span className="slider"></span>
 					</label>
 				</SettingRow>
 
 				{!notchRememberPanel && (
-					<SettingRow icon={PanelTop} label="Default Panel" desc="Open this panel when you click the notch">
+					<SettingRow
+						icon={PanelTop}
+						label="Default Panel"
+						desc="Open this panel when you click the notch"
+					>
 						<select
 							className="settings-select"
 							value={calendarEnabled ? notchDefaultPanel : "command-center"}
@@ -158,7 +171,9 @@ export function NotchTab({
 								changeNotchDefaultPanel(e.target.value as "calendar" | "command-center")
 							}
 						>
-							<option value="calendar" disabled={!calendarEnabled}>Calendar</option>
+							<option value="calendar" disabled={!calendarEnabled}>
+								Calendar
+							</option>
 							<option value="command-center">Command Center</option>
 						</select>
 					</SettingRow>
@@ -345,6 +360,24 @@ export function NotchTab({
 
 			<div className="setting-group-label">Widgets</div>
 			<div className="setting-group">
+				<SettingRow
+					icon={MousePointer2}
+					label="Only Show Widgets on Hover"
+					desc={
+						notchWidgetsOnHover
+							? "Widgets appear when you hover the notch"
+							: "Widgets show whenever the notch is visible"
+					}
+				>
+					<label className="toggle-switch">
+						<input
+							type="checkbox"
+							checked={notchWidgetsOnHover}
+							onChange={toggleNotchWidgetsOnHover}
+						/>
+						<span className="slider"></span>
+					</label>
+				</SettingRow>
 				<StatusWidgetConfig value={statusWidgets} onChange={handleWidgetsChange} />
 			</div>
 		</>
