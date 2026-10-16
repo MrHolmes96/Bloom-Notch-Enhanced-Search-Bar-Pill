@@ -16,6 +16,22 @@ appears only when an unpinned app is present.
   Computer Management and Windows settings shortcuts. The dock background menu
   includes Task Manager and Taskbar Settings.
 
+## The tray in the notch
+
+The control center's tray button opens the same icons inside the notch. Icons
+on Windows' taskbar (`IsPromoted = 1`) show first; Windows' hidden icons sit in
+a "Hidden icons" section below, like the ^ flyout. The pencil switches to
+editing: move an icon between the two, or hide it from Bloom's tray (and show
+it again). What is changed is kept in `bloom-tray-placement` and only affects
+Bloom: `IsPromoted` is read, never written, and no icon is changed in Windows.
+
+Settings > Notch > System Tray lists every live icon with the same choice, and
+follows Tray Icon Manager: the `HiddenIcons` of its
+`%AppData%\TrayIconManager\config.json` (read only, matched by icon GUID, then
+program, then name) stay hidden in Bloom's tray while "Follow Tray Icon
+Manager" is on. "Copy Tray Icon Manager's Hidden Icons" copies them into
+Bloom's own list, so they stay hidden without it.
+
 ## Implementation and compatibility
 
 `tray.rs` reads notification-icon candidates from Windows 11's
