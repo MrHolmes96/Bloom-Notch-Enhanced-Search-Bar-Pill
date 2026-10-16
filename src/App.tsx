@@ -930,7 +930,7 @@ function App() {
 		() => localStorage.getItem("bloom-notch-shelf-in-scroll") !== "false"
 	);
 	// The notch tray view's height, as the tray panel reports it.
-	const [trayHeight, setTrayHeight] = useState(() => trayPanelHeight(5, 0, 0, false, false));
+	const [trayHeight, setTrayHeight] = useState(() => trayPanelHeight(5, 0, false));
 	// Quick notes and to-dos, reached through the scroll menu.
 	const [notes, setNotes] = useState<NoteItem[]>(() => parseNotes(localStorage.getItem(NOTES_KEY)));
 	const [notesInScroll, setNotesInScroll] = useState(
@@ -2646,15 +2646,19 @@ function App() {
 		}
 		if (bloomMode === "notes") return 36 + notesPanelHeight(notes);
 		if (bloomMode === "blitzit") return 36 + blitzitHeight;
+		// One row of round buttons is part of the control center's base height;
+		// each extra row adds a button and the gap above it, and an empty row
+		// gives its room back.
+		const ccRows = Math.ceil(ccButtons.length / CC_PER_ROW);
+		const ccHeight = 230 + (ccRows === 0 ? -42 : (ccRows - 1) * 42);
 		if (bloomMode === "command-center") {
 			if (!isOpen) return 36;
-			// One row of round buttons is part of the base height; each extra row
-			// adds a button and the gap above it, and an empty row gives its room back.
-			const rows = Math.ceil(ccButtons.length / CC_PER_ROW);
-			return 230 + (rows === 0 ? -42 : (rows - 1) * 42);
+			return ccHeight;
 		}
 		if (bloomMode === "wifi" || bloomMode === "bluetooth") return 300;
-		if (bloomMode === "tray") return 36 + trayHeight;
+		// Never shorter than the control center it opens from, so the pointer
+		// that clicked the tray button is still inside the notch.
+		if (bloomMode === "tray") return Math.max(36 + trayHeight, ccHeight);
 		if (bloomMode === "status") return 36;
 		if (isMusicMode && isOpen) {
 			const hasProgressBar = (mediaInfo.duration_ms ?? 0) > 0;
@@ -3931,7 +3935,7 @@ function App() {
 												onPinChange={setNotchPinned}
 												onHeightChange={setBlitzitHeight}
 												onOpenSettings={() =>
-													void invoke("open_settings_tab", { tab: "integrations" })
+													void invoke("open_settings_tab", { tab: "integration-blitzit" })
 												}
 											/>
 										</motion.div>

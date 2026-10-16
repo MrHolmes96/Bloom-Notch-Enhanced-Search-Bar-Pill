@@ -1377,3 +1377,25 @@ input:checked + .slider:before {
 	font-size: 11px;
 	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.5));
 }
+
+/* Tabs under a tab (each integrated app under Integrations). */
+.sidebar-tab-group {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.sidebar-tab.sidebar-subtab {
+	padding: 5px 12px 5px 34px;
+	font-size: 12px;
+}
+
+.sidebar-tab.sidebar-subtab .sidebar-tab-icon {
+	width: 16px;
+	height: 16px;
+}
+
+.settings-sidebar {
+	overflow-y: auto;
+	scrollbar-width: none;
+}

@@ -4274,11 +4274,7 @@ mod pwa_icon_tests {
 pub async fn get_tray_state() -> crate::tray::TrayState {
     tauri::async_runtime::spawn_blocking(crate::tray::tray_state)
         .await
-        .unwrap_or(crate::tray::TrayState {
-            icons: Vec::new(),
-            manager_found: false,
-            manager_entries: Vec::new(),
-        })
+        .unwrap_or_else(|_| crate::tray::TrayState::empty())
 }
 
 #[tauri::command]

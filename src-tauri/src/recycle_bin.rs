@@ -149,13 +149,47 @@ fn icon_file(dir: &Path, dark_background: bool, level: usize) -> PathBuf {
     dir.join(format!("{}_{}.ico", set, LEVEL_NAMES[level]))
 }
 
+/// Tray Bin's program: where its installer registered it (the folder can be
+/// changed while installing), else its default folder.
 fn traybin_exe() -> Option<PathBuf> {
-    let local = std::env::var_os("LOCALAPPDATA")?;
-    let exe = PathBuf::from(local)
-        .join("Programs")
-        .join("TrayBin")
-        .join("TrayBin.exe");
-    exe.is_file().then_some(exe)
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+    let key = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\TrayBin");
+    let value = wide("DisplayIcon");
+    let mut buffer = [0u16; 1024];
+    let mut size = (buffer.len() * 2) as u32;
+    let registered = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(key.as_ptr()),
+            PCWSTR(value.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buffer.as_mut_ptr() as *mut _),
+            Some(&mut size),
+        )
+        .is_ok()
+    }
+    .then(|| {
+        let length = (size as usize / 2).min(buffer.len());
+        let text = String::from_utf16_lossy(&buffer[..length]);
+        // "C:\...\TrayBin.exe" or "C:\...\TrayBin.exe,0".
+        let path = text
+            .trim_end_matches('\0')
+            .split(',')
+            .next()
+            .unwrap_or_default();
+        PathBuf::from(path.trim().trim_matches('"'))
+    })
+    .filter(|p| p.is_file());
+    registered.or_else(|| {
+        let local = std::env::var_os("LOCALAPPDATA")?;
+        let exe = PathBuf::from(local)
+            .join("Programs")
+            .join("TrayBin")
+            .join("TrayBin.exe");
+        exe.is_file().then_some(exe)
+    })
 }
 
 fn looks_like_ico(bytes: &[u8]) -> bool {

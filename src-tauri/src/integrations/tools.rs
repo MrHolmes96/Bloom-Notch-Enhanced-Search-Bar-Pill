@@ -1,6 +1,7 @@
 //! Finding the right tool on an app's MCP server and filling in its inputs
-//! from the tool's own description (its JSON schema), so Bloom keeps working
-//! when the app renames a tool or adds an option.
+//! from the tool's own description (its name, its text and its JSON schema),
+//! so Bloom keeps working whatever the app calls its tools. The choice can
+//! also be made by hand (Settings > Integrations), which always wins.
 
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -15,14 +16,33 @@ pub enum Kind {
     CompleteTask,
 }
 
-/// A tool name's words: `createTask`, `create_task` and `create-task` all give
+impl Kind {
+    pub const ALL: [Kind; 4] = [
+        Kind::CreateTask,
+        Kind::Lists,
+        Kind::Tasks,
+        Kind::CompleteTask,
+    ];
+
+    /// The name used for a hand-made choice in the settings.
+    pub fn id(self) -> &'static str {
+        match self {
+            Kind::CreateTask => "create",
+            Kind::Lists => "lists",
+            Kind::Tasks => "tasks",
+            Kind::CompleteTask => "complete",
+        }
+    }
+}
+
+/// A name's words: `createTask`, `create_task` and `create-task` all give
 /// `["create", "task"]`.
 pub fn words(name: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
     let mut previous_lower = false;
     for c in name.chars() {
-        if c == '_' || c == '-' || c == ' ' || c == '.' || c == '/' {
+        if !c.is_alphanumeric() {
             if !current.is_empty() {
                 out.push(std::mem::take(&mut current));
             }
@@ -45,113 +65,37 @@ fn has(words: &[String], any: &[&str]) -> bool {
     words.iter().any(|w| any.contains(&w.as_str()))
 }
 
-fn score(tool: &Tool, kind: Kind) -> i32 {
-    let w = words(&tool.name);
-    let joined = w.join("_");
-    let task = has(&w, &["task", "tasks", "todo", "todos"]);
-    let edits = has(
-        &w,
-        &[
-            "update", "edit", "delete", "remove", "move", "rename", "archive", "reorder",
-        ],
-    );
-    match kind {
-        Kind::CreateTask => {
-            if !task || !has(&w, &["create", "add", "new", "make"]) || edits {
-                return 0;
-            }
-            if has(&w, &["subtask", "subtasks", "note", "notes", "comment"]) {
-                return 0;
-            }
-            10 + if joined == "create_task" || joined == "add_task" {
-                5
-            } else {
-                0
-            }
-        }
-        Kind::Lists => {
-            if task || has(&w, &["subtask", "create", "add", "new"]) || edits {
-                return 0;
-            }
-            let lists = has(&w, &["lists"])
-                || (has(&w, &["list"])
-                    && has(
-                        &w,
-                        &[
-                            "get", "fetch", "all", "my", "read", "search", "find", "list",
-                        ],
-                    )
-                    && w.len() >= 2);
-            if !lists {
-                return 0;
-            }
-            10 + if joined == "get_lists" || joined == "list_lists" {
-                3
-            } else {
-                0
-            }
-        }
-        Kind::Tasks => {
-            if !task
-                || !has(
-                    &w,
-                    &[
-                        "get", "list", "search", "find", "fetch", "read", "query", "all",
-                    ],
-                )
-                || edits
-                || has(
-                    &w,
-                    &["create", "add", "new", "complete", "subtask", "schedule"],
-                )
-            {
-                return 0;
-            }
-            10 + if has(&w, &["tasks"]) { 2 } else { 0 }
-        }
-        Kind::CompleteTask => {
-            if !task
-                || has(
-                    &w,
-                    &["subtask", "uncomplete", "incomplete", "undo", "delete"],
-                )
-            {
-                return 0;
-            }
-            if has(
-                &w,
-                &["complete", "completed", "done", "finish", "check", "mark"],
-            ) {
-                return 10;
-            }
-            // An "update task" that can set it done.
-            if has(&w, &["update", "edit"]) && done_field(tool).is_some() {
-                return 5;
-            }
-            0
-        }
-    }
-}
+const TASK: &[&str] = &["task", "tasks", "todo", "todos", "item", "items"];
+const CREATE: &[&str] = &["create", "add", "new", "make", "insert", "upsert", "save"];
+const READ: &[&str] = &[
+    "get", "list", "search", "find", "fetch", "read", "query", "all", "show", "view", "my",
+    "retrieve",
+];
+const DONE: &[&str] = &[
+    "complete",
+    "completed",
+    "done",
+    "finish",
+    "check",
+    "mark",
+    "close",
+];
+const DESTROY: &[&str] = &["delete", "remove", "archive", "trash"];
 
-pub fn pick(tools: &[Tool], kind: Kind) -> Option<&Tool> {
-    tools
-        .iter()
-        .map(|t| (score(t, kind), t))
-        .filter(|(s, _)| *s > 0)
-        .max_by_key(|(s, _)| *s)
-        .map(|(_, t)| t)
-}
-
-fn properties(tool: &Tool) -> Map<String, Value> {
-    tool.schema
+fn properties_of(schema: &Value) -> Map<String, Value> {
+    schema
         .get("properties")
         .and_then(|p| p.as_object())
         .cloned()
         .unwrap_or_default()
 }
 
-fn required(tool: &Tool) -> Vec<String> {
-    tool.schema
+fn properties(tool: &Tool) -> Map<String, Value> {
+    properties_of(&tool.schema)
+}
+
+fn required_of(schema: &Value) -> Vec<String> {
+    schema
         .get("required")
         .and_then(|r| r.as_array())
         .map(|r| {
@@ -160,6 +104,54 @@ fn required(tool: &Tool) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn enum_values(property: &Value) -> Vec<String> {
+    property
+        .get("enum")
+        .and_then(|e| e.as_array())
+        .map(|e| {
+            e.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// An "action" input (`action: create | update | delete`) and its value for
+/// one of `verbs`, for tools that do several things.
+fn action_value(props: &Map<String, Value>, verbs: &[&str]) -> Option<(String, String)> {
+    props.iter().find_map(|(key, property)| {
+        let w = words(key);
+        if !has(
+            &w,
+            &["action", "operation", "op", "mode", "command", "method"],
+        ) {
+            return None;
+        }
+        enum_values(property)
+            .into_iter()
+            .find(|v| has(&words(v), verbs))
+            .map(|v| (key.clone(), v))
+    })
+}
+
+const TITLE_KEYS: &[&str] = &[
+    "title",
+    "name",
+    "task_title",
+    "taskTitle",
+    "task_name",
+    "taskName",
+    "text",
+    "content",
+    "summary",
+];
+
+fn find_key(props: &Map<String, Value>, names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .find_map(|name| props.keys().find(|k| k.eq_ignore_ascii_case(name)).cloned())
 }
 
 fn is_text(property: &Value) -> bool {
@@ -171,10 +163,194 @@ fn is_text(property: &Value) -> bool {
     }
 }
 
-fn find_key(props: &Map<String, Value>, names: &[&str]) -> Option<String> {
-    names
+fn title_key(schema: &Value) -> Option<String> {
+    let props = properties_of(schema);
+    find_key(&props, TITLE_KEYS).or_else(|| {
+        required_of(schema).into_iter().find(|k| {
+            props.get(k).is_some_and(is_text)
+                && !has(
+                    &words(k),
+                    &[
+                        "list",
+                        "id",
+                        "column",
+                        "status",
+                        "date",
+                        "time",
+                        "action",
+                        "operation",
+                    ],
+                )
+        })
+    })
+}
+
+/// Where a task goes when it isn't at the top: `task: {title}` or
+/// `tasks: [{title}]`. Gives the key, the task's schema, and whether it's a list.
+fn nested_task(schema: &Value) -> Option<(String, Value, bool)> {
+    properties_of(schema)
+        .into_iter()
+        .find_map(|(key, property)| {
+            if property.get("type").and_then(|t| t.as_str()) == Some("array") {
+                let item = property.get("items")?.clone();
+                title_key(&item).map(|_| (key, item, true))
+            } else if property.get("properties").is_some() {
+                title_key(&property).map(|_| (key, property, false))
+            } else {
+                None
+            }
+        })
+}
+
+fn takes_a_title(tool: &Tool) -> bool {
+    title_key(&tool.schema).is_some() || nested_task(&tool.schema).is_some()
+}
+
+/// A boolean "done" input, or a status input that has a done value.
+fn done_field_of(props: &Map<String, Value>) -> Option<(String, Value)> {
+    if let Some(key) = find_key(
+        props,
+        &[
+            "completed",
+            "done",
+            "is_completed",
+            "isCompleted",
+            "is_done",
+            "isDone",
+            "complete",
+            "checked",
+        ],
+    ) {
+        return Some((key, Value::Bool(true)));
+    }
+    let key = find_key(props, &["status", "state"])?;
+    let value = enum_values(&props[&key]).into_iter().find(|v| {
+        ["done", "completed", "complete", "finished"].contains(&v.to_lowercase().as_str())
+    })?;
+    Some((key, Value::String(value)))
+}
+
+fn score(tool: &Tool, kind: Kind) -> i32 {
+    let name = words(&tool.name);
+    let text = words(&tool.description);
+    let props = properties(tool);
+    let joined = name.join("_");
+    let task_name = has(&name, TASK);
+    let task_text = has(&text, &["task", "tasks", "todo", "todos"]);
+    let destroy = has(&name, DESTROY);
+    let edits = has(
+        &name,
+        &["update", "edit", "modify", "change", "move", "rename"],
+    );
+    match kind {
+        Kind::CreateTask => {
+            if destroy || has(&name, &["subtask", "subtasks", "note", "notes", "comment"]) {
+                return 0;
+            }
+            let mut score = if task_name && has(&name, CREATE) {
+                10
+            } else if task_name && action_value(&props, CREATE).is_some() {
+                8
+            } else if (task_name || task_text) && has(&text, &["create", "creates", "add", "adds"])
+            {
+                6
+            } else {
+                0
+            };
+            if score == 0 || !takes_a_title(tool) {
+                return 0;
+            }
+            if edits {
+                score -= 2;
+            }
+            if joined == "create_task" || joined == "add_task" {
+                score += 5;
+            }
+            score
+        }
+        Kind::Lists => {
+            if task_name || destroy || edits || has(&name, CREATE) || has(&name, &["subtask"]) {
+                return 0;
+            }
+            if has(&name, &["lists"])
+                || (has(&name, &["list"]) && has(&name, READ) && name.len() >= 2)
+            {
+                10 + if joined == "get_lists" || joined == "list_lists" {
+                    3
+                } else {
+                    0
+                }
+            } else if has(&text, &["lists"])
+                && has(&text, &["get", "gets", "returns", "retrieve", "all"])
+            {
+                5
+            } else {
+                0
+            }
+        }
+        Kind::Tasks => {
+            if destroy
+                || edits
+                || has(&name, CREATE)
+                || has(&name, DONE)
+                || has(&name, &["subtask", "schedule"])
+            {
+                return 0;
+            }
+            if task_name && has(&name, READ) {
+                10 + if has(&name, &["tasks"]) { 2 } else { 0 }
+            } else if task_text
+                && has(
+                    &text,
+                    &["get", "gets", "returns", "retrieve", "search", "find"],
+                )
+                && !has(&text, &["create", "creates"])
+            {
+                5
+            } else {
+                0
+            }
+        }
+        Kind::CompleteTask => {
+            if !task_name && !task_text {
+                return 0;
+            }
+            if destroy
+                || has(
+                    &name,
+                    &["subtask", "uncomplete", "incomplete", "undo", "reopen"],
+                )
+            {
+                return 0;
+            }
+            if task_name && has(&name, DONE) {
+                return 10;
+            }
+            if task_name && action_value(&props, DONE).is_some() {
+                return 8;
+            }
+            if task_name && edits && done_field_of(&props).is_some() {
+                return 5;
+            }
+            0
+        }
+    }
+}
+
+/// The tool for `kind`: the one chosen by hand when it still exists, else
+/// the best match.
+pub fn pick<'a>(tools: &'a [Tool], kind: Kind, chosen: Option<&str>) -> Option<&'a Tool> {
+    if let Some(name) = chosen.filter(|n| !n.is_empty()) {
+        if let Some(tool) = tools.iter().find(|t| t.name == name) {
+            return Some(tool);
+        }
+    }
+    tools
         .iter()
-        .find_map(|name| props.keys().find(|k| k.eq_ignore_ascii_case(name)).cloned())
+        .map(|t| (score(t, kind), t))
+        .filter(|(s, _)| *s > 0)
+        .max_by_key(|(s, _)| *s)
+        .map(|(_, t)| t)
 }
 
 fn list_key(props: &Map<String, Value>) -> Option<String> {
@@ -182,7 +358,7 @@ fn list_key(props: &Map<String, Value>) -> Option<String> {
         .keys()
         .filter(|k| {
             let w = words(k);
-            has(&w, &["list", "listid"]) && !has(&w, &["column", "lists"])
+            has(&w, &["list", "listid", "project", "board"]) && !has(&w, &["column", "lists"])
         })
         .collect();
     // An id is the safest thing to send.
@@ -202,18 +378,6 @@ fn column_key(props: &Map<String, Value>) -> Option<String> {
         .cloned()
 }
 
-fn enum_values(property: &Value) -> Vec<String> {
-    property
-        .get("enum")
-        .and_then(|e| e.as_array())
-        .map(|e| {
-            e.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn squash(text: &str) -> String {
     text.chars()
         .filter(|c| c.is_alphanumeric())
@@ -228,19 +392,44 @@ pub struct ListRef {
     pub name: String,
 }
 
-fn put_list(args: &mut Map<String, Value>, props: &Map<String, Value>, list: Option<&ListRef>) {
+fn put_list(
+    args: &mut Map<String, Value>,
+    props: &Map<String, Value>,
+    list: Option<&ListRef>,
+) -> bool {
     if let (Some(key), Some(list)) = (list_key(props), list) {
         let by_name = has(&words(&key), &["name", "title"]);
         let value = if by_name { &list.name } else { &list.id };
         args.insert(key, Value::String(value.clone()));
+        return true;
+    }
+    false
+}
+
+fn put_column(args: &mut Map<String, Value>, props: &Map<String, Value>, column: Option<&str>) {
+    let (Some(key), Some(column)) = (column_key(props), column) else {
+        return;
+    };
+    let property = &props[&key];
+    let values = enum_values(property);
+    let wanted = squash(column);
+    if let Some(value) = values.iter().find(|v| squash(v) == wanted) {
+        args.insert(key, Value::String(value.clone()));
+    } else if values.is_empty()
+        && property
+            .get("description")
+            .and_then(|d| d.as_str())
+            .is_some_and(|d| d.to_lowercase().contains(&column.to_lowercase()))
+    {
+        args.insert(key, Value::String(column.to_string()));
     }
 }
 
-fn check_required(tool: &Tool, args: &Map<String, Value>) -> Result<(), String> {
-    for name in required(tool) {
+fn check_required(schema: &Value, args: &Map<String, Value>) -> Result<(), String> {
+    for name in required_of(schema) {
         if !args.contains_key(&name) {
             let w = words(&name);
-            return Err(if has(&w, &["list", "listid"]) {
+            return Err(if has(&w, &["list", "listid", "project", "board"]) {
                 "Pick a Blitzit list first".to_string()
             } else {
                 format!(
@@ -253,6 +442,23 @@ fn check_required(tool: &Tool, args: &Map<String, Value>) -> Result<(), String> 
     Ok(())
 }
 
+/// One task's own fields: title, list, column.
+fn task_object(
+    schema: &Value,
+    title: &str,
+    list: Option<&ListRef>,
+    column: Option<&str>,
+) -> Result<Map<String, Value>, String> {
+    let props = properties_of(schema);
+    let mut task = Map::new();
+    let key = title_key(schema).ok_or("Blitzit's task tool takes no title")?;
+    task.insert(key, Value::String(title.to_string()));
+    put_list(&mut task, &props, list);
+    put_column(&mut task, &props, column);
+    check_required(schema, &task)?;
+    Ok(task)
+}
+
 /// The inputs for creating a task called `title`.
 pub fn create_args(
     tool: &Tool,
@@ -262,54 +468,42 @@ pub fn create_args(
 ) -> Result<Value, String> {
     let props = properties(tool);
     let mut args = Map::new();
-    let title_key = find_key(
-        &props,
-        &[
-            "title",
-            "name",
-            "task_title",
-            "taskTitle",
-            "task_name",
-            "taskName",
-            "text",
-            "content",
-            "summary",
-        ],
-    )
-    .or_else(|| {
-        required(tool).into_iter().find(|k| {
-            props.get(k).is_some_and(is_text)
-                && !has(
-                    &words(k),
-                    &["list", "id", "column", "status", "date", "time"],
-                )
-        })
-    })
-    .ok_or("Blitzit's task tool takes no title")?;
-    args.insert(title_key, Value::String(title.to_string()));
-    put_list(&mut args, &props, list);
-    if let (Some(key), Some(column)) = (column_key(&props), column) {
-        let property = &props[&key];
-        let values = enum_values(property);
-        let wanted = squash(column);
-        if let Some(value) = values.iter().find(|v| squash(v) == wanted) {
-            args.insert(key, Value::String(value.clone()));
-        } else if values.is_empty()
-            && property
-                .get("description")
-                .and_then(|d| d.as_str())
-                .is_some_and(|d| d.to_lowercase().contains(&column.to_lowercase()))
-        {
-            args.insert(key, Value::String(column.to_string()));
-        }
+    if let Some((key, value)) = action_value(&props, CREATE) {
+        args.insert(key, Value::String(value));
     }
-    check_required(tool, &args)?;
+    if let Some(key) = title_key(&tool.schema) {
+        args.insert(key, Value::String(title.to_string()));
+        put_list(&mut args, &props, list);
+        put_column(&mut args, &props, column);
+    } else if let Some((key, schema, many)) = nested_task(&tool.schema) {
+        let task = task_object(&schema, title, list, column)?;
+        args.insert(
+            key,
+            if many {
+                Value::Array(vec![Value::Object(task)])
+            } else {
+                Value::Object(task)
+            },
+        );
+        // A list given beside the task rather than in it.
+        put_list(&mut args, &props, list);
+    } else {
+        return Err("Blitzit's task tool takes no title".into());
+    }
+    check_required(&tool.schema, &args)?;
     Ok(Value::Object(args))
 }
 
 /// The columns a new task can go in (Today, This week, …), when the tool says.
 pub fn column_choices(tool: &Tool) -> Vec<String> {
-    let props = properties(tool);
+    let schema = if title_key(&tool.schema).is_some() {
+        tool.schema.clone()
+    } else {
+        nested_task(&tool.schema)
+            .map(|(_, s, _)| s)
+            .unwrap_or(Value::Null)
+    };
+    let props = properties_of(&schema);
     column_key(&props)
         .map(|key| enum_values(&props[&key]))
         .unwrap_or_default()
@@ -322,59 +516,50 @@ pub fn column_choices(tool: &Tool) -> Vec<String> {
 pub fn tasks_args(tool: &Tool, list: Option<&ListRef>) -> Result<Value, String> {
     let props = properties(tool);
     let mut args = Map::new();
+    if let Some((key, value)) = action_value(&props, READ) {
+        args.insert(key, Value::String(value));
+    }
     put_list(&mut args, &props, list);
-    check_required(tool, &args)?;
+    check_required(&tool.schema, &args)?;
     Ok(Value::Object(args))
 }
 
 /// The inputs for reading the lists.
 pub fn lists_args(tool: &Tool) -> Result<Value, String> {
-    let args = Map::new();
-    check_required(tool, &args)?;
-    Ok(Value::Object(args))
-}
-
-/// A boolean "done" input, or a status input that has a done value.
-fn done_field(tool: &Tool) -> Option<(String, Value)> {
     let props = properties(tool);
-    if let Some(key) = find_key(
-        &props,
-        &[
-            "completed",
-            "done",
-            "is_completed",
-            "isCompleted",
-            "is_done",
-            "isDone",
-            "complete",
-        ],
-    ) {
-        return Some((key, Value::Bool(true)));
+    let mut args = Map::new();
+    if let Some((key, value)) = action_value(&props, READ) {
+        args.insert(key, Value::String(value));
     }
-    let key = find_key(&props, &["status", "state"])?;
-    let value = enum_values(&props[&key]).into_iter().find(|v| {
-        ["done", "completed", "complete", "finished"].contains(&v.to_lowercase().as_str())
-    })?;
-    Some((key, Value::String(value)))
+    check_required(&tool.schema, &args)?;
+    Ok(Value::Object(args))
 }
 
 /// The inputs for marking task `id` done.
 pub fn complete_args(tool: &Tool, id: &str, list: Option<&ListRef>) -> Result<Value, String> {
     let props = properties(tool);
     let mut args = Map::new();
-    let id_key = find_key(&props, &["task_id", "taskId", "id", "task", "taskID"])
-        .ok_or("Blitzit's tool doesn't say which task")?;
+    let id_key = find_key(
+        &props,
+        &[
+            "task_id", "taskId", "id", "task", "taskID", "item_id", "itemId",
+        ],
+    )
+    .ok_or("Blitzit's tool doesn't say which task")?;
     args.insert(id_key, Value::String(id.to_string()));
     put_list(&mut args, &props, list);
-    if score(tool, Kind::CompleteTask) < 10 {
-        let (key, value) = done_field(tool).ok_or("Blitzit can't mark tasks done from here")?;
+    if let Some((key, value)) = action_value(&props, DONE) {
+        args.insert(key, Value::String(value));
+    } else if score(tool, Kind::CompleteTask) < 10 {
+        let (key, value) =
+            done_field_of(&props).ok_or("Blitzit can't mark tasks done from here")?;
         args.insert(key, value);
-    } else if let Some((key, value)) = done_field(tool) {
-        if required(tool).contains(&key) {
+    } else if let Some((key, value)) = done_field_of(&props) {
+        if required_of(&tool.schema).contains(&key) {
             args.insert(key, value);
         }
     }
-    check_required(tool, &args)?;
+    check_required(&tool.schema, &args)?;
     Ok(Value::Object(args))
 }
 
@@ -411,6 +596,8 @@ fn string_field(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
             .and_then(|(_, v)| match v {
                 Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
                 Value::Number(n) => Some(n.to_string()),
+                // `column: {"name": "Today"}`
+                Value::Object(inner) => string_field(inner, &["name", "title"]),
                 _ => None,
             })
     })
@@ -437,9 +624,10 @@ fn as_item(object: &Map<String, Value>, parent_key: &str) -> Option<Item> {
         "checked",
     ]) || ["done", "completed", "complete", "finished"]
         .contains(&status.to_lowercase().as_str())
-        || object
-            .iter()
-            .any(|(k, v)| k.eq_ignore_ascii_case("completed_at") && !v.is_null());
+        || object.iter().any(|(k, v)| {
+            (k.eq_ignore_ascii_case("completed_at") || k.eq_ignore_ascii_case("completedAt"))
+                && !v.is_null()
+        });
     let column = string_field(
         object,
         &[
@@ -520,6 +708,14 @@ mod tests {
         }
     }
 
+    fn described(name: &str, description: &str, schema: Value) -> Tool {
+        Tool {
+            name: name.into(),
+            description: description.into(),
+            schema,
+        }
+    }
+
     #[test]
     fn names_split_into_words() {
         assert_eq!(words("createTask"), vec!["create", "task"]);
@@ -529,24 +725,69 @@ mod tests {
 
     #[test]
     fn the_right_tools_are_picked() {
+        let title = json!({"properties": {"title": {"type": "string"}}});
         let tools = vec![
-            tool("create_list", json!({})),
+            tool("create_list", title.clone()),
             tool("get_lists", json!({})),
             tool("list_tasks", json!({})),
-            tool("create_task", json!({})),
-            tool("create_subtask", json!({})),
+            tool("create_task", title.clone()),
+            tool("create_subtask", title.clone()),
             tool(
                 "update_task",
                 json!({"properties": {"task_id": {}, "completed": {"type": "boolean"}}}),
             ),
             tool("delete_task", json!({})),
         ];
-        assert_eq!(pick(&tools, Kind::CreateTask).unwrap().name, "create_task");
-        assert_eq!(pick(&tools, Kind::Lists).unwrap().name, "get_lists");
-        assert_eq!(pick(&tools, Kind::Tasks).unwrap().name, "list_tasks");
         assert_eq!(
-            pick(&tools, Kind::CompleteTask).unwrap().name,
+            pick(&tools, Kind::CreateTask, None).unwrap().name,
+            "create_task"
+        );
+        assert_eq!(pick(&tools, Kind::Lists, None).unwrap().name, "get_lists");
+        assert_eq!(pick(&tools, Kind::Tasks, None).unwrap().name, "list_tasks");
+        assert_eq!(
+            pick(&tools, Kind::CompleteTask, None).unwrap().name,
             "update_task"
+        );
+        // A choice made by hand wins.
+        assert_eq!(
+            pick(&tools, Kind::Tasks, Some("get_lists")).unwrap().name,
+            "get_lists"
+        );
+    }
+
+    #[test]
+    fn odd_names_are_found_from_their_text_and_inputs() {
+        let tools = vec![
+            described(
+                "upsertTasks",
+                "Create or update tasks in a list",
+                json!({"properties": {"tasks": {"type": "array", "items": {"properties": {"title": {"type": "string"}, "listId": {"type": "string"}}, "required": ["title"]}}}, "required": ["tasks"]}),
+            ),
+            described(
+                "manage_task",
+                "Create, update, complete or delete a task",
+                json!({"properties": {"action": {"enum": ["create", "update", "complete", "delete"]}, "title": {"type": "string"}, "taskId": {"type": "string"}}, "required": ["action"]}),
+            ),
+        ];
+        let create = pick(&tools, Kind::CreateTask, None).unwrap();
+        let list = ListRef {
+            id: "L1".into(),
+            name: "Work".into(),
+        };
+        let args = create_args(create, "Call mum", Some(&list), None).unwrap();
+        if create.name == "manage_task" {
+            assert_eq!(args, json!({"action": "create", "title": "Call mum"}));
+        } else {
+            assert_eq!(
+                args,
+                json!({"tasks": [{"title": "Call mum", "listId": "L1"}]})
+            );
+        }
+        let complete = pick(&tools, Kind::CompleteTask, None).unwrap();
+        assert_eq!(complete.name, "manage_task");
+        assert_eq!(
+            complete_args(complete, "T1", None).unwrap(),
+            json!({"action": "complete", "taskId": "T1"})
         );
     }
 
@@ -558,7 +799,7 @@ mod tests {
                 "properties": {
                     "title": {"type": "string"},
                     "listId": {"type": "string"},
-                    "column": {"type": "string", "enum": ["BACKLOG", "THIS_WEEK", "TODAY", "DONE"]}
+                    "column": {"type": "string", "enum": ["BACKLOG", "THIS_WEEK", "TODAY"]}
                 },
                 "required": ["title", "listId"]
             }),
@@ -575,6 +816,10 @@ mod tests {
         assert_eq!(
             create_args(&create, "x", None, None).unwrap_err(),
             "Pick a Blitzit list first"
+        );
+        assert_eq!(
+            column_choices(&create),
+            vec!["BACKLOG", "THIS_WEEK", "TODAY"]
         );
 
         let update = tool(

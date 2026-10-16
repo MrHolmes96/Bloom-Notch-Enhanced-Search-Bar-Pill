@@ -17,6 +17,7 @@ mod shelf_preview;
 mod state;
 mod toast;
 mod tray;
+mod tray_manager;
 mod types;
 mod updater;
 mod utils;
@@ -258,6 +259,7 @@ fn main() {
             integrations::blitzit::blitzit_complete_task,
             integrations::blitzit::blitzit_start,
             integrations::blitzit::blitzit_open,
+            integrations::blitzit::blitzit_tools_report,
             notifications::notification_activate,
             notifications::notification_action,
             notifications::notification_center_fit,

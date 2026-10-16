@@ -279,6 +279,8 @@ pub struct ManagerEntry {
     pub name: String,
     /// Bloom's key for it, when it names its program.
     pub key: Option<String>,
+    /// It matches a tray icon that is there right now.
+    pub running: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -286,7 +288,20 @@ pub struct TrayState {
     pub icons: Vec<TrayIconInfo>,
     /// Tray Icon Manager's settings were found.
     pub manager_found: bool,
+    /// The settings file that was read.
+    pub manager_path: Option<String>,
     pub manager_entries: Vec<ManagerEntry>,
+}
+
+impl TrayState {
+    pub fn empty() -> Self {
+        Self {
+            icons: Vec::new(),
+            manager_found: false,
+            manager_path: None,
+            manager_entries: Vec::new(),
+        }
+    }
 }
 
 fn exe_name(path: &str) -> String {
@@ -296,106 +311,50 @@ fn exe_name(path: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Tray Icon Manager's hidden icons (`%AppData%\TrayIconManager\config.json`,
-/// `HiddenIcons`). Only ever read; Bloom never changes its settings.
-struct ManagerHidden {
-    name: String,
-    exe: String,
-    guid: Option<GUID>,
-}
-
-fn manager_hidden() -> Option<Vec<ManagerHidden>> {
-    let appdata = std::env::var_os("APPDATA")?;
-    let base = std::path::PathBuf::from(appdata);
-    let text = ["TrayIconManager", "TrayIconHider"]
-        .iter()
-        .find_map(|dir| std::fs::read_to_string(base.join(dir).join("config.json")).ok())?;
-    let config: serde_json::Value =
-        serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
-    let field = |value: &serde_json::Value, names: &[&str]| -> Option<serde_json::Value> {
-        let object = value.as_object()?;
-        names.iter().find_map(|name| {
-            object
-                .iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case(name))
-                .map(|(_, v)| v.clone())
-        })
-    };
-    let text_of = |value: &serde_json::Value, names: &[&str]| -> String {
-        field(value, names)
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_default()
-    };
-    // PowerShell writes a list of one as a lone object.
-    let entries = match field(&config, &["HiddenIcons"]) {
-        Some(serde_json::Value::Array(list)) => list,
-        Some(single @ serde_json::Value::Object(_)) => vec![single],
-        _ => Vec::new(),
-    };
-    Some(
-        entries
-            .iter()
-            .map(|entry| ManagerHidden {
-                name: text_of(entry, &["DisplayName", "Name"]).trim().to_string(),
-                exe: exe_name(&text_of(
-                    entry,
-                    &["ExePath", "Path", "ExecutablePath", "ExeKey"],
-                )),
-                guid: parse_guid(&text_of(entry, &["IconGuid", "Guid"]))
-                    .filter(|g| *g != GUID::zeroed()),
-            })
-            .filter(|e| !e.name.is_empty() || !e.exe.is_empty() || e.guid.is_some())
-            .collect(),
-    )
-}
-
-fn same_name(a: &str, b: &str) -> bool {
-    let (a, b) = (normalized_label(a), normalized_label(b));
-    !a.is_empty() && a == b
-}
-
-/// Every live tray icon with where Windows keeps it, and what Tray Icon
-/// Manager hides.
+/// Every live tray icon, and which ones Tray Icon Manager hides.
 pub fn tray_state() -> TrayState {
+    use crate::tray_manager::{hides, normalize_guid, IconFacts};
     unsafe {
         let windows = process_windows();
         let icons: Vec<Icon> = live_icons(&windows, false)
             .into_iter()
             .filter(|icon| !is_explorer_hosted_icon(&icon.path))
             .collect();
-        let manager = manager_hidden();
-        let hidden = manager.as_deref().unwrap_or_default();
+        let manager = crate::tray_manager::read();
+        let hidden = manager
+            .as_ref()
+            .map(|m| m.entries.as_slice())
+            .unwrap_or_default();
         let mut per_exe: HashMap<String, usize> = HashMap::new();
         for icon in &icons {
             *per_exe.entry(exe_name(&icon.path)).or_default() += 1;
         }
+        let mut matched = vec![false; hidden.len()];
         let mut list: Vec<TrayIconInfo> = icons
             .iter()
             .map(|icon| {
                 let exe = exe_name(&icon.path);
                 let name = crate::commands::app_display_name(&icon.path, None);
-                let stem = exe.trim_end_matches(".exe").to_string();
-                let manager_hidden = hidden.iter().any(|entry| {
-                    if let Some(guid) = entry.guid {
-                        if guid == icon.identifier.guidItem {
-                            return true;
-                        }
+                let guid = normalize_guid(&format!("{:?}", icon.identifier.guidItem));
+                let same_program = per_exe.get(&exe).copied().unwrap_or(1);
+                let facts = IconFacts {
+                    exe: &exe,
+                    guid: &guid,
+                    tooltip: &icon.tooltip,
+                    name: &name,
+                    same_program,
+                };
+                let mut manager_hidden = false;
+                for (index, entry) in hidden.iter().enumerate() {
+                    if hides(entry, &facts) {
+                        manager_hidden = true;
+                        matched[index] = true;
                     }
-                    if !entry.exe.is_empty() {
-                        // One program's several icons are told apart by name.
-                        return entry.exe == exe
-                            && (per_exe.get(&exe).copied().unwrap_or(1) == 1
-                                || entry.name.is_empty()
-                                || same_name(&entry.name, &icon.tooltip));
-                    }
-                    same_name(&entry.name, &icon.tooltip)
-                        || same_name(&entry.name, &name)
-                        || same_name(&entry.name, &stem)
-                });
-                let key = if per_exe.get(&exe).copied().unwrap_or(1) > 1 {
+                }
+                let key = if same_program > 1 {
                     format!("{}|{}", exe, icon.key)
                 } else {
-                    exe
+                    exe.clone()
                 };
                 TrayIconInfo {
                     id: icon.key.clone(),
@@ -412,15 +371,18 @@ pub fn tray_state() -> TrayState {
         TrayState {
             icons: list,
             manager_found: manager.is_some(),
+            manager_path: manager.as_ref().map(|m| m.path.clone()),
             manager_entries: hidden
                 .iter()
-                .map(|entry| ManagerEntry {
+                .zip(&matched)
+                .map(|(entry, running)| ManagerEntry {
                     name: if entry.name.is_empty() {
                         entry.exe.clone()
                     } else {
                         entry.name.clone()
                     },
                     key: (!entry.exe.is_empty()).then(|| entry.exe.clone()),
+                    running: *running,
                 })
                 .collect(),
         }

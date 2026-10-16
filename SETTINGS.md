@@ -30,10 +30,10 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-start-icon`                 | icon key / `custom:<data URI>`   | `"default"`   | Start button icon: `default`, `bloom-colorful`, `bloom-golden`, `bloom-biscuit`, `windows`, or `custom:` followed by an uploaded image's data URI.                               |
 | `bloom-dock-adaptive`              | `"true"` / `"false"`             | `"false"`     | Fixed dock only. Stretch the dock to full width like a traditional taskbar while a window is maximized, and contract back when it's restored.                                    |
 | `bloom-dock-win-number-enabled`    | `"true"` / `"false"`             | `"true"`      | When the taskbar is replaced, Win+1 through Win+9 activate the matching pinned dock app (focus/minimize if running, launch otherwise) instead of the native taskbar slots.       |
-| `bloom-dock-extras-position`       | `"off"` / `"left"` / `"right"`   | `"off"`       | Show a dock extras section with drives, folders and the Recycle Bin beside the app icons, on the left or right side of the dock.                                                 |
+| `bloom-dock-extras-position`       | `"off"` / `"left"` / `"right"`   | `"off"`       | Show a dock extras section with drives and folders beside the app icons, on the left or right side of the dock. |
 | `bloom-dock-extras-drives`         | `"true"` / `"false"`             | `"true"`      | Show fixed, removable (with media) and connected mapped network drives in the dock extras. Empty card readers and unloaded discs are hidden.                                     |
-| `bloom-dock-extras-recycle-bin`    | `"true"` / `"false"`             | `"true"`      | Show the Recycle Bin in the dock extras. The icon reflects whether the bin holds anything.                                                                                       |
-| `bloom-dock-bin-icons` | `"traybin"` / `"windows"` | `"traybin"` | Recycle Bin icons: Tray Bin's fill-level icons (copied once from an installed Tray Bin into `recycle-bin-icons`) or the Windows ones. Falls back to the Windows icons when Tray Bin's are not available. |
+| `bloom-dock-extras-recycle-bin`    | `"true"` / `"false"`             | `"true"`      | Show the Recycle Bin at the end of the dock (on its own, whether or not Dock Extras is on). Its icon shows how full the bin is. |
+| `bloom-dock-bin-icons` | `"traybin"` / `"windows"` | `"traybin"` | Recycle Bin icons: Tray Bin's fill-level icons (copied once from an installed Tray Bin, wherever it was installed, into `recycle-bin-icons`, so they stay after Tray Bin is uninstalled) or the Windows ones. Falls back to the Windows icons when Tray Bin's are not available. |
 | `bloom-dock-bin-only-empty-full` | `"true"` / `"false"` | `"false"` | Use only the empty and full Tray Bin icons instead of the 100 MB / 500 MB / 2 GB steps. |
 | `bloom-dock-bin-double-click` | `"open"` / `"empty"` | `"open"` | What a double click on the Recycle Bin does. With `"empty"`, a single click still opens it. |
 | `bloom-dock-bin-confirm` | `"true"` / `"false"` | `"true"` | Ask before emptying the Recycle Bin. |
@@ -53,8 +53,8 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-notch-notes-in-scroll` | `"true"` / `"false"` | `"true"` | Scrolling or swiping on the notch also reaches the notes and to-dos panel. |
 | `bloom-notch-notes` | JSON array of `{ id, text, todo, done, created }` | `"[]"` | The notch's quick notes and to-dos, newest first. |
 | `bloom-control-center-buttons` | comma-separated ids, or `"none"` | `"dnd,energy-saver,tray,notifications,bloom-settings,restart-bloom"` | The control center's round buttons, in order. Also: `night-light`, `airplane`, `hotspot`, `rotation-lock`, `live-captions`, `project`, `cast`, `keyboard-layout`, `accessibility`, `nearby-sharing`, `vpn`, `color-filters`. |
-| `bloom-tray-placement` | JSON object of icon key → `"tray"` / `"menu"` / `"hidden"` | `"{}"` | Where an icon shows in the notch's tray when changed in Bloom: in the tray, in its hidden icons, or not at all. Keys are the program's file name (plus Windows' icon id when one program has several icons). Icons not listed follow Windows (taskbar or hidden icons). Bloom only; Windows' tray isn't changed. |
-| `bloom-tray-follow-manager` | `"true"` / `"false"` | `"true"` | Icons Tray Icon Manager hides (`%AppData%\TrayIconManager\config.json`, read only) stay hidden in the notch's tray. |
+| `bloom-tray-placement` | JSON object of icon key → `"shown"` / `"hidden"` | `"{}"` | Tray icons shown or hidden in the notch's tray when changed in Bloom (hidden ones sit in its "Hidden icons" menu). Keys are the program's file name (plus Windows' icon id when one program has several icons). Icons not listed are shown, unless Tray Icon Manager hides them. Bloom only; Windows' tray isn't changed. |
+| `bloom-tray-follow-manager` | `"true"` / `"false"` | `"true"` | Icons Tray Icon Manager hides (its `HiddenIcons` in `%AppData%\TrayIconManager\config.json`, read only, in any text encoding) stay hidden in the notch's tray. |
 
 ### Weather
 
@@ -129,6 +129,7 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | --- | --- | --- | --- |
 | `bloom-notch-blitzit` | `"true"` / `"false"` | `"true"` | Scrolling or swiping on the notch also reaches Blitzit's page (add tasks, today's tasks, Blitz now). |
 | `bloom-blitzit-server` | URL | `"https://core.blitzit.app/v3/mcp"` | Blitzit's connection for other apps (its MCP server). `https://integration-prd.blitzit.app/mcp` for Blitzit before version 3. The sign-in itself is not a setting: it is stored encrypted for this Windows user in `integrations\blitzit.bin` in Bloom's config folder. |
+| `bloom-blitzit-tools` | JSON `{ create, lists, tasks, complete }` of tool names | `"{}"` | Which of Blitzit's actions Bloom uses, when chosen by hand in Settings > Integrations > Blitzit. Missing ones are found automatically from each action's name, description and inputs. |
 | `bloom-blitzit-list` | JSON `{ id, name }` | none | The Blitzit list new tasks go in, last chosen in the notch. |
 | `bloom-blitzit-column` | text | `""` | The column new tasks go in (Today, This week, …) when Blitzit offers a choice; Today when not set. |
 

@@ -16,7 +16,8 @@ import {
 	Search,
 	Info,
 	Megaphone,
-	Blocks
+	Blocks,
+	Zap
 } from "lucide-react";
 import {
 	useSettings,
@@ -28,6 +29,7 @@ import {
 	SearchBarTab,
 	NotificationsTab,
 	IntegrationsTab,
+	BlitzitSettings,
 	AboutTab
 } from "./settings/index";
 import type { SettingsTab } from "./settings/index";
@@ -37,7 +39,13 @@ import "./Settings.css";
 
 const appWindow = getCurrentWebviewWindow();
 
-const TABS: { id: SettingsTab; label: string; icon: typeof Settings }[] = [
+const TABS: {
+	id: SettingsTab;
+	label: string;
+	icon: typeof Settings;
+	/** Tabs shown under this one, such as each integrated app. */
+	children?: { id: SettingsTab; label: string; icon: typeof Settings }[];
+}[] = [
 	{ id: "general", label: "General", icon: Settings },
 	{ id: "appearance", label: "Appearance", icon: Palette },
 	{ id: "notch", label: "Notch", icon: PanelTop },
@@ -45,7 +53,12 @@ const TABS: { id: SettingsTab; label: string; icon: typeof Settings }[] = [
 	{ id: "overlays", label: "Overlays", icon: Layers },
 	{ id: "notifications", label: "Notifications", icon: Bell },
 	{ id: "search-bar", label: "Search Bar Pill", icon: Search },
-	{ id: "integrations", label: "Integrations", icon: Blocks },
+	{
+		id: "integrations",
+		label: "Integrations",
+		icon: Blocks,
+		children: [{ id: "integration-blitzit", label: "Blitzit", icon: Zap }]
+	},
 	{ id: "about", label: "About", icon: Info }
 ];
 
@@ -109,17 +122,30 @@ function SettingsApp() {
 
 			<div className="settings-body">
 				<div className="settings-sidebar">
-					{TABS.map(({ id, label, icon: Icon }) => (
-						<button
-							key={id}
-							className={`sidebar-tab ${activeTab === id ? "active" : ""}`}
-							onClick={() => setActiveTab(id)}
-						>
-							<div className="sidebar-tab-icon">
-								<Icon size={14} strokeWidth={1.5} />
-							</div>
-							<span>{label}</span>
-						</button>
+					{TABS.map(({ id, label, icon: Icon, children }) => (
+						<div key={id} className="sidebar-tab-group">
+							<button
+								className={`sidebar-tab ${activeTab === id ? "active" : ""}`}
+								onClick={() => setActiveTab(id)}
+							>
+								<div className="sidebar-tab-icon">
+									<Icon size={14} strokeWidth={1.5} />
+								</div>
+								<span>{label}</span>
+							</button>
+							{children?.map(({ id: childId, label: childLabel, icon: ChildIcon }) => (
+								<button
+									key={childId}
+									className={`sidebar-tab sidebar-subtab ${activeTab === childId ? "active" : ""}`}
+									onClick={() => setActiveTab(childId)}
+								>
+									<div className="sidebar-tab-icon">
+										<ChildIcon size={12} strokeWidth={1.5} />
+									</div>
+									<span>{childLabel}</span>
+								</button>
+							))}
+						</div>
 					))}
 				</div>
 
@@ -269,7 +295,8 @@ function SettingsApp() {
 					)}
 					{activeTab === "notifications" && <NotificationsTab />}
 					{activeTab === "search-bar" && <SearchBarTab />}
-					{activeTab === "integrations" && <IntegrationsTab />}
+					{activeTab === "integrations" && <IntegrationsTab openTab={setActiveTab} />}
+					{activeTab === "integration-blitzit" && <BlitzitSettings />}
 					{activeTab === "about" && (
 						<AboutTab
 							appVersion={settings.appVersion}

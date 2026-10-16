@@ -14,6 +14,7 @@ export type SettingsTab =
 	| "notifications"
 	| "search-bar"
 	| "integrations"
+	| "integration-blitzit"
 	| "about";
 
 export interface SettingRowProps {

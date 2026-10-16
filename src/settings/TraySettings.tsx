@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Download, EyeOff, LayoutGrid, RotateCcw } from "lucide-react";
+import { Download, EyeOff, LayoutGrid, ListX, RotateCcw } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { useStoredFlag, useStoredString } from "./useStoredSetting";
 import {
@@ -8,16 +8,15 @@ import {
 	TRAY_PLACEMENT_KEY,
 	iconLabels,
 	parsePlacements,
-	placementOf,
-	withPlacement,
-	type Placement,
+	visibilityOf,
+	withVisibility,
 	type TrayIconInfo,
 	type TrayState
 } from "../trayLayout";
 
 /**
- * Settings > Notch > System Tray: where each icon shows in the notch's tray,
- * and Tray Icon Manager's hidden icons. Bloom only reads Tray Icon Manager's
+ * Settings > Notch > System Tray: which icons the notch's tray shows, and
+ * Tray Icon Manager's hidden icons. Bloom only reads Tray Icon Manager's
  * settings; what is chosen here changes Bloom's tray, not Windows'.
  */
 
@@ -52,13 +51,17 @@ export function TraySettings() {
 			.catch(() => setState(null));
 	}, []);
 
-	const icons = state?.icons ?? [];
+	const icons = useMemo(() => state?.icons ?? [], [state]);
 	const labels = useMemo(() => iconLabels(icons), [icons]);
-	const managerCount = state?.manager_entries.length ?? 0;
+	const entries = state?.manager_entries ?? [];
+	const running = entries.filter((e) => e.running).length;
+	const notRunning = entries.filter((e) => !e.running);
 	const changed = Object.keys(placements).length;
 
-	const setPlace = (icon: TrayIconInfo, place: Placement) =>
-		setPlacementsRaw(JSON.stringify(withPlacement(placements, icon, place, followManager)));
+	const setShown = (icon: TrayIconInfo, shown: boolean) =>
+		setPlacementsRaw(
+			JSON.stringify(withVisibility(placements, icon, shown ? "shown" : "hidden", followManager))
+		);
 
 	// Bloom keeps its own copy, so these stay hidden even without Tray Icon
 	// Manager (or with following it turned off).
@@ -96,9 +99,11 @@ export function TraySettings() {
 					desc={
 						!state
 							? "Looking for Tray Icon Manager…"
-							: state.manager_found
-								? `Icons Tray Icon Manager hides stay hidden in Bloom's tray (${managerCount})`
-								: "Tray Icon Manager isn't set up on this PC"
+							: !state.manager_found
+								? "Tray Icon Manager's settings weren't found on this PC"
+								: entries.length === 0
+									? "Tray Icon Manager hides no icons right now"
+									: `It hides ${entries.length} icon${entries.length === 1 ? "" : "s"}, ${running} of them in the tray now: hidden here too`
 					}
 				>
 					<label className="toggle-switch">
@@ -110,7 +115,14 @@ export function TraySettings() {
 						<span className="slider"></span>
 					</label>
 				</SettingRow>
-				{state?.manager_found && managerCount > 0 && (
+				{notRunning.length > 0 && (
+					<SettingRow
+						icon={ListX}
+						label="Also Hidden, Not Running Now"
+						desc={notRunning.map((e) => e.name).join(", ")}
+					/>
+				)}
+				{state?.manager_found && entries.length > 0 && (
 					<SettingRow
 						icon={Download}
 						label="Copy Tray Icon Manager's Hidden Icons"
@@ -127,6 +139,7 @@ export function TraySettings() {
 				)}
 				{icons.map((icon) => {
 					const label = labels.get(icon.id) ?? icon.name;
+					const shown = visibilityOf(icon, placements, followManager) === "shown";
 					return (
 						<div key={icon.id}>
 							<div className="setting-item">
@@ -136,22 +149,21 @@ export function TraySettings() {
 								<div className="setting-info">
 									<span className="setting-label">{label}</span>
 									<span className="setting-desc">
-										{icon.manager_hidden
-											? "Hidden by Tray Icon Manager"
-											: icon.promoted
-												? "On Windows' taskbar"
-												: "In Windows' hidden icons"}
+										{shown
+											? "Shown in the tray"
+											: icon.manager_hidden && placements[icon.key] === undefined
+												? "Hidden by Tray Icon Manager"
+												: "Hidden"}
 									</span>
 								</div>
-								<select
-									className="settings-select"
-									value={placementOf(icon, placements, followManager)}
-									onChange={(e) => setPlace(icon, e.target.value as Placement)}
-								>
-									<option value="tray">In the tray</option>
-									<option value="menu">Hidden icons</option>
-									<option value="hidden">Not shown</option>
-								</select>
+								<label className="toggle-switch">
+									<input
+										type="checkbox"
+										checked={shown}
+										onChange={(e) => setShown(icon, e.target.checked)}
+									/>
+									<span className="slider"></span>
+								</label>
 							</div>
 							<div className="setting-divider" />
 						</div>
@@ -166,11 +178,11 @@ export function TraySettings() {
 				)}
 				<SettingRow
 					icon={RotateCcw}
-					label="Use Windows' Placement"
+					label="Forget Changes Made in Bloom"
 					desc={
 						changed === 0
-							? "Every icon is where Windows has it"
-							: `Forget what was changed in Bloom (${changed} icon${changed === 1 ? "" : "s"})`
+							? "Only Tray Icon Manager's hidden icons are hidden"
+							: `${changed} icon${changed === 1 ? "" : "s"} shown or hidden here`
 					}
 					action={changed > 0}
 					divider={false}

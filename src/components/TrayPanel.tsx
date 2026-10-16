@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
 	ChevronDown,
 	ChevronLeft,
-	ChevronUp,
 	ExternalLink,
 	Eye,
 	EyeOff,
@@ -16,25 +15,23 @@ import {
 	TRAY_PLACEMENT_KEY,
 	iconLabels,
 	parsePlacements,
-	placementOf,
-	withPlacement,
-	type Placement,
+	visibilityOf,
+	withVisibility,
 	type TrayIconInfo,
-	type TrayState
+	type TrayState,
+	type Visibility
 } from "../trayLayout";
 import "./QuickPanel.css";
 import "./TrayPanel.css";
 
 /**
  * The system tray inside the notch, opened from the control center's tray
- * button. Icons on Windows' taskbar show first; the ones Windows keeps in its
- * hidden icons are one click below, as behind Windows' ^ button. Click runs an
- * icon's default action, right-click opens the app's own tray menu.
+ * button: one tile per tray icon. Click runs an icon's default action,
+ * right-click opens the app's own tray menu, as on the taskbar.
  *
- * The pencil switches to editing: move icons between the tray and the hidden
- * icons, or hide them from Bloom's tray altogether (and show them again).
- * Tray Icon Manager's hidden icons stay hidden here too when Settings > Notch
- * > System Tray says so.
+ * Hidden icons (hidden here, or by Tray Icon Manager) are in the "Hidden
+ * icons" menu below, where they still work. The pencil switches to editing:
+ * hide an icon, or show a hidden one again.
  */
 
 const PER_ROW = 5;
@@ -51,16 +48,9 @@ function rowsHeight(count: number) {
 }
 
 /** The panel's height inside the open notch, below its 36 px header. */
-export function trayPanelHeight(
-	tray: number,
-	menu: number,
-	hidden: number,
-	menuOpen: boolean,
-	editing: boolean
-) {
-	let body = tray > 0 ? rowsHeight(tray) : 40;
-	if (menu > 0) body += GAP + SECTION + (menuOpen ? GAP + rowsHeight(menu) : 0);
-	if (editing && hidden > 0) body += GAP + SECTION + GAP + rowsHeight(hidden);
+export function trayPanelHeight(shown: number, hidden: number, menuOpen: boolean) {
+	let body = shown > 0 ? rowsHeight(shown) : 40;
+	if (hidden > 0) body += GAP + SECTION + (menuOpen ? GAP + rowsHeight(hidden) : 0);
 	return 4 + 26 + 6 + Math.min(body, MAX_BODY) + 12;
 }
 
@@ -69,16 +59,16 @@ const iconCache = new Map<string, string | null>();
 function TrayTile({
 	icon,
 	label,
-	place,
+	visibility,
 	editing,
-	onMove,
+	onChange,
 	onError
 }: {
 	icon: TrayIconInfo;
 	label: string;
-	place: Placement;
+	visibility: Visibility;
 	editing: boolean;
-	onMove: (place: Placement) => void;
+	onChange: (visibility: Visibility) => void;
 	onError: (text: string) => void;
 }) {
 	const [image, setImage] = useState<string | null>(() => iconCache.get(icon.path) ?? null);
@@ -98,14 +88,17 @@ function TrayTile({
 		: `${label}${icon.tooltip && icon.tooltip !== label ? ` (${icon.tooltip})` : ""}: click to open, right-click for its menu`;
 
 	return (
-		<div className={`tray-tile-wrap${place === "hidden" ? " is-hidden" : ""}`}>
+		<div className={`tray-tile-wrap${visibility === "hidden" ? " is-hidden" : ""}`}>
 			<button
 				type="button"
 				className="tray-tile"
 				title={title}
 				onClick={(e) => {
 					e.stopPropagation();
-					if (editing) return;
+					if (editing) {
+						onChange(visibility === "hidden" ? "shown" : "hidden");
+						return;
+					}
 					invoke("activate_tray_icon", { trayId: icon.id }).catch((err) => onError(String(err)));
 				}}
 				onContextMenu={(e) => {
@@ -126,22 +119,12 @@ function TrayTile({
 			</button>
 			{editing && (
 				<div className="tray-tile-edit">
-					{place === "tray" && (
-						<button type="button" title="Move to hidden icons" onClick={() => onMove("menu")}>
-							<ChevronDown />
-						</button>
-					)}
-					{place === "menu" && (
-						<button type="button" title="Move to the tray" onClick={() => onMove("tray")}>
-							<ChevronUp />
-						</button>
-					)}
-					{place === "hidden" ? (
-						<button type="button" title="Show again" onClick={() => onMove("menu")}>
+					{visibility === "hidden" ? (
+						<button type="button" title="Show in the tray" onClick={() => onChange("shown")}>
 							<Eye />
 						</button>
 					) : (
-						<button type="button" title="Hide from Bloom's tray" onClick={() => onMove("hidden")}>
+						<button type="button" title="Hide" onClick={() => onChange("hidden")}>
 							<EyeOff />
 						</button>
 					)}
@@ -162,13 +145,7 @@ export function TrayPanel({
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [editing, setEditing] = useState(false);
-	const [menuOpen, setMenuOpen] = useState(() => {
-		try {
-			return localStorage.getItem("bloom-tray-menu-open") === "true";
-		} catch {
-			return false;
-		}
-	});
+	const [menuOpen, setMenuOpen] = useState(false);
 	const [placementsRaw, setPlacementsRaw] = useStoredString(TRAY_PLACEMENT_KEY, "{}");
 	const [followManager] = useStoredFlag(TRAY_FOLLOW_KEY, true);
 	const placements = useMemo(() => parsePlacements(placementsRaw), [placementsRaw]);
@@ -190,57 +167,32 @@ export function TrayPanel({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
-	const icons = state?.icons ?? [];
+	const icons = useMemo(() => state?.icons ?? [], [state]);
 	const labels = useMemo(() => iconLabels(icons), [icons]);
 	const groups = useMemo(() => {
-		const result: Record<Placement, TrayIconInfo[]> = { tray: [], menu: [], hidden: [] };
-		for (const icon of icons) result[placementOf(icon, placements, followManager)].push(icon);
+		const result: Record<Visibility, TrayIconInfo[]> = { shown: [], hidden: [] };
+		for (const icon of icons) result[visibilityOf(icon, placements, followManager)].push(icon);
 		return result;
 	}, [icons, placements, followManager]);
+	const hiddenOpen = menuOpen || editing;
 
 	useEffect(() => {
-		onHeightChange(
-			trayPanelHeight(
-				groups.tray.length,
-				groups.menu.length,
-				groups.hidden.length,
-				menuOpen,
-				editing
-			)
-		);
-	}, [groups, menuOpen, editing, onHeightChange]);
+		onHeightChange(trayPanelHeight(groups.shown.length, groups.hidden.length, hiddenOpen));
+	}, [groups, hiddenOpen, onHeightChange]);
 
-	const move = (icon: TrayIconInfo, place: Placement) => {
-		// Showing a hidden icon again puts it back where Windows has it.
-		const current = placementOf(icon, placements, followManager);
-		let target = place;
-		if (current === "hidden" && place !== "hidden") {
-			const windowsPlace: Placement = icon.promoted ? "tray" : "menu";
-			target = windowsPlace;
-		}
-		setPlacementsRaw(JSON.stringify(withPlacement(placements, icon, target, followManager)));
-	};
+	const change = (icon: TrayIconInfo, visibility: Visibility) =>
+		setPlacementsRaw(JSON.stringify(withVisibility(placements, icon, visibility, followManager)));
 
-	const toggleMenu = () => {
-		const next = !menuOpen;
-		setMenuOpen(next);
-		try {
-			localStorage.setItem("bloom-tray-menu-open", String(next));
-		} catch {
-			/* only remembered for convenience */
-		}
-	};
-
-	const tiles = (list: TrayIconInfo[], place: Placement) => (
+	const tiles = (list: TrayIconInfo[], visibility: Visibility) => (
 		<div className="tray-grid">
 			{list.map((icon) => (
 				<TrayTile
 					key={icon.id}
 					icon={icon}
 					label={labels.get(icon.id) ?? icon.name}
-					place={place}
+					visibility={visibility}
 					editing={editing}
-					onMove={(next) => move(icon, next)}
+					onChange={(next) => change(icon, next)}
 					onError={setError}
 				/>
 			))}
@@ -253,12 +205,12 @@ export function TrayPanel({
 				<button className="qp-icon-btn" onClick={onBack} aria-label="Back to controls">
 					<ChevronLeft />
 				</button>
-				<span className="qp-title">{editing ? "Edit Tray" : "System Tray"}</span>
+				<span className="qp-title">{editing ? "Hide or Show Icons" : "System Tray"}</span>
 				<button
 					className={`qp-icon-btn${editing ? " is-active" : ""}`}
 					onClick={() => setEditing((e) => !e)}
-					aria-label="Edit tray"
-					title={editing ? "Done" : "Hide icons, or move them between the tray and hidden icons"}
+					aria-label="Hide or show icons"
+					title={editing ? "Done" : "Hide or show icons"}
 				>
 					<Pencil />
 				</button>
@@ -281,38 +233,31 @@ export function TrayPanel({
 				</button>
 			</div>
 			{error && <div className="tray-message">{error}</div>}
+			{!state && !error && <div className="tray-message">Loading the tray…</div>}
 			{state && (
 				<div className="tray-body" style={{ maxHeight: MAX_BODY }}>
-					{groups.tray.length > 0
-						? tiles(groups.tray, "tray")
+					{groups.shown.length > 0
+						? tiles(groups.shown, "shown")
 						: !error && (
 								<div className="tray-message">
 									{icons.length === 0
 										? "No apps are in the tray right now"
-										: "Every icon is in hidden icons"}
+										: "Every tray icon is hidden"}
 								</div>
 							)}
-					{groups.menu.length > 0 && (
+					{groups.hidden.length > 0 && (
 						<>
 							<button
 								type="button"
-								className={`tray-section${menuOpen ? " is-open" : ""}`}
-								onClick={toggleMenu}
+								className={`tray-section${hiddenOpen ? " is-open" : ""}`}
+								onClick={() => setMenuOpen((open) => !open)}
+								disabled={editing}
 							>
 								<span>Hidden icons</span>
-								<span className="tray-section-count">{groups.menu.length}</span>
+								<span className="tray-section-count">{groups.hidden.length}</span>
 								<ChevronDown className="tray-section-chevron" />
 							</button>
-							{menuOpen && tiles(groups.menu, "menu")}
-						</>
-					)}
-					{editing && groups.hidden.length > 0 && (
-						<>
-							<div className="tray-section is-static">
-								<span>Not shown in Bloom</span>
-								<span className="tray-section-count">{groups.hidden.length}</span>
-							</div>
-							{tiles(groups.hidden, "hidden")}
+							{hiddenOpen && tiles(groups.hidden, "hidden")}
 						</>
 					)}
 				</div>

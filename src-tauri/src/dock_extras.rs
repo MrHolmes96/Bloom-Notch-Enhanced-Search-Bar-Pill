@@ -339,9 +339,11 @@ fn recycle_bin_extra(app: &AppHandle) -> DockExtra {
     }
 }
 
-/// Just the bin, for redrawing it when its contents change.
+/// The Recycle Bin at the end of the dock (Settings > Dock > Recycle Bin),
+/// redrawn whenever its contents change.
 #[tauri::command]
 pub async fn get_recycle_bin_extra(app: AppHandle) -> Option<DockExtra> {
+    crate::recycle_bin::ensure_watcher(&app);
     tauri::async_runtime::spawn_blocking(move || {
         use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
         let com_initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
@@ -365,17 +367,10 @@ pub async fn get_dock_extras(app: AppHandle) -> Vec<DockExtra> {
     let drives_enabled = get_setting_str(&app, "bloom-dock-extras-drives")
         .unwrap_or_else(|| "true".into())
         != "false";
-    let bin_enabled = get_setting_str(&app, "bloom-dock-extras-recycle-bin")
-        .unwrap_or_else(|| "true".into())
-        != "false";
     let folders =
         get_setting_str(&app, "bloom-dock-extras-folders").unwrap_or_else(|| "downloads".into());
     let custom =
         get_setting_str(&app, "bloom-dock-extras-custom-folders").unwrap_or_else(|| "[]".into());
-
-    if bin_enabled {
-        crate::recycle_bin::ensure_watcher(&app);
-    }
 
     tauri::async_runtime::spawn_blocking(move || {
         use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
@@ -389,9 +384,6 @@ pub async fn get_dock_extras(app: AppHandle) -> Vec<DockExtra> {
         }
         extras.extend(list_known_folders(&parse_enabled_folders(&folders)));
         extras.extend(list_custom_folders(&custom));
-        if bin_enabled {
-            extras.push(recycle_bin_extra(&app));
-        }
 
         if com_initialized {
             unsafe { CoUninitialize() };

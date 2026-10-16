@@ -20,6 +20,12 @@ export interface BlitzitStatus {
 	can_read_tasks: boolean;
 	can_complete: boolean;
 	columns: string[];
+	/** Blitzit's tools Bloom uses for adding, lists, tasks, ticking off. */
+	using: (string | null)[];
+	/** Each of Blitzit's tools and what it says it does. */
+	tool_details: [string, string][];
+	/** Why Blitzit couldn't be reached or used. */
+	problem: string | null;
 	app_found: boolean;
 }
 
@@ -257,13 +263,27 @@ export function BlitzitPanel({
 				</button>
 			</div>
 
-			{status?.connected && (
+			{status?.connected && !status.can_add && (
+				<button
+					type="button"
+					className="blitzit-message is-action is-warning"
+					onClick={onOpenSettings}
+				>
+					{status.problem
+						? `Blitzit: ${status.problem}`
+						: status.tool_details.length > 0
+							? "Bloom didn't recognise Blitzit's add-task action. Pick it in Settings > Integrations > Blitzit"
+							: "Checking Blitzit…"}
+				</button>
+			)}
+
+			{status?.connected && status.can_add && (
 				<div className="blitzit-add">
 					<input
 						className="blitzit-input"
 						value={draft}
-						placeholder={status.can_add ? "Add a task…" : "Blitzit can't add tasks from here"}
-						disabled={!status.can_add || busy === "add"}
+						placeholder={list ? `Add a task to ${list.name}…` : "Add a task…"}
+						disabled={busy === "add"}
 						onChange={(e) => setDraft(e.target.value)}
 						onFocus={() => onPinChange(true)}
 						onBlur={() => onPinChange(false)}

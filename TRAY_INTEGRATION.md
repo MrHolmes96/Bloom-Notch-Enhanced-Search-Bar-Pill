@@ -18,19 +18,23 @@ appears only when an unpinned app is present.
 
 ## The tray in the notch
 
-The control center's tray button opens the same icons inside the notch. Icons
-on Windows' taskbar (`IsPromoted = 1`) show first; Windows' hidden icons sit in
-a "Hidden icons" section below, like the ^ flyout. The pencil switches to
-editing: move an icon between the two, or hide it from Bloom's tray (and show
-it again). What is changed is kept in `bloom-tray-placement` and only affects
-Bloom: `IsPromoted` is read, never written, and no icon is changed in Windows.
+The control center's tray button opens the same icons inside the notch: every
+live tray icon, wherever Windows keeps it (taskbar or overflow). Hidden icons
+are one click away in its "Hidden icons" menu, where they still work. The
+pencil switches to editing: hide an icon, or show a hidden one again. What is
+changed is kept in `bloom-tray-placement` and only affects Bloom: `IsPromoted`
+is read, never written, and no icon is changed in Windows. The view is never
+shorter than the control center it opens from, so the pointer that clicked
+the tray button stays inside the notch.
 
-Settings > Notch > System Tray lists every live icon with the same choice, and
-follows Tray Icon Manager: the `HiddenIcons` of its
-`%AppData%\TrayIconManager\config.json` (read only, matched by icon GUID, then
-program, then name) stay hidden in Bloom's tray while "Follow Tray Icon
-Manager" is on. "Copy Tray Icon Manager's Hidden Icons" copies them into
-Bloom's own list, so they stay hidden without it.
+Settings > Notch > System Tray lists every live icon with a switch, and
+follows Tray Icon Manager: the `HiddenIcons` in its
+`%AppData%\TrayIconManager\config.json` (read only, in whatever text encoding
+PowerShell wrote it, matched by icon GUID, then program, then name) are hidden
+in Bloom's tray while "Follow Tray Icon Manager" is on. The settings say how
+many it hides and name the ones not running, so a mismatch is visible. "Copy
+Tray Icon Manager's Hidden Icons" copies them into Bloom's own list, so they
+stay hidden without it.
 
 ## Implementation and compatibility
 

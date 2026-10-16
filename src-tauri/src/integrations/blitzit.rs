@@ -146,8 +146,20 @@ fn with_client<T>(
     Err("Blitzit didn't answer. Try again in a moment".into())
 }
 
-fn tool_name(client: &Client, kind: Kind) -> Option<String> {
-    tools::pick(&client.tools, kind).map(|t| t.name.clone())
+const TOOLS_SETTING: &str = "bloom-blitzit-tools";
+
+/// The tool chosen by hand for `kind` in Settings > Integrations > Blitzit.
+fn chosen(app: &AppHandle, kind: Kind) -> Option<String> {
+    let raw = crate::utils::get_setting_str(app, TOOLS_SETTING)?;
+    let map: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    map.get(kind.id())
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+}
+
+fn pick(app: &AppHandle, client: &Client, kind: Kind) -> Option<super::mcp::Tool> {
+    tools::pick(&client.tools, kind, chosen(app, kind).as_deref()).cloned()
 }
 
 // ---------------------------------------------------------------- commands
@@ -164,59 +176,66 @@ pub struct BlitzitStatus {
     can_complete: bool,
     /// Columns a new task can go in, when Blitzit says.
     columns: Vec<String>,
+    /// Which of Blitzit's tools Bloom uses for adding, lists, tasks, done.
+    using: [Option<String>; 4],
+    /// Each of Blitzit's tools and what it says it does.
+    tool_details: Vec<(String, String)>,
+    /// Why Blitzit couldn't be reached or used, when it couldn't.
+    problem: Option<String>,
     /// The Blitzit app is installed or running on this PC.
     app_found: bool,
 }
 
 fn status_now(app: &AppHandle, check: bool) -> BlitzitStatus {
     let connected = store_path(app).is_some_and(|p| p.is_file());
-    let mut tools = Vec::new();
-    let mut flags = [false; 4];
-    let mut columns = Vec::new();
+    let mut found = None;
+    let mut problem = None;
     if connected {
         let read = |client: &mut Client| {
-            (
-                client
-                    .tools
-                    .iter()
-                    .map(|t| t.name.clone())
-                    .collect::<Vec<_>>(),
-                [
-                    tool_name(client, Kind::CreateTask).is_some(),
-                    tool_name(client, Kind::Lists).is_some(),
-                    tool_name(client, Kind::Tasks).is_some(),
-                    tool_name(client, Kind::CompleteTask).is_some(),
-                ],
-                tools::pick(&client.tools, Kind::CreateTask)
-                    .map(tools::column_choices)
-                    .unwrap_or_default(),
-            )
+            let using = Kind::ALL.map(|kind| pick(app, client, kind).map(|t| t.name));
+            let columns = pick(app, client, Kind::CreateTask)
+                .map(|t| tools::column_choices(&t))
+                .unwrap_or_default();
+            let details = client
+                .tools
+                .iter()
+                .map(|t| (t.name.clone(), t.description.clone()))
+                .collect::<Vec<_>>();
+            (using, columns, details)
         };
         let cached = CONNECTION.lock().ok().and_then(|mut c| {
             c.as_mut()
                 .filter(|c| c.client.ready)
                 .map(|c| read(&mut c.client))
         });
-        let found = match cached {
+        found = match cached {
             Some(found) => Some(found),
-            None if check => with_client(app, |client, _| Ok(read(client))).ok(),
+            None if check => match with_client(app, |client, _| Ok(read(client))) {
+                Ok(found) => Some(found),
+                Err(message) => {
+                    problem = Some(message);
+                    None
+                }
+            },
             None => None,
         };
-        if let Some((names, found_flags, found_columns)) = found {
-            tools = names;
-            flags = found_flags;
-            columns = found_columns;
-        }
+    }
+    let (using, columns, tool_details) = found.unwrap_or_default();
+    if problem.is_none() && connected && check && tool_details.is_empty() {
+        problem = Some("Blitzit's connection offers no actions".into());
     }
     BlitzitStatus {
         connected: store_path(app).is_some_and(|p| p.is_file()),
         server: server(app),
-        tools,
-        can_add: flags[0],
-        can_read_lists: flags[1],
-        can_read_tasks: flags[2],
-        can_complete: flags[3],
+        tools: tool_details.iter().map(|(n, _)| n.clone()).collect(),
+        can_add: using[0].is_some(),
+        can_read_lists: using[1].is_some(),
+        can_read_tasks: using[2].is_some(),
+        can_complete: using[3].is_some(),
         columns,
+        using,
+        tool_details,
+        problem,
         app_found: find_window().is_some() || installed_app().is_some(),
     }
 }
@@ -236,8 +255,35 @@ pub async fn blitzit_status(app: AppHandle, check: Option<bool>) -> BlitzitStatu
             can_read_tasks: false,
             can_complete: false,
             columns: Vec::new(),
+            using: Default::default(),
+            tool_details: Vec::new(),
+            problem: None,
             app_found: false,
         })
+}
+
+/// Blitzit's tools with their inputs, as text to copy (for checking why an
+/// action isn't found).
+#[tauri::command]
+pub async fn blitzit_tools_report(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        with_client(&app, |client, _| {
+            let list: Vec<serde_json::Value> = client
+                .tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "inputSchema": t.schema,
+                    })
+                })
+                .collect();
+            Ok(serde_json::to_string_pretty(&list).unwrap_or_default())
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Signs in to Blitzit in the browser and connects.
@@ -285,8 +331,7 @@ pub struct BlitzitList {
 pub async fn blitzit_lists(app: AppHandle) -> Result<Vec<BlitzitList>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         with_client(&app, |client, token| {
-            let tool = tools::pick(&client.tools, Kind::Lists)
-                .cloned()
+            let tool = pick(&app, client, Kind::Lists)
                 .ok_or_else(|| McpError::Failed("Blitzit doesn't share its lists".into()))?;
             let args = tools::lists_args(&tool)?;
             let answer = client.call(token, &tool.name, args)?;
@@ -319,8 +364,7 @@ pub async fn blitzit_tasks(
     tauri::async_runtime::spawn_blocking(move || {
         let list = list_ref(list_id, list_name);
         with_client(&app, |client, token| {
-            let tool = tools::pick(&client.tools, Kind::Tasks)
-                .cloned()
+            let tool = pick(&app, client, Kind::Tasks)
                 .ok_or_else(|| McpError::Failed("Blitzit doesn't share its tasks".into()))?;
             let args = tools::tasks_args(&tool, list.as_ref())?;
             let answer = client.call(token, &tool.name, args)?;
@@ -346,8 +390,7 @@ pub async fn blitzit_add_task(
     tauri::async_runtime::spawn_blocking(move || {
         let list = list_ref(list_id, list_name);
         with_client(&app, |client, token| {
-            let tool = tools::pick(&client.tools, Kind::CreateTask)
-                .cloned()
+            let tool = pick(&app, client, Kind::CreateTask)
                 .ok_or_else(|| McpError::Failed("Blitzit can't add tasks from here".into()))?;
             let args = tools::create_args(&tool, &title, list.as_ref(), column.as_deref())?;
             client.call(token, &tool.name, args).map(|_| ())
@@ -367,8 +410,7 @@ pub async fn blitzit_complete_task(
     tauri::async_runtime::spawn_blocking(move || {
         let list = list_ref(list_id, list_name);
         with_client(&app, |client, token| {
-            let tool = tools::pick(&client.tools, Kind::CompleteTask)
-                .cloned()
+            let tool = pick(&app, client, Kind::CompleteTask)
                 .ok_or_else(|| McpError::Failed("Blitzit can't tick tasks off from here".into()))?;
             let args = tools::complete_args(&tool, &task_id, list.as_ref())?;
             client.call(token, &tool.name, args).map(|_| ())

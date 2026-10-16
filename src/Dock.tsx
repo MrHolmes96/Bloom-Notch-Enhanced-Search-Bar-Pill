@@ -151,6 +151,11 @@ const Dock = memo(function Dock() {
 		() => localStorage.getItem("bloom-dock-extras-position") || "off"
 	);
 	const [dockExtras, setDockExtras] = useState<DockExtra[]>([]);
+	// The Recycle Bin at the end of the dock, with Tray Bin's fill levels.
+	const [binEnabled, setBinEnabled] = useState(
+		() => localStorage.getItem("bloom-dock-extras-recycle-bin") !== "false"
+	);
+	const [recycleBin, setRecycleBin] = useState<DockExtra | null>(null);
 	const [dockExtrasRevision, setDockExtrasRevision] = useState(0);
 	const [isMaximized, setIsMaximized] = useState(false);
 	// "live": Windows' own moving thumbnails over the preview cards.
@@ -427,7 +432,7 @@ const Dock = memo(function Dock() {
 		"bloom-scale": setScale,
 		"bloom-dock-extras-position": setDockExtrasPosition,
 		"bloom-dock-extras-drives": () => setDockExtrasRevision((r) => r + 1),
-		"bloom-dock-extras-recycle-bin": () => setDockExtrasRevision((r) => r + 1),
+		"bloom-dock-extras-recycle-bin": (v: unknown) => setBinEnabled(v !== false && v !== "false"),
 		"bloom-dock-extras-folders": () => setDockExtrasRevision((r) => r + 1),
 		"bloom-dock-extras-custom-folders": () => setDockExtrasRevision((r) => r + 1),
 		"bloom-dock-bin-icons": () => refreshRecycleBin(),
@@ -437,11 +442,25 @@ const Dock = memo(function Dock() {
 	// Redraws only the bin when its contents change (the backend watches it)
 	// or its icon settings change, without re-reading drives and folders.
 	const refreshRecycleBin = () => {
+		if (localStorage.getItem("bloom-dock-extras-recycle-bin") === "false") return;
 		void invoke<DockExtra | null>("get_recycle_bin_extra").then((bin) => {
-			if (!bin) return;
-			setDockExtras((prev) => prev.map((extra) => (extra.id === bin.id ? bin : extra)));
+			if (bin) setRecycleBin(bin);
 		});
 	};
+
+	useEffect(() => {
+		if (!binEnabled) {
+			setRecycleBin(null);
+			return;
+		}
+		let stopped = false;
+		void invoke<DockExtra | null>("get_recycle_bin_extra").then((bin) => {
+			if (!stopped && bin) setRecycleBin(bin);
+		});
+		return () => {
+			stopped = true;
+		};
+	}, [binEnabled]);
 
 	useEffect(() => {
 		const unlisten = listen("recycle-bin-changed", () => refreshRecycleBin());
@@ -1649,6 +1668,17 @@ const Dock = memo(function Dock() {
 											aria-orientation="vertical"
 										/>
 										{dockExtras.map((extra) => renderExtra(extra))}
+									</>
+								)}
+
+								{binEnabled && recycleBin && (
+									<>
+										<div
+											className="dock-app-divider"
+											role="separator"
+											aria-orientation="vertical"
+										/>
+										{renderExtra(recycleBin)}
 									</>
 								)}
 							</motion.div>

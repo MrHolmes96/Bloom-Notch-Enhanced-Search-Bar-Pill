@@ -1,12 +1,13 @@
 /**
- * Where each tray icon shows in the notch's tray: in the tray itself, in the
- * hidden icons below it, or not at all. Windows' own placement (taskbar or
- * hidden icons) and Tray Icon Manager's hidden list are the starting point;
- * what is changed in Bloom is kept in `bloom-tray-placement` and only affects
- * Bloom. Windows' tray and Tray Icon Manager's settings are never changed.
+ * Which tray icons show in the notch's tray. Every live tray icon shows,
+ * except the hidden ones: hidden in Bloom, or hidden by Tray Icon Manager
+ * while Bloom follows it. Hidden icons are one click away in the tray's
+ * "Hidden icons" menu. What is changed in Bloom is kept in
+ * `bloom-tray-placement` and only affects Bloom; Windows' tray and Tray Icon
+ * Manager's settings are never changed.
  */
 
-export type Placement = "tray" | "menu" | "hidden";
+export type Visibility = "shown" | "hidden";
 
 export const TRAY_PLACEMENT_KEY = "bloom-tray-placement";
 export const TRAY_FOLLOW_KEY = "bloom-tray-follow-manager";
@@ -19,7 +20,7 @@ export interface TrayIconInfo {
 	name: string;
 	tooltip: string;
 	path: string;
-	/** On Windows' taskbar rather than in its hidden icons. */
+	/** On Windows' taskbar rather than in its overflow. */
 	promoted: boolean;
 	/** Tray Icon Manager hides it. */
 	manager_hidden: boolean;
@@ -28,18 +29,19 @@ export interface TrayIconInfo {
 export interface TrayState {
 	icons: TrayIconInfo[];
 	manager_found: boolean;
-	manager_entries: { name: string; key: string | null }[];
+	manager_path: string | null;
+	manager_entries: { name: string; key: string | null; running: boolean }[];
 }
 
-const PLACEMENTS: Placement[] = ["tray", "menu", "hidden"];
-
-export function parsePlacements(raw: string | null): Record<string, Placement> {
+/** Bloom's own choices. Older builds stored "tray" / "menu" / "hidden". */
+export function parsePlacements(raw: string | null): Record<string, Visibility> {
 	try {
 		const parsed: unknown = JSON.parse(raw ?? "{}");
 		if (!parsed || typeof parsed !== "object") return {};
-		const result: Record<string, Placement> = {};
+		const result: Record<string, Visibility> = {};
 		for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-			if (PLACEMENTS.includes(value as Placement)) result[key] = value as Placement;
+			if (value === "shown" || value === "tray") result[key] = "shown";
+			else if (value === "hidden") result[key] = "hidden";
 		}
 		return result;
 	} catch {
@@ -47,33 +49,32 @@ export function parsePlacements(raw: string | null): Record<string, Placement> {
 	}
 }
 
-/** Where Windows and Tray Icon Manager put it, before anything set in Bloom. */
-export function defaultPlacement(icon: TrayIconInfo, followManager: boolean): Placement {
-	if (followManager && icon.manager_hidden) return "hidden";
-	return icon.promoted ? "tray" : "menu";
+/** Before anything is chosen in Bloom: hidden only when Tray Icon Manager hides it. */
+export function defaultVisibility(icon: TrayIconInfo, followManager: boolean): Visibility {
+	return followManager && icon.manager_hidden ? "hidden" : "shown";
 }
 
-export function placementOf(
+export function visibilityOf(
 	icon: TrayIconInfo,
-	placements: Record<string, Placement>,
+	placements: Record<string, Visibility>,
 	followManager: boolean
-): Placement {
-	return placements[icon.key] ?? defaultPlacement(icon, followManager);
+): Visibility {
+	return placements[icon.key] ?? defaultVisibility(icon, followManager);
 }
 
 /**
- * Sets an icon's place. Choosing the default removes Bloom's own choice, so
- * a later change in Windows or Tray Icon Manager carries through again.
+ * Shows or hides an icon. Choosing what Windows and Tray Icon Manager already
+ * say removes Bloom's own choice, so later changes there carry through.
  */
-export function withPlacement(
-	placements: Record<string, Placement>,
+export function withVisibility(
+	placements: Record<string, Visibility>,
 	icon: TrayIconInfo,
-	place: Placement,
+	visibility: Visibility,
 	followManager: boolean
-): Record<string, Placement> {
+): Record<string, Visibility> {
 	const next = { ...placements };
-	if (place === defaultPlacement(icon, followManager)) delete next[icon.key];
-	else next[icon.key] = place;
+	if (visibility === defaultVisibility(icon, followManager)) delete next[icon.key];
+	else next[icon.key] = visibility;
 	return next;
 }
 

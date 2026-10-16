@@ -233,9 +233,26 @@ export function DockTab({
 						)}
 
 						<SettingRow
+							icon={Trash2}
+							label="Recycle Bin"
+							desc="At the end of the dock, with Tray Bin's icons filling up as the bin grows"
+						>
+							<label className="toggle-switch">
+								<input
+									type="checkbox"
+									checked={dockExtrasRecycleBin}
+									onChange={toggleDockExtrasRecycleBin}
+								/>
+								<span className="slider"></span>
+							</label>
+						</SettingRow>
+
+						{dockExtrasRecycleBin && <RecycleBinSettings />}
+
+						<SettingRow
 							icon={LayoutPanelLeft}
 							label="Dock Extras"
-							desc="Show drives, folders and the Recycle Bin beside the apps"
+							desc="Show drives and folders beside the apps"
 						>
 							<select
 								className="settings-select"
@@ -264,23 +281,6 @@ export function DockTab({
 										<span className="slider"></span>
 									</label>
 								</SettingRow>
-
-								<SettingRow
-									icon={Trash2}
-									label="Recycle Bin"
-									desc="Show the Recycle Bin in the extras"
-								>
-									<label className="toggle-switch">
-										<input
-											type="checkbox"
-											checked={dockExtrasRecycleBin}
-											onChange={toggleDockExtrasRecycleBin}
-										/>
-										<span className="slider"></span>
-									</label>
-								</SettingRow>
-
-								{dockExtrasRecycleBin && <RecycleBinSettings />}
 
 								<div
 									className="setting-item"
