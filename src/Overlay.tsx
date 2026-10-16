@@ -495,6 +495,20 @@ function BrightnessNotch({
 	onBrightnessChange: (val: number) => void;
 }) {
 	const barRef = useRef<HTMLDivElement>(null);
+	const percentage = Math.round(brightness);
+	const [showPercentage, setShowPercentage] = useState(false);
+	const percentageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	// Flash the percentage in place of the sun whenever the brightness changes,
+	// like the volume HUD does.
+	useEffect(() => {
+		setShowPercentage(true);
+		if (percentageTimeoutRef.current) clearTimeout(percentageTimeoutRef.current);
+		percentageTimeoutRef.current = setTimeout(() => setShowPercentage(false), 1200);
+		return () => {
+			if (percentageTimeoutRef.current) clearTimeout(percentageTimeoutRef.current);
+		};
+	}, [percentage]);
 
 	const handleBarInteraction = (e: React.MouseEvent | React.TouchEvent) => {
 		if (!barRef.current) return;
@@ -561,8 +575,11 @@ function BrightnessNotch({
 							transition={{ type: "spring", stiffness: 300, damping: 35 }}
 						/>
 					</div>
-					<div className="brightness-notch-icon">
-						<SunIcon brightness={brightness} />
+					<div className={`brightness-notch-icon ${showPercentage ? "showing-percent" : ""}`}>
+						<span className="brightness-notch-sun">
+							<SunIcon brightness={brightness} />
+						</span>
+						<span className="brightness-notch-percent">{percentage}%</span>
 					</div>
 				</motion.div>
 			</div>

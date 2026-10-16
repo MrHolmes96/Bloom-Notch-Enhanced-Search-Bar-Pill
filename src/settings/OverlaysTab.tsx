@@ -1,5 +1,6 @@
-import { Volume2, Sun, ArrowLeftToLine, ArrowRightToLine } from "lucide-react";
+import { Volume2, Sun, SunMedium, ArrowLeftToLine, ArrowRightToLine } from "lucide-react";
 import { SettingRow } from "./SettingRow";
+import { useStoredString } from "./useStoredSetting";
 
 interface OverlaysTabProps {
 	volumeOverlayEnabled: boolean;
@@ -22,6 +23,7 @@ export function OverlaysTab({
 	brightnessEdgeEnabled,
 	toggleBrightnessEdge
 }: OverlaysTabProps) {
+	const [keyStep, setKeyStep] = useStoredString("bloom-brightness-key-step", "2");
 	return (
 		<>
 			<div className="setting-group-label">Overlays</div>
@@ -55,6 +57,28 @@ export function OverlaysTab({
 						/>
 						<span className="slider"></span>
 					</label>
+				</SettingRow>
+
+				<SettingRow
+					icon={SunMedium}
+					label="Brightness Key Step"
+					desc={
+						keyStep === "0"
+							? "Brightness keys use Windows' own step"
+							: `Each press of a brightness key changes it by ${keyStep}%`
+					}
+					divider={brightnessOverlayEnabled}
+				>
+					<select
+						className="settings-select"
+						value={keyStep}
+						onChange={(e) => setKeyStep(e.target.value)}
+					>
+						<option value="1">1%</option>
+						<option value="2">2%</option>
+						<option value="5">5%</option>
+						<option value="0">Windows default</option>
+					</select>
 				</SettingRow>
 
 				{brightnessOverlayEnabled && (

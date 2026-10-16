@@ -1271,6 +1271,10 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
         if let Ok(events) = wmi_con.raw_notification::<WmiMonitorBrightnessEvent>(
             "SELECT * FROM WmiMonitorBrightnessEvent",
         ) {
+            // The value Bloom set itself to replace a brightness key's step, and
+            // the last value Windows reported before any such correction.
+            let mut correcting: Option<u32> = None;
+            let mut reported = last_brightness;
             for event in events {
                 let Ok(event) = event else { break };
                 let brightness = event.brightness as u32;
@@ -1279,6 +1283,33 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                 {
                     continue;
                 }
+                if correcting.take() == Some(brightness) {
+                    reported = brightness;
+                    continue;
+                }
+                // A brightness key moves it by Windows' (or the keyboard tool's)
+                // 10% step; Bloom swaps that for the step chosen in Settings >
+                // Overlays, counted from where the brightness was. A quick
+                // second press can start from the uncorrected value, so the
+                // press is recognised from either.
+                let step = brightness_key_step(&handle_brightness);
+                let direction = key_press_direction(last_brightness, brightness)
+                    .or_else(|| key_press_direction(reported, brightness));
+                reported = brightness;
+                let target = direction.and_then(|d| {
+                    let target = (last_brightness as i64 + d * step as i64).clamp(0, 100) as u32;
+                    (step > 0 && step < 10 && target != brightness).then_some(target)
+                });
+                let brightness = match target {
+                    Some(target) => {
+                        correcting = Some(target);
+                        if let Some(tx) = BRIGHTNESS_SENDER.get() {
+                            let _ = tx.send(target);
+                        }
+                        target
+                    }
+                    None => brightness,
+                };
                 last_brightness = brightness;
                 CURRENT_BRIGHTNESS.store(brightness, Ordering::Relaxed);
                 let _ = handle_brightness
@@ -1897,6 +1928,23 @@ fn native_osd_windows() -> Vec<HWND> {
 /// cannot be swallowed to keep Windows from drawing its own flyout. While
 /// Bloom's overlay replaces it, the flyout host is kept fully transparent and
 /// click-through instead; Explorer may still show it, but nothing is visible.
+/// Brightness key step from Settings > Overlays, in percent; 0 keeps the step
+/// Windows (or the keyboard tool) uses.
+fn brightness_key_step(app: &AppHandle) -> u32 {
+    crate::utils::get_setting_str(app, "bloom-brightness-key-step")
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(2)
+}
+
+/// +1 or -1 when going from `before` to `now` looks like a brightness key:
+/// exactly one 10% step, or a smaller one that stopped at 0 or 100. Sliders
+/// and automatic dimming move by other amounts and are left alone.
+fn key_press_direction(before: u32, now: u32) -> Option<i64> {
+    let delta = now as i64 - before as i64;
+    let key_press = delta.abs() == 10 || ((now == 0 || now == 100) && delta.abs() < 10);
+    (key_press && delta != 0).then_some(delta.signum())
+}
+
 pub fn set_native_osd_suppressed(suppress: bool) {
     use windows::Win32::Foundation::COLORREF;
     use windows::Win32::UI::WindowsAndMessaging::{
