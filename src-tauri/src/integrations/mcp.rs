@@ -122,7 +122,8 @@ impl Client {
             |so_far| {
                 // An event stream may stay open after the answer; stop once it's in.
                 id.is_some_and(|id| {
-                    so_far.ends_with(b"\n\n") && answer_for(sse_messages(so_far), id).is_some()
+                    (so_far.ends_with(b"\n\n") || so_far.ends_with(b"\r\n\r\n"))
+                        && answer_for(sse_messages(so_far), id).is_some()
                 })
             },
         )?;
