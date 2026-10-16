@@ -833,6 +833,42 @@ fn launch_path(path: &str) {
     }
 }
 
+/// A window that counts as visible but can't be seen: fully transparent, or
+/// parked outside every screen.
+unsafe fn window_hidden_away(hwnd: HWND) -> bool {
+    use windows::Win32::Foundation::{COLORREF, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetLayeredWindowAttributes, GetSystemMetrics, GetWindowLongW, GetWindowRect, IsIconic,
+        GWL_EXSTYLE, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, SM_CXVIRTUALSCREEN,
+        SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WS_EX_LAYERED,
+    };
+    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+    if ex_style & WS_EX_LAYERED.0 != 0 {
+        let mut key = COLORREF(0);
+        let mut alpha = 255u8;
+        let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+        if GetLayeredWindowAttributes(hwnd, Some(&mut key), Some(&mut alpha), Some(&mut flags))
+            .is_ok()
+            && flags.0 & LWA_ALPHA.0 != 0
+            && alpha == 0
+        {
+            return true;
+        }
+    }
+    if IsIconic(hwnd).as_bool() {
+        return false;
+    }
+    let mut rect = RECT::default();
+    if GetWindowRect(hwnd, &mut rect).is_err() {
+        return false;
+    }
+    let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    let right = left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    let bottom = top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    rect.right <= left || rect.left >= right || rect.bottom <= top || rect.top >= bottom
+}
+
 #[tauri::command]
 pub async fn get_active_windows() -> Vec<AppInfo> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -848,6 +884,14 @@ pub async fn get_active_windows() -> Vec<AppInfo> {
                 LPARAM(&mut apps as *mut Vec<AppInfo> as isize),
             );
         }
+
+        // A window that counts as visible but can't be seen (fully transparent,
+        // or parked off screen when its app went to the tray) is no reason to
+        // keep the app on the dock.
+        apps.retain(|app| {
+            app.hwnd
+                .is_none_or(|hwnd| unsafe { !window_hidden_away(HWND(hwnd as *mut _)) })
+        });
 
         let mut grouped: HashMap<String, AppInfo> = HashMap::new();
 

@@ -10,6 +10,7 @@ import { reloadIfMirrorWasStale } from "./hooks/settingsMirror";
 
 import { mergeTrayApps, selectDockTrayApps, type AppInfo, type TrayApp } from "./dockApps";
 import { binDoubleClickAction, removeCustomFolder, type DockExtra } from "./dockExtras";
+import { DockIconImage } from "./dockIcon";
 import { fetchJumpList, hasJumpList, openJumpItem, type JumpGroup } from "./jumpList";
 
 // Host processes (Edge/Chrome/Brave/ApplicationFrameHost) run every PWA/UWP
@@ -1121,26 +1122,21 @@ const Dock = memo(function Dock() {
 			>
 				{extra.icon && extra.icon_light ? (
 					<>
-						<img
-							className={`extra-icon-dark-bg${extra.pixelated ? " pixelated" : ""}`}
+						<DockIconImage
+							className="extra-icon-dark-bg"
 							src={extra.icon}
 							alt={extra.name}
-							draggable={false}
+							pixelArt={extra.pixelated}
 						/>
-						<img
-							className={`extra-icon-light-bg${extra.pixelated ? " pixelated" : ""}`}
+						<DockIconImage
+							className="extra-icon-light-bg"
 							src={extra.icon_light}
 							alt={extra.name}
-							draggable={false}
+							pixelArt={extra.pixelated}
 						/>
 					</>
 				) : extra.icon ? (
-					<img
-						className={extra.pixelated ? "pixelated" : undefined}
-						src={extra.icon}
-						alt={extra.name}
-						draggable={false}
-					/>
+					<DockIconImage src={extra.icon} alt={extra.name} pixelArt={extra.pixelated} />
 				) : (
 					<div className="fallback-icon">{extra.name[0]}</div>
 				)}
@@ -1255,14 +1251,13 @@ const Dock = memo(function Dock() {
 												handleAppClick(startItem);
 											}}
 										>
-											<img
+											<DockIconImage
 												src={resolveStartIcon(startIcon)}
 												alt="Start"
 												className="bloom-icon-img"
 												style={
 													startIcon.startsWith("custom:") ? { borderRadius: "8px" } : undefined
 												}
-												draggable={false}
 											/>
 										</motion.div>
 									</motion.div>
@@ -1422,11 +1417,10 @@ const Dock = memo(function Dock() {
 															app.path.toLowerCase().includes("bloom.exe");
 
 														return icon ? (
-															<img
+															<DockIconImage
 																src={icon}
 																alt={app.name}
 																className={isBloomOrSettings ? "bloom-icon-img" : ""}
-																draggable={false}
 															/>
 														) : (
 															<div className="fallback-icon">{app.name[0]}</div>
@@ -1579,11 +1573,10 @@ const Dock = memo(function Dock() {
 													app.name.toLowerCase() === "bloom" ||
 													app.path.toLowerCase().includes("bloom.exe");
 												return icon ? (
-													<img
+													<DockIconImage
 														src={icon}
 														alt={app.name}
 														className={isBloomOrSettings ? "bloom-icon-img" : ""}
-														draggable={false}
 													/>
 												) : (
 													<div className="fallback-icon">{app.name[0]}</div>

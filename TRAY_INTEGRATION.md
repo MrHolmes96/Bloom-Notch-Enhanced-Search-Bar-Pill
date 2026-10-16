@@ -1,8 +1,7 @@
 # Dock background apps and system actions
 
-An unpinned app remains in the dock after its last window closes only if Bloom
-observed that app with a window during the current session and it still has a
-live notification icon. Other tray-only apps do not fill the dock. Pinned apps
+An unpinned app leaves the dock when its last window closes, even while it keeps
+running in the tray, so tray-only apps never pile up on the dock. Pinned apps
 show a grey dot from startup when they are already active in the tray. Windowed
 apps retain their normal window dots and previews.
 Running unpinned apps appear to the right of the pinned group. Settings > Dock >
@@ -72,7 +71,8 @@ Manual acceptance checks (required before merging):
 1. On Bloom startup, unrelated tray-only apps stay out of the dock; pinned apps
    already active in the tray show a grey dot.
 2. Start an unpinned Discord with one window: one normal dot, no duplicate entry.
-3. Close Discord to the tray: one grey dot, no window thumbnail.
+3. Close Discord to the tray: an unpinned Discord leaves the dock; a pinned one
+   keeps one grey dot and no window thumbnail.
 4. Right-click its dock icon: Discord's own menu appears and its actions work.
 5. Click the background icon: Discord responds through its tray default action.
 6. Quit Discord through its native menu: unpinned icon disappears; pinned dot clears

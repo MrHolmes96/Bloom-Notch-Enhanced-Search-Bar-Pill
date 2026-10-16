@@ -32,6 +32,13 @@ import { ShelfTypeIcon } from "./components/ShelfTypeIcon";
 import { WifiPanel } from "./components/WifiPanel";
 import { BluetoothPanel } from "./components/BluetoothPanel";
 import {
+	NOTES_KEY,
+	NotesPanel,
+	notesPanelHeight,
+	parseNotes,
+	type NoteItem
+} from "./components/NotesPanel";
+import {
 	Captions as CaptionsGlyph,
 	Cast as CastGlyph,
 	Contrast as ContrastGlyph,
@@ -450,6 +457,7 @@ type BloomMode =
 	| "announcement"
 	| "status"
 	| "shelf"
+	| "notes"
 	| "wifi"
 	| "bluetooth";
 
@@ -917,6 +925,17 @@ function App() {
 	const [shelfInScroll, setShelfInScroll] = useState(
 		() => localStorage.getItem("bloom-notch-shelf-in-scroll") !== "false"
 	);
+	// Quick notes and to-dos, reached through the scroll menu.
+	const [notes, setNotes] = useState<NoteItem[]>(() => parseNotes(localStorage.getItem(NOTES_KEY)));
+	const [notesInScroll, setNotesInScroll] = useState(
+		() => localStorage.getItem("bloom-notch-notes-in-scroll") !== "false"
+	);
+	const saveNotes = (next: NoteItem[]) => {
+		setNotes(next);
+		const value = JSON.stringify(next);
+		localStorage.setItem(NOTES_KEY, value);
+		invoke("save_setting", { key: NOTES_KEY, value }).catch(console.error);
+	};
 	// The control center's round buttons, chosen in Settings > Notch.
 	const [ccButtons, setCcButtons] = useState<CCButtonId[]>(() =>
 		parseCCButtons(localStorage.getItem(CC_KEY))
@@ -977,6 +996,8 @@ function App() {
 				setShelfPersist(getVal("bloom-shelf-persist", "false") === "true");
 				setShelfInScroll(getVal("bloom-notch-shelf-in-scroll", "true") !== "false");
 				setCcButtons(parseCCButtons(getVal(CC_KEY)));
+				setNotes(parseNotes(getVal(NOTES_KEY)));
+				setNotesInScroll(getVal("bloom-notch-notes-in-scroll", "true") !== "false");
 				setSettingsMusicCompactNotch(getVal("bloom-music-compact-notch", "true") !== "false");
 				setWidgetsOnHoverOnly(getVal("bloom-notch-widgets-on-hover", "true") !== "false");
 				setLastPanel(asNotchPanel(getVal("bloom-notch-last-panel")));
@@ -1133,6 +1154,8 @@ function App() {
 			"bloom-shelf-persist": setShelfPersist,
 			"bloom-notch-shelf-in-scroll": setShelfInScroll,
 			[CC_KEY]: (v: unknown) => setCcButtons(parseCCButtons(v)),
+			[NOTES_KEY]: (v: unknown) => setNotes(parseNotes(v)),
+			"bloom-notch-notes-in-scroll": setNotesInScroll,
 			"bloom-music-compact-notch": setSettingsMusicCompactNotch,
 			"bloom-notch-widgets-on-hover": setWidgetsOnHoverOnly,
 			"bloom-notch-last-panel": (v: unknown) => setLastPanel(asNotchPanel(v)),
@@ -1464,6 +1487,7 @@ function App() {
 			prev === "calendar" ||
 			prev === "status" ||
 			prev === "shelf" ||
+			prev === "notes" ||
 			prev === "wifi" ||
 			prev === "bluetooth"
 				? restingModeRef.current
@@ -1706,6 +1730,15 @@ function App() {
 		) {
 			return;
 		}
+		// Over the notes list the wheel scrolls the list first, then moves on.
+		const notesList = target.closest(".notes-list") as HTMLElement | null;
+		if (notesList) {
+			const max = notesList.scrollHeight - notesList.clientHeight;
+			const step = e.deltaY;
+			if (max > 0 && ((step > 0 && notesList.scrollTop < max - 1) || (step < 0 && notesList.scrollTop > 1))) {
+				return;
+			}
+		}
 		// Over the shelf the wheel scrolls its row first; once the row is at its
 		// end (or fits), it moves on through the scroll menu like any panel.
 		if (target.closest(".shelf-content")) {
@@ -1737,7 +1770,8 @@ function App() {
 	// shelf when "Shelf in Scroll Menu" is on.
 	const scrollModes = (): BloomMode[] => [
 		...NOTCH_PANELS.filter(panelAvailable),
-		...(shelfInScroll ? (["shelf"] as const) : [])
+		...(shelfInScroll ? (["shelf"] as const) : []),
+		...(notesInScroll ? (["notes"] as const) : [])
 	];
 
 	// Wheel and swipe navigate panels, even from a collapsed live activity.
@@ -2564,7 +2598,7 @@ function App() {
 	const getDynamicWidth = () => {
 		if (bloomMode === "announcement" && announcement && !announcementDismissed) return 380;
 		if (isCalendarMode) return 480;
-		if (bloomMode === "shelf") return 380;
+		if (bloomMode === "shelf" || bloomMode === "notes") return 380;
 		if (bloomMode === "command-center" && isOpen) return 350;
 		if (bloomMode === "wifi" || bloomMode === "bluetooth") return 350;
 		if (showMusicOnStatusHover) {
@@ -2603,6 +2637,7 @@ function App() {
 			if (shelfItems.length === 0) return 130;
 			return shelfOverflowing ? 190 : 176;
 		}
+		if (bloomMode === "notes") return 36 + notesPanelHeight(notes);
 		if (bloomMode === "command-center") {
 			if (!isOpen) return 36;
 			// One row of round buttons is part of the base height; each extra row
@@ -3849,6 +3884,21 @@ function App() {
 													</div>
 												</div>
 											</div>
+										</motion.div>
+									)}
+								</AnimatePresence>
+
+								{/* Notes and to-dos */}
+								<AnimatePresence>
+									{bloomMode === "notes" && (
+										<motion.div
+											key="notes-view"
+											initial={{ opacity: 0 }}
+											animate={{ opacity: 1 }}
+											exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.1 } }}
+											transition={{ type: "spring", stiffness: 400, damping: 30 }}
+										>
+											<NotesPanel items={notes} onChange={saveNotes} onPinChange={setNotchPinned} />
 										</motion.div>
 									)}
 								</AnimatePresence>

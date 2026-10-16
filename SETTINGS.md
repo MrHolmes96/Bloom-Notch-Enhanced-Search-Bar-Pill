@@ -50,6 +50,8 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-notch-edge-delay` | milliseconds `"0"`–`"2000"`      | `"200"`   | In smart/peek mode, how long the cursor must rest against the top screen edge before the notch peeks. `"0"` reveals instantly. |
 | `bloom-notch-widgets-on-hover` | `"true"` / `"false"`  | `"true"`  | Only show the status widgets (battery, weather, ...) while the notch is hovered. `"false"` shows them whenever the notch is visible, including when a hidden notch is revealed from the top edge. |
 | `bloom-notch-shelf-in-scroll` | `"true"` / `"false"` | `"true"` | Scrolling or swiping on the notch also reaches the shelf, shown even when it is empty. |
+| `bloom-notch-notes-in-scroll` | `"true"` / `"false"` | `"true"` | Scrolling or swiping on the notch also reaches the notes and to-dos panel. |
+| `bloom-notch-notes` | JSON array of `{ id, text, todo, done, created }` | `"[]"` | The notch's quick notes and to-dos, newest first. |
 | `bloom-control-center-buttons` | comma-separated ids, or `"none"` | `"dnd,energy-saver,tray,notifications,bloom-settings,restart-bloom"` | The control center's round buttons, in order. Also: `night-light`, `airplane`, `hotspot`, `rotation-lock`, `live-captions`, `project`, `cast`, `keyboard-layout`, `accessibility`, `nearby-sharing`, `vpn`, `color-filters`. |
 
 ### Weather

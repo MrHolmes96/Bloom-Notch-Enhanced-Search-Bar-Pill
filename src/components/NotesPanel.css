@@ -1,0 +1,192 @@
+/* Notes and to-dos in the notch. Sits below the notch's 36px top strip,
+   like the shelf. */
+.notes-panel {
+	position: absolute;
+	top: 36px;
+	left: 0;
+	width: 100%;
+	height: calc(100% - 36px);
+	box-sizing: border-box;
+	z-index: 2;
+	padding: 12px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	color: var(--bloom-text, white);
+	border-radius: 0 0 18px 18px;
+	overflow: hidden;
+	font-size: 12px;
+}
+
+.notes-input-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 34px;
+	flex: none;
+	padding: 0 6px 0 4px;
+	border-radius: 12px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.06));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.08));
+}
+
+.notes-kind {
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: none;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.6));
+	cursor: pointer;
+}
+
+.notes-kind:hover {
+	background: var(--bloom-border, rgba(255, 255, 255, 0.1));
+	color: var(--bloom-text, white);
+}
+
+.notes-input,
+.notes-edit {
+	flex: 1;
+	min-width: 0;
+	border: none;
+	outline: none;
+	background: transparent;
+	color: var(--bloom-text, white);
+	font-size: 12px;
+	font-family: inherit;
+	user-select: text;
+	-webkit-user-select: text;
+}
+
+.notes-input::placeholder {
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.45));
+}
+
+.notes-empty {
+	height: 34px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.5));
+	font-size: 11px;
+}
+
+.notes-list {
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bloom-scrollbar-thumb, rgba(255, 255, 255, 0.15)) transparent;
+}
+
+.notes-row {
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 4px;
+	border-radius: 8px;
+}
+
+.notes-row:hover {
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.05));
+}
+
+.notes-check {
+	width: 15px;
+	height: 15px;
+	padding: 0;
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 5px;
+	border: 1.5px solid var(--bloom-text-muted, rgba(255, 255, 255, 0.5));
+	background: transparent;
+	color: var(--bloom-bg-expanded, #000);
+	cursor: pointer;
+}
+
+.notes-check.checked {
+	background: var(--bloom-text, #fff);
+	border-color: var(--bloom-text, #fff);
+}
+
+.notes-dot {
+	width: 15px;
+	height: 15px;
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.notes-dot::before {
+	content: "";
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: var(--bloom-text-muted, rgba(255, 255, 255, 0.6));
+}
+
+.notes-text {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	cursor: default;
+}
+
+.notes-row.done .notes-text {
+	text-decoration: line-through;
+	opacity: 0.5;
+}
+
+.notes-delete {
+	width: 20px;
+	height: 20px;
+	padding: 0;
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.6));
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.notes-row:hover .notes-delete {
+	opacity: 1;
+}
+
+.notes-delete:hover {
+	background: var(--bloom-border, rgba(255, 255, 255, 0.1));
+	color: var(--bloom-text, white);
+}
+
+.notes-clear {
+	align-self: flex-end;
+	height: 22px;
+	padding: 0 10px;
+	flex: none;
+	border: none;
+	border-radius: 999px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.06));
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.7));
+	font-size: 11px;
+	font-family: inherit;
+	cursor: pointer;
+}
+
+.notes-clear:hover {
+	color: var(--bloom-text, white);
+}

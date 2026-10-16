@@ -12,6 +12,7 @@ import {
 	Archive,
 	MousePointer2,
 	MoveHorizontal,
+	ListTodo,
 	X
 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
@@ -109,6 +110,7 @@ export function NotchTab({
 	handleWidgetsChange
 }: NotchTabProps) {
 	const [shelfInScroll, setShelfInScroll] = useStoredFlag("bloom-notch-shelf-in-scroll", true);
+	const [notesInScroll, setNotesInScroll] = useStoredFlag("bloom-notch-notes-in-scroll", true);
 	return (
 		<>
 			<div className="setting-group-label">Notch</div>
@@ -302,6 +304,29 @@ export function NotchTab({
 				>
 					<label className="toggle-switch">
 						<input type="checkbox" checked={shelfPersist} onChange={toggleShelfPersist} />
+						<span className="slider"></span>
+					</label>
+				</SettingRow>
+			</div>
+
+			<div className="setting-group-label">Notes</div>
+			<div className="setting-group">
+				<SettingRow
+					icon={ListTodo}
+					label="Notes in Scroll Menu"
+					desc={
+						notesInScroll
+							? "Scroll or swipe on the notch to reach your quick notes and to-dos"
+							: "The notes panel is hidden; your notes are kept"
+					}
+					divider={false}
+				>
+					<label className="toggle-switch">
+						<input
+							type="checkbox"
+							checked={notesInScroll}
+							onChange={() => setNotesInScroll(!notesInScroll)}
+						/>
 						<span className="slider"></span>
 					</label>
 				</SettingRow>

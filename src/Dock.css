@@ -813,14 +813,7 @@ body {
 	box-shadow: none;
 }
 
-/* Recycle Bin: Tray Bin's 16 px pixel-art icons, white on a dark dock and
-   black on a light one, scaled 2x without smoothing. */
-.dock-icon img.pixelated {
-	width: 32px;
-	height: 32px;
-	image-rendering: pixelated;
-}
-
+/* Recycle Bin: Tray Bin's icons, white on a dark dock and black on a light one. */
 .dock-icon img.extra-icon-light-bg,
 .light-mode .dock-icon img.extra-icon-dark-bg {
 	display: none;

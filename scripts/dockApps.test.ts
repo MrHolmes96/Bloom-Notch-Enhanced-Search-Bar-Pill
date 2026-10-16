@@ -20,11 +20,12 @@ describe("dock tray lifecycle", () => {
 		expect(selected.visible).toEqual([]);
 		expect(selected.observed.size).toBe(0);
 	});
-	test("shows an unpinned app only after its window was observed, then forgets it on exit", () => {
+	test("an unpinned app leaves the dock when its window closes, even in the tray", () => {
 		const opened = selectDockTrayApps([windowApp], [tray], new Set(), () => false);
 		expect(opened.visible).toEqual([tray]);
 		const background = selectDockTrayApps([], [tray], opened.observed, () => false);
-		expect(mergeTrayApps([], background.visible)[0].is_background).toBe(true);
+		expect(background.visible).toEqual([]);
+		expect(mergeTrayApps([], background.visible)).toEqual([]);
 		const exited = selectDockTrayApps([], [], background.observed, () => false);
 		expect(exited.observed.size).toBe(0);
 		expect(selectDockTrayApps([], [tray], exited.observed, () => false).visible).toEqual([]);
