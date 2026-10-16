@@ -5,7 +5,7 @@ import { Effect } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { X, Settings, Palette, PanelTop, Monitor, Layers, Search, Info, Megaphone } from "lucide-react";
+import { X, Settings, Palette, PanelTop, Monitor, Layers, Bell, Search, Info, Megaphone } from "lucide-react";
 import {
 	useSettings,
 	GeneralTab,
@@ -14,6 +14,7 @@ import {
 	DockTab,
 	OverlaysTab,
 	SearchBarTab,
+	NotificationsTab,
 	AboutTab
 } from "./settings/index";
 import type { SettingsTab } from "./settings/index";
@@ -29,6 +30,7 @@ const TABS: { id: SettingsTab; label: string; icon: typeof Settings }[] = [
 	{ id: "notch", label: "Notch", icon: PanelTop },
 	{ id: "dock", label: "Dock", icon: Monitor },
 	{ id: "overlays", label: "Overlays", icon: Layers },
+	{ id: "notifications", label: "Notifications", icon: Bell },
 	{ id: "search-bar", label: "Search Bar Pill", icon: Search },
 	{ id: "about", label: "About", icon: Info }
 ];
@@ -251,6 +253,7 @@ function SettingsApp() {
 							toggleBrightnessEdge={settings.toggleBrightnessEdge}
 						/>
 					)}
+					{activeTab === "notifications" && <NotificationsTab />}
 					{activeTab === "search-bar" && <SearchBarTab />}
 					{activeTab === "about" && (
 						<AboutTab

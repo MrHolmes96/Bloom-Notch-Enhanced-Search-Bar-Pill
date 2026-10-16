@@ -9,7 +9,7 @@ import { useSettingsSync } from "./hooks/useSettingsSync";
 import { reloadIfMirrorWasStale } from "./hooks/settingsMirror";
 
 import { mergeTrayApps, selectDockTrayApps, type AppInfo, type TrayApp } from "./dockApps";
-import { removeCustomFolder, type DockExtra } from "./dockExtras";
+import { binDoubleClickAction, removeCustomFolder, type DockExtra } from "./dockExtras";
 import { fetchJumpList, hasJumpList, openJumpItem, type JumpGroup } from "./jumpList";
 
 // Host processes (Edge/Chrome/Brave/ApplicationFrameHost) run every PWA/UWP
@@ -421,8 +421,26 @@ const Dock = memo(function Dock() {
 		"bloom-dock-extras-drives": () => setDockExtrasRevision((r) => r + 1),
 		"bloom-dock-extras-recycle-bin": () => setDockExtrasRevision((r) => r + 1),
 		"bloom-dock-extras-folders": () => setDockExtrasRevision((r) => r + 1),
-		"bloom-dock-extras-custom-folders": () => setDockExtrasRevision((r) => r + 1)
+		"bloom-dock-extras-custom-folders": () => setDockExtrasRevision((r) => r + 1),
+		"bloom-dock-bin-icons": () => refreshRecycleBin(),
+		"bloom-dock-bin-only-empty-full": () => refreshRecycleBin()
 	});
+
+	// Redraws only the bin when its contents change (the backend watches it)
+	// or its icon settings change, without re-reading drives and folders.
+	const refreshRecycleBin = () => {
+		void invoke<DockExtra | null>("get_recycle_bin_extra").then((bin) => {
+			if (!bin) return;
+			setDockExtras((prev) => prev.map((extra) => (extra.id === bin.id ? bin : extra)));
+		});
+	};
+
+	useEffect(() => {
+		const unlisten = listen("recycle-bin-changed", () => refreshRecycleBin());
+		return () => {
+			unlisten.then((f) => f());
+		};
+	}, []);
 
 	useEffect(() => {
 		if (dockExtrasPosition === "off") {
@@ -708,6 +726,40 @@ const Dock = memo(function Dock() {
 
 	const handleExtraClick = (extra: DockExtra) => {
 		invoke("open_dock_extra", { kind: extra.kind, path: extra.path }).catch(showActionError);
+	};
+
+	// The bin works like Tray Bin's tray icon: a double click opens or empties
+	// it (a setting). A single click opens it; when a double click empties,
+	// the single click waits briefly so the two never both run.
+	const binClickTimerRef = useRef<number | null>(null);
+	const lastBinClickRef = useRef(0);
+	const handleBinClick = (extra: DockExtra) => {
+		const now = Date.now();
+		const isDouble = now - lastBinClickRef.current < 400;
+		lastBinClickRef.current = isDouble ? 0 : now;
+		if (binClickTimerRef.current !== null) {
+			window.clearTimeout(binClickTimerRef.current);
+			binClickTimerRef.current = null;
+		}
+		const action = binDoubleClickAction();
+		if (isDouble) {
+			if (action === "empty") emptyRecycleBin();
+			// "open": the first click already opened it.
+			return;
+		}
+		if (action === "open") {
+			handleExtraClick(extra);
+			return;
+		}
+		binClickTimerRef.current = window.setTimeout(() => {
+			binClickTimerRef.current = null;
+			handleExtraClick(extra);
+		}, 400);
+	};
+
+	const emptyRecycleBin = () => {
+		closeMenu();
+		invoke("empty_recycle_bin").catch(showActionError);
 	};
 
 	const handleExtraContextMenu = (e: React.MouseEvent, extra: DockExtra) => {
@@ -1049,10 +1101,16 @@ const Dock = memo(function Dock() {
 			}}
 			onClick={(e) => {
 				e.stopPropagation();
-				handleExtraClick(extra);
+				if (extra.kind === "recycle-bin") handleBinClick(extra);
+				else handleExtraClick(extra);
 			}}
 		>
-			{hoveredApp === extra.id && <div className="tooltip">{extra.name}</div>}
+			{hoveredApp === extra.id && (
+				<div className={`tooltip${extra.detail ? " tooltip-two-line" : ""}`}>
+					{extra.name}
+					{extra.detail && <span className="tooltip-detail">{extra.detail}</span>}
+				</div>
+			)}
 			<motion.div
 				className="dock-icon"
 				variants={iconVariants}
@@ -1061,8 +1119,28 @@ const Dock = memo(function Dock() {
 				onPointerUp={() => setPressedApp(null)}
 				onPointerCancel={() => setPressedApp(null)}
 			>
-				{extra.icon ? (
-					<img src={extra.icon} alt={extra.name} draggable={false} />
+				{extra.icon && extra.icon_light ? (
+					<>
+						<img
+							className={`extra-icon-dark-bg${extra.pixelated ? " pixelated" : ""}`}
+							src={extra.icon}
+							alt={extra.name}
+							draggable={false}
+						/>
+						<img
+							className={`extra-icon-light-bg${extra.pixelated ? " pixelated" : ""}`}
+							src={extra.icon_light}
+							alt={extra.name}
+							draggable={false}
+						/>
+					</>
+				) : extra.icon ? (
+					<img
+						className={extra.pixelated ? "pixelated" : undefined}
+						src={extra.icon}
+						alt={extra.name}
+						draggable={false}
+					/>
 				) : (
 					<div className="fallback-icon">{extra.name[0]}</div>
 				)}
@@ -1598,6 +1676,11 @@ const Dock = memo(function Dock() {
 							>
 								Open
 							</div>
+							{contextMenu.extra.kind === "recycle-bin" && (
+								<div className="menu-item" onClick={emptyRecycleBin}>
+									Empty Recycle Bin
+								</div>
+							)}
 							{contextMenu.extra.kind === "drive" && contextMenu.extra.removable && (
 								<div className="menu-item" onClick={() => ejectExtra(contextMenu.extra!)}>
 									Eject

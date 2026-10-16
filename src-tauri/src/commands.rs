@@ -1111,7 +1111,19 @@ fn is_browser_host_process(path: &str) -> bool {
 
 /// Resolves the icon of a shell application id (Store/UWP/packaged PWA) through
 /// `shell:AppsFolder`. `SHGetFileInfoW` cannot handle these; `IShellItemImageFactory` can.
-fn icon_from_aumid(aumid: &str) -> Option<String> {
+pub(crate) fn icon_from_aumid(aumid: &str) -> Option<String> {
+    let id = aumid.trim().trim_start_matches("shell:AppsFolder\\");
+    if id.is_empty() {
+        return None;
+    }
+    shell_item_icon(&format!("shell:AppsFolder\\{}", id))
+}
+
+/// The icon the shell itself shows for an item (a shortcut, an exe, an
+/// AppsFolder entry), at up to 256 px. For a shortcut this is the shortcut's
+/// own icon, so launcher-style targets (Discord's Update.exe and the like)
+/// still get the app's icon, and the large size keeps it sharp on the dock.
+fn shell_item_icon(parsing_name: &str) -> Option<String> {
     unsafe {
         use windows::Win32::Foundation::SIZE;
         use windows::Win32::UI::Shell::{
@@ -1119,12 +1131,6 @@ fn icon_from_aumid(aumid: &str) -> Option<String> {
             SIIGBF_ICONONLY,
         };
 
-        let id = aumid.trim().trim_start_matches("shell:AppsFolder\\");
-        if id.is_empty() {
-            return None;
-        }
-
-        let parsing_name = format!("shell:AppsFolder\\{}", id);
         let wide: Vec<u16> = parsing_name
             .encode_utf16()
             .chain(std::iter::once(0))
@@ -1493,6 +1499,10 @@ fn image_size_score(path: &std::path::Path) -> u64 {
     score
 }
 
+/// v2: pinned apps use the shell's large shortcut icon; icons cached by the
+/// old lookup are dropped once so they are fetched again.
+const ICON_CACHE_FILE: &str = "icons_cache_v2.json";
+
 static LAST_ICON_SAVE_REQUEST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
 pub fn schedule_icon_cache_save(app: AppHandle) {
@@ -1504,7 +1514,7 @@ pub fn schedule_icon_cache_save(app: AppHandle) {
         let last = LAST_ICON_SAVE_REQUEST.load(Ordering::Relaxed);
         if now == last || crate::utils::get_now_ms() - last >= 950 {
             if let Ok(dir) = app.path().app_config_dir() {
-                let cache_path = dir.join("icons_cache.json");
+                let cache_path = dir.join(ICON_CACHE_FILE);
                 if let Some(c) = crate::state::ICON_CACHE.get() {
                     let snapshot = if let Ok(lock) = c.lock() {
                         serde_json::to_string(&*lock).unwrap_or_default()
@@ -1531,7 +1541,7 @@ pub async fn get_app_icon(
     hwnd: Option<isize>,
 ) -> Result<Option<String>, String> {
     let cache_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    let cache_path = cache_dir.join("icons_cache.json");
+    let cache_path = cache_dir.join(ICON_CACHE_FILE);
     let cache_key = get_cache_key(&path, name.as_deref());
 
     // Strategy 0: Check for custom icon first
@@ -1546,6 +1556,7 @@ pub async fn get_app_icon(
     }
 
     let cache = ICON_CACHE.get_or_init(|| {
+        let _ = std::fs::remove_file(cache_dir.join("icons_cache.json"));
         let mut map = std::collections::HashMap::new();
         if let Ok(content) = std::fs::read_to_string(&cache_path) {
             if let Ok(existing) =
@@ -1710,12 +1721,19 @@ pub async fn get_app_icon(
                 ((path_clone.clone(), String::new()), false)
             };
 
-            // A shortcut can carry its own icon file (Firefox web apps, user edits).
-            let mut icon_data = if is_lnk {
-                get_shortcut_icon_location(&path_clone).and_then(|p| image_file_to_base64(&p))
+            // The shell's own large icon for the pinned item (the shortcut
+            // itself, not its target) before the older fallbacks below.
+            let mut icon_data = if std::path::Path::new(&path_clone).exists() {
+                shell_item_icon(&path_clone)
             } else {
                 None
             };
+
+            // A shortcut can carry its own icon file (Firefox web apps, user edits).
+            if icon_data.is_none() && is_lnk {
+                icon_data =
+                    get_shortcut_icon_location(&path_clone).and_then(|p| image_file_to_base64(&p));
+            }
 
             // Chrome/Edge/Brave installed web apps keep the site icon in the browser profile.
             if icon_data.is_none() {
@@ -1863,7 +1881,7 @@ pub async fn load_pinned_apps(app: AppHandle) -> Vec<AppInfo> {
 #[tauri::command]
 pub async fn clear_icon_cache(app: AppHandle) -> Result<(), String> {
     let cache_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    let cache_path = cache_dir.join("icons_cache.json");
+    let cache_path = cache_dir.join(ICON_CACHE_FILE);
     let _ = std::fs::remove_file(&cache_path);
     if let Some(c) = ICON_CACHE.get() {
         if let Ok(mut lock) = c.lock() {
@@ -2937,6 +2955,7 @@ pub async fn restart_bloom(handle: AppHandle) {
     set_taskbar_visibility(true, true);
     NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
     crate::services::set_native_osd_suppressed(false);
+    crate::notifications::restore_native_toasts();
     close_single_instance_handles();
     handle.restart();
 }
@@ -3005,6 +3024,9 @@ pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Re
     }
     if key.starts_with("bloom-launcher-") {
         crate::launcher::reload_hotkeys();
+    }
+    if key.starts_with("bloom-notify-") {
+        crate::notifications::settings_changed();
     }
     Ok(())
 }
@@ -3796,6 +3818,14 @@ pub fn setup_settings_watcher(app: AppHandle) {
                             .any(|key| key.starts_with("bloom-launcher-"))
                         {
                             crate::launcher::reload_hotkeys();
+                        }
+                        if changed
+                            .iter()
+                            .map(|(key, _)| key)
+                            .chain(removed.iter())
+                            .any(|key| key.starts_with("bloom-notify-"))
+                        {
+                            crate::notifications::settings_changed();
                         }
                         for (key, value) in &changed {
                             let _ = app.emit(

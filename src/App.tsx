@@ -32,6 +32,27 @@ import { ShelfTypeIcon } from "./components/ShelfTypeIcon";
 import { WifiPanel } from "./components/WifiPanel";
 import { BluetoothPanel } from "./components/BluetoothPanel";
 import {
+	Captions as CaptionsGlyph,
+	Cast as CastGlyph,
+	Contrast as ContrastGlyph,
+	Keyboard as KeyboardGlyph,
+	MonitorUp as MonitorUpGlyph,
+	PersonStanding as PersonStandingGlyph,
+	Plane as PlaneGlyph,
+	RadioTower as RadioTowerGlyph,
+	RotateCcwSquare as RotateCcwSquareGlyph,
+	Share2 as Share2Glyph,
+	Shield as ShieldGlyph,
+	SunMoon as SunMoonGlyph
+} from "lucide-react";
+import {
+	CC_KEY,
+	CC_PER_ROW,
+	ccButtonInfo,
+	parseCCButtons,
+	type CCButtonId
+} from "./controlCenter";
+import {
 	Cpu,
 	MemoryStick,
 	HardDrive,
@@ -891,6 +912,17 @@ function App() {
 	const [shelfPersist, setShelfPersist] = useState(
 		() => localStorage.getItem("bloom-shelf-persist") === "true"
 	);
+	// On: scrolling or swiping on the notch also reaches the shelf, which then
+	// shows even when it is empty.
+	const [shelfInScroll, setShelfInScroll] = useState(
+		() => localStorage.getItem("bloom-notch-shelf-in-scroll") !== "false"
+	);
+	// The control center's round buttons, chosen in Settings > Notch.
+	const [ccButtons, setCcButtons] = useState<CCButtonId[]>(() =>
+		parseCCButtons(localStorage.getItem(CC_KEY))
+	);
+	// On/off state of the Windows quick settings among them.
+	const [quickState, setQuickState] = useState<Record<string, boolean | null>>({});
 	const [settingsVisualizerEnabled, setSettingsVisualizerEnabled] = useState(
 		() => localStorage.getItem("bloom-visualizer-enabled") !== "false"
 	);
@@ -943,6 +975,8 @@ function App() {
 				);
 				setDefaultPanel(asNotchPanel(getVal("bloom-notch-default-panel")) ?? "calendar");
 				setShelfPersist(getVal("bloom-shelf-persist", "false") === "true");
+				setShelfInScroll(getVal("bloom-notch-shelf-in-scroll", "true") !== "false");
+				setCcButtons(parseCCButtons(getVal(CC_KEY)));
 				setSettingsMusicCompactNotch(getVal("bloom-music-compact-notch", "true") !== "false");
 				setWidgetsOnHoverOnly(getVal("bloom-notch-widgets-on-hover", "true") !== "false");
 				setLastPanel(asNotchPanel(getVal("bloom-notch-last-panel")));
@@ -1097,6 +1131,8 @@ function App() {
 			"bloom-notch-default-panel": (v: unknown) =>
 				setDefaultPanel(asNotchPanel(v) ?? "calendar"),
 			"bloom-shelf-persist": setShelfPersist,
+			"bloom-notch-shelf-in-scroll": setShelfInScroll,
+			[CC_KEY]: (v: unknown) => setCcButtons(parseCCButtons(v)),
 			"bloom-music-compact-notch": setSettingsMusicCompactNotch,
 			"bloom-notch-widgets-on-hover": setWidgetsOnHoverOnly,
 			"bloom-notch-last-panel": (v: unknown) => setLastPanel(asNotchPanel(v)),
@@ -1455,7 +1491,8 @@ function App() {
 	const removeShelfItem = (id: string) => {
 		const next = shelfItems.filter((i) => i.id !== id);
 		setShelfItems(next);
-		if (next.length === 0 && bloomMode === "shelf") {
+		// Reached from the scroll menu, the open shelf stays up when emptied.
+		if (next.length === 0 && bloomMode === "shelf" && !(shelfInScroll && isOpen)) {
 			// Nothing left to show: an open notch moves to the remembered panel,
 			// a closed one to its resting mode, instead of an empty shelf.
 			clearShelfCollapse();
@@ -1665,10 +1702,20 @@ function App() {
 		if (
 			target.closest(".calendar-grid") ||
 			target.closest(".timer-column") ||
-			target.closest(".shelf-content") ||
 			target.closest(".qp-list")
 		) {
 			return;
+		}
+		// Over the shelf the wheel scrolls its row first; once the row is at its
+		// end (or fits), it moves on through the scroll menu like any panel.
+		if (target.closest(".shelf-content")) {
+			if (!shelfInScroll) return;
+			const row = shelfGridRef.current;
+			const max = row ? row.scrollWidth - row.clientWidth : 0;
+			const step = e.deltaY + e.deltaX;
+			if (row && max > 0 && ((step > 0 && row.scrollLeft < max - 1) || (step < 0 && row.scrollLeft > 1))) {
+				return;
+			}
 		}
 
 		const now = Date.now();
@@ -1686,26 +1733,36 @@ function App() {
 		return true;
 	}
 
+	// What the wheel, swipe and arrows step through: the tool panels, then the
+	// shelf when "Shelf in Scroll Menu" is on.
+	const scrollModes = (): BloomMode[] => [
+		...NOTCH_PANELS.filter(panelAvailable),
+		...(shelfInScroll ? (["shelf"] as const) : [])
+	];
+
 	// Wheel and swipe navigate panels, even from a collapsed live activity.
-	// Music and shelf remain entry points through their activity affordances.
+	// Music remains an entry point through its activity affordance.
 	const cycleBloomMode = (direction: 1 | -1) => {
 		if (bloomMode === "announcement") return false;
-		const panels = NOTCH_PANELS.filter(panelAvailable);
-		const currentIndex = panels.indexOf(bloomMode as NotchPanel);
+		const modes = scrollModes();
+		const currentIndex = modes.indexOf(bloomMode);
 		const nextMode = currentIndex === -1
 			? openingPanel()
-			: panels[(currentIndex + direction + panels.length) % panels.length];
+			: modes[(currentIndex + direction + modes.length) % modes.length];
+		if (nextMode === "shelf") clearShelfCollapse();
 		setIsOpen(true);
 		setBloomMode(nextMode);
 		return true;
 	};
 
-	// Arrows and wheel both stay within panels once one is open.
+	// Arrows and wheel both stay within the scroll menu once it is open.
 	const cyclePanel = (direction: 1 | -1) => {
-		const panels = NOTCH_PANELS.filter(panelAvailable);
-		const index = panels.indexOf(bloomMode as NotchPanel);
-		if (index === -1 || panels.length < 2) return;
-		setBloomMode(panels[(index + direction + panels.length) % panels.length]);
+		const modes = scrollModes();
+		const index = modes.indexOf(bloomMode);
+		if (index === -1 || modes.length < 2) return;
+		const nextMode = modes[(index + direction + modes.length) % modes.length];
+		if (nextMode === "shelf") clearShelfCollapse();
+		setBloomMode(nextMode);
 	};
 
 	// Timer state
@@ -2546,7 +2603,13 @@ function App() {
 			if (shelfItems.length === 0) return 130;
 			return shelfOverflowing ? 190 : 176;
 		}
-		if (bloomMode === "command-center") return isOpen ? 230 : 36;
+		if (bloomMode === "command-center") {
+			if (!isOpen) return 36;
+			// One row of round buttons is part of the base height; each extra row
+			// adds a button and the gap above it, and an empty row gives its room back.
+			const rows = Math.ceil(ccButtons.length / CC_PER_ROW);
+			return 230 + (rows === 0 ? -42 : (rows - 1) * 42);
+		}
 		if (bloomMode === "wifi" || bloomMode === "bluetooth") return 300;
 		if (bloomMode === "status") return 36;
 		if (isMusicMode && isOpen) {
@@ -2564,7 +2627,7 @@ function App() {
 	// Arrows switch between the two tool panels; wheel/swipe can also open one
 	// directly from the collapsed pill or a live activity.
 	const showPanelArrows =
-		isOpen && asNotchPanel(bloomMode) !== null && NOTCH_PANELS.filter(panelAvailable).length > 1;
+		isOpen && scrollModes().includes(bloomMode) && scrollModes().length > 1;
 
 	// Close compact media player expansions when notch is unhovered or mode changes
 	useEffect(() => {
@@ -2572,6 +2635,168 @@ function App() {
 			setCompactVolumeExpanded(false);
 		}
 	}, [isHovered, mediaLayout, bloomMode]);
+
+	const ccOpen = bloomMode === "command-center" && isOpen;
+	const ccToggleIds = ccButtons.filter((id) => ccButtonInfo(id).toggle);
+	const ccToggleKey = ccToggleIds.join(",");
+
+	const refreshQuickState = useCallback(() => {
+		if (!ccToggleKey) return;
+		invoke<Record<string, boolean | null>>("quick_settings_state", { ids: ccToggleKey.split(",") })
+			.then((state) =>
+				setQuickState({
+					"night-light": state.night_light ?? null,
+					airplane: state.airplane ?? null,
+					hotspot: state.hotspot ?? null,
+					"rotation-lock": state.rotation_lock ?? null,
+					"live-captions": state.live_captions ?? null
+				})
+			)
+			.catch(console.error);
+	}, [ccToggleKey]);
+
+	// Windows can change these on its own, so poll while the panel is open.
+	useEffect(() => {
+		if (!ccOpen || !ccToggleKey) return;
+		refreshQuickState();
+		const timer = window.setInterval(refreshQuickState, 2000);
+		return () => window.clearInterval(timer);
+	}, [ccOpen, ccToggleKey, refreshQuickState]);
+
+	const runQuickSetting = (id: CCButtonId) => {
+		invoke("quick_setting_action", { id })
+			.catch(console.error)
+			.finally(() => {
+				window.setTimeout(refreshQuickState, 300);
+				window.setTimeout(refreshQuickState, 1500);
+			});
+	};
+
+	const QUICK_GLYPHS: Partial<Record<CCButtonId, typeof SunMoonGlyph>> = {
+		"night-light": SunMoonGlyph,
+		airplane: PlaneGlyph,
+		hotspot: RadioTowerGlyph,
+		"rotation-lock": RotateCcwSquareGlyph,
+		"live-captions": CaptionsGlyph,
+		project: MonitorUpGlyph,
+		cast: CastGlyph,
+		"keyboard-layout": KeyboardGlyph,
+		accessibility: PersonStandingGlyph,
+		"nearby-sharing": Share2Glyph,
+		vpn: ShieldGlyph,
+		"color-filters": ContrastGlyph
+	};
+
+	const renderCCButton = (id: CCButtonId) => {
+		switch (id) {
+			case "dnd":
+				return (
+					<button
+						key={id}
+						className={`cc-circular-btn ${dndActive ? "active" : ""}`}
+						onClick={(e) => {
+							e.stopPropagation();
+							setDndActive((prev) => !prev);
+						}}
+						title={`Focus / DND: ${dndActive ? "On" : "Off"}`}
+					>
+						<MoonIcon />
+					</button>
+				);
+			case "energy-saver":
+				return (
+					<button
+						key={id}
+						className={`cc-circular-btn ${batterySaverEnabled ? "active" : ""}`}
+						onClick={(e) => {
+							e.stopPropagation();
+							openBatterySaverSettings();
+						}}
+						title={`Energy Saver: ${batterySaverEnabled ? "On" : "Off"} — Click to open Settings`}
+					>
+						<BatterySaverIcon />
+					</button>
+				);
+			case "tray":
+				return (
+					<button
+						key={id}
+						className="cc-circular-btn"
+						onClick={(e) => {
+							e.stopPropagation();
+							openSystemTray(e);
+						}}
+						title="System Tray"
+					>
+						<TrayIcon />
+					</button>
+				);
+			case "notifications":
+				return (
+					<button
+						key={id}
+						className="cc-circular-btn"
+						onClick={(e) => {
+							e.stopPropagation();
+							invoke("open_notification_center");
+						}}
+						title="Notification Center"
+					>
+						<BellIcon />
+					</button>
+				);
+			case "bloom-settings":
+				return (
+					<button
+						key={id}
+						className="cc-circular-btn"
+						onClick={(e) => {
+							e.stopPropagation();
+							openSettingsWindow();
+						}}
+						title="Bloom Settings"
+					>
+						<SettingsIcon />
+					</button>
+				);
+			case "restart-bloom":
+				return (
+					<button
+						key={id}
+						className="cc-circular-btn"
+						onClick={(e) => {
+							e.stopPropagation();
+							invoke("restart_bloom");
+						}}
+						title="Restart Bloom"
+					>
+						<ReloadIcon />
+					</button>
+				);
+			default: {
+				const info = ccButtonInfo(id);
+				const Glyph = QUICK_GLYPHS[id] ?? SunMoonGlyph;
+				const state = info.toggle ? quickState[id] : undefined;
+				return (
+					<button
+						key={id}
+						className={`cc-circular-btn ${state ? "active" : ""}`}
+						onClick={(e) => {
+							e.stopPropagation();
+							runQuickSetting(id);
+						}}
+						title={
+							info.toggle && state !== undefined && state !== null
+								? `${info.label}: ${state ? "On" : "Off"}`
+								: info.label
+						}
+					>
+						<Glyph size={18} strokeWidth={2.5} />
+					</button>
+				);
+			}
+		}
+	};
 
 	return (
 		<div className="screen" style={{ overflow: "hidden" }}>
@@ -3403,69 +3628,17 @@ function App() {
 												</div>
 											</div>
 
-											{/* Circular Actions Row */}
-											<div className="cc-circular-actions-row">
-												<button
-													className={`cc-circular-btn ${dndActive ? "active" : ""}`}
-													onClick={(e) => {
-														e.stopPropagation();
-														setDndActive((prev) => !prev);
+											{/* Circular Actions Row: the buttons chosen in Settings > Notch */}
+											{ccButtons.length > 0 && (
+												<div
+													className="cc-circular-actions-row cc-circular-actions-grid"
+													style={{
+														gridTemplateColumns: `repeat(${Math.min(ccButtons.length, CC_PER_ROW)}, 32px)`
 													}}
-													title={`Focus / DND: ${dndActive ? "On" : "Off"}`}
 												>
-													<MoonIcon />
-												</button>
-												<button
-													className={`cc-circular-btn ${batterySaverEnabled ? "active" : ""}`}
-													onClick={(e) => {
-														e.stopPropagation();
-														openBatterySaverSettings();
-													}}
-													title={`Energy Saver: ${batterySaverEnabled ? "On" : "Off"} — Click to open Settings`}
-												>
-													<BatterySaverIcon />
-												</button>
-												<button
-													className="cc-circular-btn"
-													onClick={(e) => {
-														e.stopPropagation();
-														openSystemTray(e);
-													}}
-													title="System Tray"
-												>
-													<TrayIcon />
-												</button>
-												<button
-													className="cc-circular-btn"
-													onClick={(e) => {
-														e.stopPropagation();
-														invoke("open_notification_center");
-													}}
-													title="Notification Center"
-												>
-													<BellIcon />
-												</button>
-												<button
-													className="cc-circular-btn"
-													onClick={(e) => {
-														e.stopPropagation();
-														openSettingsWindow();
-													}}
-													title="Bloom Settings"
-												>
-													<SettingsIcon />
-												</button>
-												<button
-													className="cc-circular-btn"
-													onClick={(e) => {
-														e.stopPropagation();
-														invoke("restart_bloom");
-													}}
-													title="Restart Bloom"
-												>
-													<ReloadIcon />
-												</button>
-											</div>
+													{ccButtons.map(renderCCButton)}
+												</div>
+											)}
 
 											{/* Classic Sliders Area */}
 											<div className="cc-classic-sliders-area">

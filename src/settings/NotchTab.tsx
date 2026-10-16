@@ -11,9 +11,12 @@ import {
 	Timer,
 	Archive,
 	MousePointer2,
+	MoveHorizontal,
 	X
 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
+import { useStoredFlag } from "./useStoredSetting";
+import { ControlCenterSettings } from "./ControlCenterSettings";
 import { StatusWidgetConfig } from "../components/StatusWidgetConfig";
 import type { WidgetConfig } from "./types";
 
@@ -105,6 +108,7 @@ export function NotchTab({
 	statusWidgets,
 	handleWidgetsChange
 }: NotchTabProps) {
+	const [shelfInScroll, setShelfInScroll] = useStoredFlag("bloom-notch-shelf-in-scroll", true);
 	return (
 		<>
 			<div className="setting-group-label">Notch</div>
@@ -273,6 +277,24 @@ export function NotchTab({
 			<div className="setting-group-label">Shelf</div>
 			<div className="setting-group">
 				<SettingRow
+					icon={MoveHorizontal}
+					label="Shelf in Scroll Menu"
+					desc={
+						shelfInScroll
+							? "Scroll or swipe on the notch to reach the shelf, even when it's empty"
+							: "The shelf only opens when files are dropped on it"
+					}
+				>
+					<label className="toggle-switch">
+						<input
+							type="checkbox"
+							checked={shelfInScroll}
+							onChange={() => setShelfInScroll(!shelfInScroll)}
+						/>
+						<span className="slider"></span>
+					</label>
+				</SettingRow>
+				<SettingRow
 					icon={Archive}
 					label="Keep Items"
 					desc="Keep shelf items after Bloom closes"
@@ -380,6 +402,8 @@ export function NotchTab({
 				</SettingRow>
 				<StatusWidgetConfig value={statusWidgets} onChange={handleWidgetsChange} />
 			</div>
+
+			<ControlCenterSettings />
 		</>
 	);
 }

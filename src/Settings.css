@@ -1281,3 +1281,22 @@ input:checked + .slider:before {
 .light-mode .sb-editor {
 	background: rgba(0, 0, 0, 0.02);
 }
+
+/* Control Center buttons (Settings > Notch) */
+
+.cc-edit-buttons {
+	display: flex;
+	gap: 4px;
+}
+
+.cc-edit-buttons .extra-folder-remove:disabled {
+	opacity: 0.3;
+	cursor: default;
+}
+
+.cc-add-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding-left: 40px;
+}

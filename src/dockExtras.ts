@@ -5,6 +5,18 @@ export interface DockExtra {
 	path: string;
 	icon: string | null;
 	removable: boolean;
+	/** Icon for a light dock, when it differs (the Tray Bin icon sets). */
+	icon_light?: string;
+	/** Second tooltip line, e.g. the Recycle Bin's size. */
+	detail?: string;
+	/** Small pixel-art icon: scale it without smoothing. */
+	pixelated?: boolean;
+}
+
+export type BinDoubleClick = "open" | "empty";
+
+export function binDoubleClickAction(): BinDoubleClick {
+	return localStorage.getItem("bloom-dock-bin-double-click") === "empty" ? "empty" : "open";
 }
 
 export interface CustomFolder {

@@ -30,7 +30,7 @@ const KNOWN_FOLDERS: &[(&str, &str, GUID)] = &[
     ("videos", "Videos", FOLDERID_Videos),
 ];
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Default)]
 pub struct DockExtra {
     pub id: String,
     pub kind: String,
@@ -38,6 +38,14 @@ pub struct DockExtra {
     pub path: String,
     pub icon: Option<String>,
     pub removable: bool,
+    /// Icon for a light dock, when it differs (the Tray Bin icon sets).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_light: Option<String>,
+    /// Second tooltip line, e.g. the Recycle Bin's size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Small pixel-art icon: scale it without smoothing.
+    pub pixelated: bool,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
@@ -239,6 +247,7 @@ fn list_drives() -> Vec<DockExtra> {
             path: root.clone(),
             icon: icon_for_path(&root),
             removable: drive_type == DRIVE_REMOVABLE || drive_type == DRIVE_CDROM,
+            ..Default::default()
         });
     }
     drives
@@ -265,6 +274,7 @@ fn list_known_folders(enabled: &[String]) -> Vec<DockExtra> {
                 icon: icon_for_path(&path),
                 path,
                 removable: false,
+                ..Default::default()
             })
         })
         .collect()
@@ -289,6 +299,7 @@ fn list_custom_folders(raw: &str) -> Vec<DockExtra> {
             icon: icon_for_path(&folder.path),
             path: folder.path,
             removable: false,
+            ..Default::default()
         })
         .collect()
 }
@@ -300,49 +311,48 @@ fn parse_enabled_folders(raw: &str) -> Vec<String> {
         .collect()
 }
 
-struct RecycleBinState {
-    full: bool,
-    checked_ms: i64,
-}
-
-static RECYCLE_BIN_STATE: OnceLock<Mutex<RecycleBinState>> = OnceLock::new();
-
-/// Whether the bin holds anything, refreshed at most once a minute: the query
-/// scans every volume and the dock polls every few seconds.
-fn recycle_bin_full() -> bool {
-    use windows::Win32::UI::Shell::{SHQueryRecycleBinW, SHQUERYRBINFO};
-    let state = RECYCLE_BIN_STATE.get_or_init(|| {
-        Mutex::new(RecycleBinState {
-            full: false,
-            checked_ms: 0,
-        })
-    });
-    if let Ok(guard) = state.lock() {
-        if crate::utils::get_now_ms() - guard.checked_ms < 60_000 {
-            return guard.full;
-        }
-    }
-    let mut info = SHQUERYRBINFO::default();
-    info.cbSize = std::mem::size_of::<SHQUERYRBINFO>() as u32;
-    let full =
-        unsafe { SHQueryRecycleBinW(PCWSTR::null(), &mut info) }.is_ok() && info.i64NumItems > 0;
-    if let Ok(mut guard) = state.lock() {
-        guard.full = full;
-        guard.checked_ms = crate::utils::get_now_ms();
-    }
-    full
-}
-
-fn recycle_bin_extra() -> DockExtra {
-    let full = recycle_bin_full();
+/// The bin with Tray Bin's fill-level icon (or the Windows icon when those
+/// are turned off or missing) and its size for the tooltip.
+fn recycle_bin_extra(app: &AppHandle) -> DockExtra {
+    let state = crate::recycle_bin::query();
+    let traybin = if crate::recycle_bin::uses_traybin_icons(app) {
+        let level = crate::recycle_bin::level(state, crate::recycle_bin::only_empty_full(app));
+        crate::recycle_bin::traybin_icons(app, level)
+    } else {
+        None
+    };
+    let pixelated = traybin.is_some();
+    let (icon, icon_light) = match traybin {
+        Some((dark, light)) => (Some(dark), Some(light)),
+        None => (recycle_bin_icon(state.items > 0), None),
+    };
     DockExtra {
         id: "recycle-bin".into(),
         kind: "recycle-bin".into(),
         name: "Recycle Bin".into(),
         path: "shell:RecycleBinFolder".into(),
-        icon: recycle_bin_icon(full),
+        icon,
         removable: false,
+        icon_light,
+        detail: Some(crate::recycle_bin::detail(state)),
+        pixelated,
     }
+}
+
+/// Just the bin, for redrawing it when its contents change.
+#[tauri::command]
+pub async fn get_recycle_bin_extra(app: AppHandle) -> Option<DockExtra> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+        let com_initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
+        let extra = recycle_bin_extra(&app);
+        if com_initialized {
+            unsafe { CoUninitialize() };
+        }
+        extra
+    })
+    .await
+    .ok()
 }
 
 #[tauri::command]
@@ -363,6 +373,10 @@ pub async fn get_dock_extras(app: AppHandle) -> Vec<DockExtra> {
     let custom =
         get_setting_str(&app, "bloom-dock-extras-custom-folders").unwrap_or_else(|| "[]".into());
 
+    if bin_enabled {
+        crate::recycle_bin::ensure_watcher(&app);
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
         use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
         // WIC (used to encode the extracted icons) needs a COM apartment on
@@ -376,7 +390,7 @@ pub async fn get_dock_extras(app: AppHandle) -> Vec<DockExtra> {
         extras.extend(list_known_folders(&parse_enabled_folders(&folders)));
         extras.extend(list_custom_folders(&custom));
         if bin_enabled {
-            extras.push(recycle_bin_extra());
+            extras.push(recycle_bin_extra(&app));
         }
 
         if com_initialized {

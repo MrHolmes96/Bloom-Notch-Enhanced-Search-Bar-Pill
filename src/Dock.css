@@ -812,3 +812,31 @@ body {
 	background: #888;
 	box-shadow: none;
 }
+
+/* Recycle Bin: Tray Bin's 16 px pixel-art icons, white on a dark dock and
+   black on a light one, scaled 2x without smoothing. */
+.dock-icon img.pixelated {
+	width: 32px;
+	height: 32px;
+	image-rendering: pixelated;
+}
+
+.dock-icon img.extra-icon-light-bg,
+.light-mode .dock-icon img.extra-icon-dark-bg {
+	display: none;
+}
+
+.light-mode .dock-icon img.extra-icon-light-bg {
+	display: block;
+}
+
+.tooltip.tooltip-two-line {
+	top: -50px;
+	text-align: center;
+}
+
+.tooltip-detail {
+	display: block;
+	font-size: 11px;
+	opacity: 0.75;
+}

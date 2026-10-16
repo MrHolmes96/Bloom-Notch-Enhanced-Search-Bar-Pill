@@ -19,6 +19,7 @@ import {
 	X
 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
+import { RecycleBinSettings } from "./RecycleBinSettings";
 import { KNOWN_FOLDER_OPTIONS, parseEnabledFolders, parseCustomFolders } from "../dockExtras";
 
 const START_ICON_PRESETS = [
@@ -275,6 +276,8 @@ export function DockTab({
 										<span className="slider"></span>
 									</label>
 								</SettingRow>
+
+								{dockExtrasRecycleBin && <RecycleBinSettings />}
 
 								<div
 									className="setting-item"

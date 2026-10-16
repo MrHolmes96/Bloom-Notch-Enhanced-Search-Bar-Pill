@@ -5,6 +5,9 @@ mod commands;
 mod dock_extras;
 mod jumplist;
 mod launcher;
+mod notifications;
+mod quick_settings;
+mod recycle_bin;
 mod services;
 mod shelf;
 mod shelf_preview;
@@ -31,6 +34,7 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
         set_taskbar_visibility(true, true);
         NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
         set_native_osd_suppressed(false);
+        notifications::restore_native_toasts();
     }
     BOOL(0)
 }
@@ -228,6 +232,16 @@ fn main() {
             dock_extras::get_dock_extras,
             dock_extras::open_dock_extra,
             dock_extras::eject_dock_extra,
+            dock_extras::get_recycle_bin_extra,
+            recycle_bin::empty_recycle_bin,
+            quick_settings::quick_settings_state,
+            quick_settings::quick_setting_action,
+            notifications::notifications_status,
+            notifications::notification_activate,
+            notifications::notifications_set_size,
+            notifications::notifications_test,
+            notifications::notifications_open_privacy,
+            recycle_bin::recycle_bin_icons_available,
             wifi::wifi_list_networks,
             wifi::wifi_scan,
             wifi::wifi_connect,
@@ -379,6 +393,7 @@ fn main() {
             let _ = COMMAND_SENDER.set(tx.clone());
             services::setup_keyboard_hook(app.handle().clone());
             launcher::start_hotkey_listener(app.handle().clone());
+            notifications::start(app.handle().clone());
             setup_taskbar_hook();
             setup_audio_visualization(app.handle().clone());
             setup_settings_watcher(app.handle().clone());
@@ -459,6 +474,7 @@ fn main() {
                             set_taskbar_visibility(true, true);
                             NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
                             set_native_osd_suppressed(false);
+                            notifications::restore_native_toasts();
                             close_single_instance_handles();
 
                             ah.restart();
@@ -489,6 +505,7 @@ fn main() {
             set_taskbar_visibility(true, true);
             NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
             set_native_osd_suppressed(false);
+            notifications::restore_native_toasts();
         }
     });
 }

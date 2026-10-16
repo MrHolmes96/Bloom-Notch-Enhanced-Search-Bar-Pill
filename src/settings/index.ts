@@ -6,5 +6,6 @@ export { NotchTab } from "./NotchTab";
 export { DockTab } from "./DockTab";
 export { OverlaysTab } from "./OverlaysTab";
 export { SearchBarTab } from "./SearchBarTab";
+export { NotificationsTab } from "./NotificationsTab";
 export { AboutTab } from "./AboutTab";
 export type { WidgetConfig, SettingsTab, SettingRowProps } from "./types";

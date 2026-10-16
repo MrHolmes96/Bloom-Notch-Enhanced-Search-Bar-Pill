@@ -33,6 +33,12 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-dock-extras-position`       | `"off"` / `"left"` / `"right"`   | `"off"`       | Show a dock extras section with drives, folders and the Recycle Bin beside the app icons, on the left or right side of the dock.                                                 |
 | `bloom-dock-extras-drives`         | `"true"` / `"false"`             | `"true"`      | Show fixed, removable (with media) and connected mapped network drives in the dock extras. Empty card readers and unloaded discs are hidden.                                     |
 | `bloom-dock-extras-recycle-bin`    | `"true"` / `"false"`             | `"true"`      | Show the Recycle Bin in the dock extras. The icon reflects whether the bin holds anything.                                                                                       |
+| `bloom-dock-bin-icons` | `"traybin"` / `"windows"` | `"traybin"` | Recycle Bin icons: Tray Bin's fill-level icons (copied once from an installed Tray Bin into `recycle-bin-icons`) or the Windows ones. Falls back to the Windows icons when Tray Bin's are not available. |
+| `bloom-dock-bin-only-empty-full` | `"true"` / `"false"` | `"false"` | Use only the empty and full Tray Bin icons instead of the 100 MB / 500 MB / 2 GB steps. |
+| `bloom-dock-bin-double-click` | `"open"` / `"empty"` | `"open"` | What a double click on the Recycle Bin does. With `"empty"`, a single click still opens it. |
+| `bloom-dock-bin-confirm` | `"true"` / `"false"` | `"true"` | Ask before emptying the Recycle Bin. |
+| `bloom-dock-bin-sound` | `"true"` / `"false"` | `"true"` | Play the Windows sound when emptying. |
+| `bloom-dock-bin-progress` | `"true"` / `"false"` | `"true"` | Show the progress window while emptying. |
 | `bloom-dock-extras-folders`        | comma-separated ids              | `"downloads"` | Known folders in the dock extras: any of `desktop`, `downloads`, `documents`, `pictures`, `music`, `videos`, or `"none"` for no folders.                                         |
 | `bloom-dock-extras-custom-folders` | JSON array                       | `"[]"`        | User-added folders, e.g. `[{"name":"Projects","path":"D:\\Projects"}]`. Folders that no longer exist are skipped until they return.                                              |
 
@@ -43,6 +49,8 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-notch-mode`       | `"fixed"` / `"smart"` / `"peek"` | `"fixed"` | Notch (top bar) visibility behavior. Same modes as dock. **peek** shows the notch briefly on media events and notifications.   |
 | `bloom-notch-edge-delay` | milliseconds `"0"`–`"2000"`      | `"200"`   | In smart/peek mode, how long the cursor must rest against the top screen edge before the notch peeks. `"0"` reveals instantly. |
 | `bloom-notch-widgets-on-hover` | `"true"` / `"false"`  | `"true"`  | Only show the status widgets (battery, weather, ...) while the notch is hovered. `"false"` shows them whenever the notch is visible, including when a hidden notch is revealed from the top edge. |
+| `bloom-notch-shelf-in-scroll` | `"true"` / `"false"` | `"true"` | Scrolling or swiping on the notch also reaches the shelf, shown even when it is empty. |
+| `bloom-control-center-buttons` | comma-separated ids, or `"none"` | `"dnd,energy-saver,tray,notifications,bloom-settings,restart-bloom"` | The control center's round buttons, in order. Also: `night-light`, `airplane`, `hotspot`, `rotation-lock`, `live-captions`, `project`, `cast`, `keyboard-layout`, `accessibility`, `nearby-sharing`, `vpn`, `color-filters`. |
 
 ### Weather
 
@@ -92,6 +100,15 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-volume-edge-enabled`        | `"true"` / `"false"` | `"true"` | Trigger volume HUD by hovering the left screen edge.                     |
 | `bloom-brightness-overlay-enabled` | `"true"` / `"false"` | `"true"` | Show Bloom brightness HUD when brightness changes.                       |
 | `bloom-brightness-edge-enabled`    | `"true"` / `"false"` | `"true"` | Trigger brightness HUD by hovering the right screen edge.                |
+
+### Notifications
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `bloom-notify-style` | `"windows"` / `"bloom"` | `"windows"` | Windows' own pop-ups, or Bloom cards in Bloom's colors and opacity (Windows' pop-up is then hidden). |
+| `bloom-notify-position` | `"default"` / `"top-right"` / `"top-left"` / `"bottom-right"` / `"bottom-left"` | `"default"` | Corner notifications come from, in either style. |
+| `bloom-notify-radius` | number (px) | `"16"` | Corner rounding of Bloom cards. |
+| `bloom-notify-duration` | number (seconds) | `"6"` | How long a Bloom card stays. |
 
 ### Search Bar Pill
 

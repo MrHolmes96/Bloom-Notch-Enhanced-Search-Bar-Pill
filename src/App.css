@@ -2361,3 +2361,11 @@ img {
 	font-size: 11px;
 	opacity: 0.6;
 }
+
+/* Control center buttons chosen in Settings > Notch: rows of up to six,
+   spread like the original single row. */
+.cc-circular-actions-row.cc-circular-actions-grid {
+	display: grid;
+	justify-content: space-between;
+	row-gap: 10px;
+}
