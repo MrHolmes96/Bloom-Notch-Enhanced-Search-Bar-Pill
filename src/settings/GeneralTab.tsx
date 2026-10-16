@@ -1,5 +1,18 @@
-import { Power, Download, Clock, BatteryWarning, RefreshCw, RotateCcw, LogOut } from "lucide-react";
+import {
+	Power,
+	Download,
+	Clock,
+	BatteryWarning,
+	RefreshCw,
+	RotateCcw,
+	LogOut,
+	AppWindow,
+	Eraser
+} from "lucide-react";
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { SettingRow } from "./SettingRow";
+import { useStoredFlag } from "./useStoredSetting";
 
 interface GeneralTabProps {
 	autostart: boolean;
@@ -28,6 +41,8 @@ export function GeneralTab({
 	resetToDefaults,
 	quitBloom
 }: GeneralTabProps) {
+	const [windowMemory, setWindowMemory] = useStoredFlag("bloom-window-memory", true);
+	const [forgotten, setForgotten] = useState(false);
 	return (
 		<>
 			<div className="setting-group-label">System</div>
@@ -73,6 +88,39 @@ export function GeneralTab({
 						className="settings-slider"
 					/>
 				</SettingRow>
+			</div>
+
+			<div className="setting-group-label">Windows</div>
+			<div className="setting-group">
+				<SettingRow
+					icon={AppWindow}
+					label="Remember Window Sizes"
+					desc="Apps open at the size and place you last left them"
+					divider={windowMemory}
+				>
+					<label className="toggle-switch">
+						<input
+							type="checkbox"
+							checked={windowMemory}
+							onChange={() => setWindowMemory(!windowMemory)}
+						/>
+						<span className="slider"></span>
+					</label>
+				</SettingRow>
+				{windowMemory && (
+					<SettingRow
+						icon={Eraser}
+						label="Forget Saved Sizes"
+						desc={forgotten ? "Forgotten" : "Let every app choose its own size again"}
+						action
+						divider={false}
+						onClick={() => {
+							void invoke("forget_window_sizes");
+							setForgotten(true);
+							setTimeout(() => setForgotten(false), 2500);
+						}}
+					/>
+				)}
 			</div>
 
 			<div className="setting-group-label">App</div>

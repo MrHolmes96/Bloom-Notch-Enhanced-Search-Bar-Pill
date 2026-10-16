@@ -31,6 +31,7 @@ import { EdgeSurface } from "./components/EdgeSurface";
 import { ShelfTypeIcon } from "./components/ShelfTypeIcon";
 import { WifiPanel } from "./components/WifiPanel";
 import { BluetoothPanel } from "./components/BluetoothPanel";
+import { TrayPanel, trayPanelHeight } from "./components/TrayPanel";
 import {
 	NOTES_KEY,
 	NotesPanel,
@@ -458,6 +459,7 @@ type BloomMode =
 	| "status"
 	| "shelf"
 	| "notes"
+	| "tray"
 	| "wifi"
 	| "bluetooth";
 
@@ -925,6 +927,8 @@ function App() {
 	const [shelfInScroll, setShelfInScroll] = useState(
 		() => localStorage.getItem("bloom-notch-shelf-in-scroll") !== "false"
 	);
+	// How many tray icons the notch's tray view shows (for its height).
+	const [trayCount, setTrayCount] = useState(5);
 	// Quick notes and to-dos, reached through the scroll menu.
 	const [notes, setNotes] = useState<NoteItem[]>(() => parseNotes(localStorage.getItem(NOTES_KEY)));
 	const [notesInScroll, setNotesInScroll] = useState(
@@ -1488,6 +1492,7 @@ function App() {
 			prev === "status" ||
 			prev === "shelf" ||
 			prev === "notes" ||
+			prev === "tray" ||
 			prev === "wifi" ||
 			prev === "bluetooth"
 				? restingModeRef.current
@@ -2431,15 +2436,6 @@ function App() {
 	);
 
 	// Open system tray (unhide taskbar and invoke Win+B)
-	const openSystemTray = useCallback(async (e: React.MouseEvent) => {
-		e.stopPropagation();
-		try {
-			await invoke("open_system_tray");
-		} catch (e) {
-			console.error("Failed to open system tray:", e);
-		}
-	}, []);
-
 	const openSettingsWindow = useCallback(async () => {
 		try {
 			await invoke("open_settings_window");
@@ -2600,7 +2596,7 @@ function App() {
 		if (isCalendarMode) return 480;
 		if (bloomMode === "shelf" || bloomMode === "notes") return 380;
 		if (bloomMode === "command-center" && isOpen) return 350;
-		if (bloomMode === "wifi" || bloomMode === "bluetooth") return 350;
+		if (bloomMode === "wifi" || bloomMode === "bluetooth" || bloomMode === "tray") return 350;
 		if (showMusicOnStatusHover) {
 			return 170 + (settingsVisualizerEnabled ? 30 : 0);
 		}
@@ -2646,6 +2642,7 @@ function App() {
 			return 230 + (rows === 0 ? -42 : (rows - 1) * 42);
 		}
 		if (bloomMode === "wifi" || bloomMode === "bluetooth") return 300;
+		if (bloomMode === "tray") return 36 + trayPanelHeight(trayCount);
 		if (bloomMode === "status") return 36;
 		if (isMusicMode && isOpen) {
 			const hasProgressBar = (mediaInfo.duration_ms ?? 0) > 0;
@@ -2759,7 +2756,9 @@ function App() {
 						className="cc-circular-btn"
 						onClick={(e) => {
 							e.stopPropagation();
-							openSystemTray(e);
+							// The tray opens inside the notch; Windows' own tray is one
+							// click away from there.
+							setBloomMode("tray");
 						}}
 						title="System Tray"
 					>
@@ -3506,6 +3505,24 @@ function App() {
 												onToggle={toggleWifi}
 												onBack={() => setBloomMode("command-center")}
 												onPinChange={setNotchPinned}
+											/>
+										</motion.div>
+									)}
+								</AnimatePresence>
+
+								{/* System tray, opened from the controls panel's tray button */}
+								<AnimatePresence>
+									{bloomMode === "tray" && (
+										<motion.div
+											key="tray-view"
+											initial={{ opacity: 0 }}
+											animate={{ opacity: 1 }}
+											exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.1 } }}
+											transition={{ type: "spring", stiffness: 400, damping: 30 }}
+										>
+											<TrayPanel
+												onBack={() => setBloomMode("command-center")}
+												onCountChange={setTrayCount}
 											/>
 										</motion.div>
 									)}

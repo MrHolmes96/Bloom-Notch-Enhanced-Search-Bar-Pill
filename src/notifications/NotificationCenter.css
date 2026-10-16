@@ -1,0 +1,80 @@
+/* Bloom's notification center: one Bloom surface down the right side. */
+.center-panel {
+	box-sizing: border-box;
+	height: 100vh;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 14px;
+	border-radius: calc(var(--notify-radius, 16px) + 4px);
+	background: var(--bloom-bg-expanded, rgba(0, 0, 0, 0.92));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
+	color: var(--bloom-text, #fff);
+	overflow: hidden;
+}
+
+.center-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0 4px;
+	flex: none;
+}
+
+.center-title {
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.center-clear,
+.center-actions button {
+	padding: 4px 12px;
+	border: none;
+	border-radius: 999px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.08));
+	color: var(--bloom-text, #fff);
+	font-family: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+
+.center-clear:hover,
+.center-actions button:hover {
+	background: var(--bloom-border, rgba(255, 255, 255, 0.15));
+}
+
+.center-list {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bloom-scrollbar-thumb, rgba(255, 255, 255, 0.15)) transparent;
+}
+
+/* Inside the panel the cards sit on the same surface, so they use the
+   lighter group color instead of a second dark background. */
+.center-card {
+	width: 100%;
+	flex: none;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.06));
+	box-shadow: none;
+}
+
+.center-empty {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	text-align: center;
+	font-size: 13px;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.6));
+}
+
+.center-actions {
+	display: flex;
+	gap: 8px;
+}

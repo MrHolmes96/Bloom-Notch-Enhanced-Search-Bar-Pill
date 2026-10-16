@@ -32,7 +32,7 @@ body {
 	height: 52px;
 	padding: 0 22px;
 	border-radius: 999px;
-	background: var(--bloom-bg, rgba(0, 0, 0, 0.92));
+	background: var(--launcher-bg, var(--bloom-bg, rgba(0, 0, 0, 0.92)));
 	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
 	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 	backdrop-filter: blur(20px);
@@ -96,7 +96,7 @@ body {
 	flex-direction: column;
 	padding: 6px;
 	border-radius: 22px;
-	background: var(--bloom-bg-expanded, rgba(0, 0, 0, 0.92));
+	background: var(--launcher-bg-expanded, var(--bloom-bg-expanded, rgba(0, 0, 0, 0.92)));
 	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
 	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
 	backdrop-filter: blur(20px);
@@ -197,7 +197,7 @@ body {
 	box-sizing: border-box;
 	padding: 16px;
 	border-radius: 22px;
-	background: var(--bloom-bg-expanded, rgba(0, 0, 0, 0.92));
+	background: var(--launcher-bg-expanded, var(--bloom-bg-expanded, rgba(0, 0, 0, 0.92)));
 	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
 	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
 	color: var(--bloom-text, #fff);

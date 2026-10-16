@@ -869,6 +869,106 @@ unsafe fn window_hidden_away(hwnd: HWND) -> bool {
     rect.right <= left || rect.left >= right || rect.bottom <= top || rect.top >= bottom
 }
 
+/// "End task" from the dock's menu, like the one Windows' developer settings
+/// add to the taskbar: ends the app's processes at once. For an ordinary app
+/// that is every process of its program; for an app hosted by a browser
+/// (a web app) only the processes behind its own windows. Returns how many
+/// were ended.
+#[tauri::command]
+pub async fn end_task(path: String, hwnds: Vec<isize>) -> Result<u32, String> {
+    tauri::async_runtime::spawn_blocking(move || unsafe {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        };
+        use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+        use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+
+        let own = std::process::id();
+        let mut pids: Vec<u32> = Vec::new();
+        for hwnd in &hwnds {
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(HWND(*hwnd as *mut _), Some(&mut pid));
+            if pid > 4 {
+                pids.push(pid);
+            }
+        }
+
+        let target = if path.contains('\\') || path.contains('/') {
+            path.to_lowercase()
+        } else {
+            pids.first()
+                .and_then(|pid| process_image_path(*pid))
+                .unwrap_or_default()
+                .to_lowercase()
+        };
+        let file = target
+            .rsplit(['\\', '/'])
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        if file == "explorer.exe" {
+            return Err("File Explorer is part of Windows and can't be ended here".to_string());
+        }
+        let browser_hosted = [
+            "msedge.exe",
+            "chrome.exe",
+            "brave.exe",
+            "applicationframehost.exe",
+        ]
+        .contains(&file.as_str());
+
+        if !browser_hosted && !target.is_empty() {
+            if let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) {
+                let mut entry = PROCESSENTRY32W {
+                    dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                    ..Default::default()
+                };
+                let mut ok = Process32FirstW(snapshot, &mut entry).is_ok();
+                while ok {
+                    let pid = entry.th32ProcessID;
+                    let len = entry
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(entry.szExeFile.len());
+                    let name = String::from_utf16_lossy(&entry.szExeFile[..len]).to_lowercase();
+                    if name == file
+                        && process_image_path(pid).is_some_and(|p| p.eq_ignore_ascii_case(&target))
+                    {
+                        pids.push(pid);
+                    }
+                    ok = Process32NextW(snapshot, &mut entry).is_ok();
+                }
+                let _ = CloseHandle(snapshot);
+            }
+        }
+
+        pids.sort_unstable();
+        pids.dedup();
+        let mut ended = 0u32;
+        for pid in pids {
+            if pid <= 4 || pid == own {
+                continue;
+            }
+            if let Ok(handle) = OpenProcess(PROCESS_TERMINATE, false, pid) {
+                if TerminateProcess(handle, 1).is_ok() {
+                    ended += 1;
+                }
+                let _ = CloseHandle(handle);
+            }
+        }
+        if ended == 0 {
+            Err("Couldn't end this app (it may be running as administrator)".to_string())
+        } else {
+            Ok(ended)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn get_active_windows() -> Vec<AppInfo> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -1853,6 +1953,13 @@ pub fn save_pinned_apps(app: AppHandle, apps: Vec<AppInfo>) -> Result<(), String
 /// scan emits `installed-apps-updated`, then saves the corrected list. Names
 /// that differ from the file name are kept as they are.
 fn refresh_pinned_names(mut apps: Vec<AppInfo>) -> Vec<AppInfo> {
+    // Pins made from the Add App list before its paths were fixed point at a
+    // "{GUID}\..." path that can't launch; give them the working one.
+    for app in &mut apps {
+        if app.path.trim().starts_with('{') {
+            app.path = crate::services::normalize_apps_folder_path(&app.path);
+        }
+    }
     for app in &mut apps {
         let stem = std::path::Path::new(&app.path)
             .file_stem()
@@ -1882,44 +1989,16 @@ pub async fn load_pinned_apps(app: AppHandle) -> Vec<AppInfo> {
                 .unwrap_or_default();
         }
     }
-    vec![
-        AppInfo {
-            name: "File Explorer".into(),
-            path: "C:\\Windows\\explorer.exe".into(),
-            icon: None,
-            is_running: false,
-            hwnd: None,
-            executable: Some("explorer.exe".into()),
-            all_hwnds: None,
-        },
-        AppInfo {
-            name: "Microsoft Edge".into(),
-            path: "msedge".into(),
-            icon: None,
-            is_running: false,
-            hwnd: None,
-            executable: Some("msedge.exe".into()),
-            all_hwnds: None,
-        },
-        AppInfo {
-            name: "Notepad".into(),
-            path: "notepad.exe".into(),
-            icon: None,
-            is_running: false,
-            hwnd: None,
-            executable: Some("notepad.exe".into()),
-            all_hwnds: None,
-        },
-        AppInfo {
-            name: "Settings".into(),
-            path: "bloom-settings".into(),
-            icon: None,
-            is_running: false,
-            hwnd: None,
-            executable: None,
-            all_hwnds: None,
-        },
-    ]
+    // A fresh dock holds only File Explorer next to Bloom's Start button.
+    vec![AppInfo {
+        name: "File Explorer".into(),
+        path: "C:\\Windows\\explorer.exe".into(),
+        icon: None,
+        is_running: false,
+        hwnd: None,
+        executable: Some("explorer.exe".into()),
+        all_hwnds: None,
+    }]
 }
 
 #[tauri::command]
@@ -2202,6 +2281,15 @@ pub fn open_sound_settings() {
 
 #[tauri::command]
 pub fn open_notification_center() {
+    if crate::notifications::try_open_bloom_center() {
+        return;
+    }
+    open_windows_notification_center();
+}
+
+/// Windows' own notification center, also offered from Bloom's.
+#[tauri::command]
+pub fn open_windows_notification_center() {
     unsafe {
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::Shell::ShellExecuteA;

@@ -833,3 +833,10 @@ body {
 	font-size: 11px;
 	opacity: 0.75;
 }
+
+/* Live previews: Windows draws the thumbnail over the picture, so the close
+   button moves below it, beside the title. */
+.preview-tooltip.live .preview-close-btn {
+	top: auto;
+	bottom: 4px;
+}

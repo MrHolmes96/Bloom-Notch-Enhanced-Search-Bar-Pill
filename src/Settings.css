@@ -1300,3 +1300,53 @@ input:checked + .slider:before {
 	gap: 8px;
 	padding-left: 40px;
 }
+
+/* Search Bar Pill page sections */
+
+.sb-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 4px 2px 12px;
+}
+
+.sb-tab {
+	padding: 5px 12px;
+	border-radius: 999px;
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
+	background: var(--group-bg);
+	color: var(--text-muted);
+	font-size: 12px;
+	font-family: inherit;
+	cursor: pointer;
+	transition: all 0.15s ease;
+}
+
+.sb-tab:hover {
+	color: var(--text-color);
+}
+
+.sb-tab.active {
+	color: var(--text-color);
+	border-color: var(--bloom-accent, #007aff);
+	background: color-mix(in srgb, var(--bloom-accent, #007aff) 18%, transparent);
+}
+
+.sb-color {
+	width: 34px;
+	height: 24px;
+	padding: 0;
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.12));
+	border-radius: 6px;
+	background: transparent;
+	cursor: pointer;
+}
+
+.sb-color::-webkit-color-swatch-wrapper {
+	padding: 2px;
+}
+
+.sb-color::-webkit-color-swatch {
+	border: none;
+	border-radius: 4px;
+}

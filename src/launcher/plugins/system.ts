@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { evaluate, formatResult, systemDecimalMode } from "../calc";
 import { bestMatch } from "../fuzzy";
-import { PLUGINS } from "../config";
+import { PLUGINS, allWebSources } from "../config";
 import { copy, runCommandLine, systemCommand } from "../ops";
 import { WINDOWS_SETTINGS } from "../windowsSettings";
 import type { GlyphName, Result, SearchContext } from "../types";
@@ -278,7 +278,7 @@ export function searchIndicator(ctx: SearchContext, search: string): Result[] {
 		rows.push({ keyword: ctx.config.explorer.contentKeyword, title: "Search inside files" });
 	}
 	if (ctx.config.plugins.web.enabled) {
-		for (const source of ctx.config.web.sources) {
+		for (const source of allWebSources(ctx.config)) {
 			if (source.enabled && source.keyword !== "*")
 				rows.push({ keyword: source.keyword, title: source.title });
 		}

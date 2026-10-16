@@ -1,4 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import {
+	DEFAULT_ENGINES,
+	ENGINE_CATEGORIES,
+	REPLACED_SOURCE_IDS,
+	providerFor,
+	type EngineSettings
+} from "./engines";
 
 /**
  * Search Bar Pill settings. The hotkey, position and on/off switch live in
@@ -157,7 +164,12 @@ export interface LauncherConfig {
 		terminal: "cmd" | "powershell" | "wt";
 	};
 	calculator: { decimal: "system" | "dot" | "comma"; maxDecimals: number; thousands: boolean };
+	/** The search bar's own look; "bloom" follows Settings > Appearance. */
+	appearance: { theme: "bloom" | "custom"; color: string; opacity: number };
 	web: {
+		/** The engine per kind of search (web, images, maps, ...). */
+		engines: EngineSettings;
+		/** Other sites, each with its own keyword ("youtube lofi"). */
 		sources: WebSource[];
 		suggestions: boolean;
 		suggestionSource: "google" | "bing" | "duckduckgo";
@@ -176,28 +188,22 @@ export interface LauncherConfig {
 	bookmarks: { browsers: string[] };
 }
 
-/** Flow Launcher's default search engines. */
+/** Flow Launcher's default site searches, minus the general search engines,
+ * which are chosen per kind of search instead (see engines.ts). */
 export const DEFAULT_WEB_SOURCES: WebSource[] = [
-	["Google", "*", "https://www.google.com/search?q={q}"],
 	["YouTube", "youtube", "https://www.youtube.com/results?search_query={q}"],
 	["Netflix", "netflix", "https://www.netflix.com/search?q={q}"],
-	["Google Translate", "translate", "https://translate.google.com/?sl=auto&tl=en&text={q}"],
 	["Gmail", "gmail", "https://mail.google.com/mail/u/0/#search/{q}"],
 	["Google Drive", "drive", "https://drive.google.com/drive/search?q={q}"],
 	["YouTube Music", "ytmusic", "https://music.youtube.com/search?q={q}"],
 	["Wikipedia", "wiki", "https://en.wikipedia.org/wiki/Special:Search?search={q}"],
 	["Facebook", "facebook", "https://www.facebook.com/search/top/?q={q}"],
 	["X", "twitter", "https://x.com/search?q={q}"],
-	["Google Maps", "maps", "https://www.google.com/maps/search/{q}"],
-	["DuckDuckGo", "duckduckgo", "https://duckduckgo.com/?q={q}"],
 	["GitHub", "github", "https://github.com/search?q={q}"],
 	["GitHub Gist", "gist", "https://gist.github.com/search?q={q}"],
 	["WolframAlpha", "wolframalpha", "https://www.wolframalpha.com/input/?i={q}"],
 	["Stack Overflow", "stackoverflow", "https://stackoverflow.com/search?q={q}"],
-	["I'm Feeling Lucky", "lucky", "https://www.google.com/search?q={q}&btnI=I"],
-	["Google Images", "image", "https://www.google.com/search?q={q}&tbm=isch"],
-	["Bing", "bing", "https://www.bing.com/search?q={q}"],
-	["Yahoo", "yahoo", "https://search.yahoo.com/search?p={q}"]
+	["Reddit", "reddit", "https://www.reddit.com/search/?q={q}"]
 ].map(([title, keyword, url]) => ({
 	id: title.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
 	title,
@@ -234,10 +240,12 @@ export const DEFAULT_CONFIG: LauncherConfig = {
 		terminal: "cmd"
 	},
 	calculator: { decimal: "system", maxDecimals: 10, thousands: true },
+	appearance: { theme: "bloom", color: "#1c1c1e", opacity: 0.92 },
 	web: {
+		engines: DEFAULT_ENGINES,
 		sources: DEFAULT_WEB_SOURCES,
 		suggestions: false,
-		suggestionSource: "google",
+		suggestionSource: "duckduckgo",
 		maxSuggestions: 3
 	},
 	url: { https: false },
@@ -276,7 +284,35 @@ export function parseConfig(raw: unknown): LauncherConfig {
 			value = null;
 		}
 	}
-	return merge(DEFAULT_CONFIG, value);
+	const config = merge(DEFAULT_CONFIG, value);
+	// Settings from before the per-kind engines: the general engines in the
+	// old list are replaced by the new choices (DuckDuckGo by default).
+	const stored = isObject(value) && isObject(value.web) ? value.web : null;
+	if (stored && !("engines" in stored)) {
+		config.web.sources = config.web.sources.filter((s) => !REPLACED_SOURCE_IDS.has(s.id));
+		if (config.web.suggestionSource === "google") config.web.suggestionSource = "duckduckgo";
+	}
+	return config;
+}
+
+/** The engines chosen per kind of search, as web sources. */
+export function engineSources(config: LauncherConfig): WebSource[] {
+	return ENGINE_CATEGORIES.filter((c) => config.web.engines[c.id]?.enabled).map((c) => {
+		const setting = config.web.engines[c.id];
+		const provider = providerFor(c, setting.provider);
+		return {
+			id: `engine-${c.id}`,
+			title: provider.name,
+			keyword: setting.keyword.trim() || c.defaultKeyword,
+			url: provider.url,
+			enabled: true
+		};
+	});
+}
+
+/** Every web search: the chosen engines first, then the other sites. */
+export function allWebSources(config: LauncherConfig): WebSource[] {
+	return [...engineSources(config), ...config.web.sources];
 }
 
 export function loadConfig(): LauncherConfig {

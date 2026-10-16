@@ -153,6 +153,10 @@ const Dock = memo(function Dock() {
 	const [dockExtras, setDockExtras] = useState<DockExtra[]>([]);
 	const [dockExtrasRevision, setDockExtrasRevision] = useState(0);
 	const [isMaximized, setIsMaximized] = useState(false);
+	// "live": Windows' own moving thumbnails over the preview cards.
+	const [previewStyle, setPreviewStyle] = useState(
+		() => localStorage.getItem("bloom-dock-preview-style") ?? "static"
+	);
 	const [previewData, setPreviewData] = useState<{
 		id: string;
 		previews: { hwnd: number; title: string; image: string }[];
@@ -174,6 +178,8 @@ const Dock = memo(function Dock() {
 	const jumpListRequestRef = useRef(0);
 	const [activeOrder, setActiveOrder] = useState<string[]>([]);
 	const observedTrayPathsRef = useRef(new Set<string>());
+	// The last tray scan, used while a new one is still running.
+	const lastTrayRef = useRef<TrayApp[] | null>(null);
 	const [isDragging, setIsDragging] = useState(false);
 	const [hoveredApp, setHoveredApp] = useState<string | null>(null);
 	const [pressedApp, setPressedApp] = useState<string | null>(null);
@@ -413,6 +419,7 @@ const Dock = memo(function Dock() {
 	useSettingsSync({
 		"bloom-dock-mode": setDockMode,
 		"bloom-dock-preview-enabled": setDockPreviewEnabled,
+		"bloom-dock-preview-style": (v: unknown) => setPreviewStyle(String(v)),
 		"bloom-dock-icon-only": setDockIconOnly,
 		"bloom-dock-separator-enabled": setDockSeparatorEnabled,
 		"bloom-dock-adaptive": setDockAdaptive,
@@ -475,16 +482,7 @@ const Dock = memo(function Dock() {
 		let pollSeq = 0;
 		let stopped = false;
 
-		const poll = async () => {
-			if (isDragging) return;
-			const seq = ++pollSeq;
-			const [windows, tray] = await Promise.all([
-				invoke<AppInfo[]>("get_active_windows"),
-				invoke<TrayApp[]>("get_tray_apps").catch(() => [])
-			]);
-			// Ignore responses that arrive out of order: an older poll must never
-			// overwrite a newer state, which would resurrect closed apps.
-			if (stopped || seq !== pollSeq) return;
+		const apply = (windows: AppInfo[], tray: TrayApp[]) => {
 			const selected = selectDockTrayApps(windows, tray, observedTrayPathsRef.current, (app) =>
 				pinnedApps.some((pinned) =>
 					isSameApp(pinned, {
@@ -508,6 +506,23 @@ const Dock = memo(function Dock() {
 			});
 
 			running.forEach((app) => fetchIcon(app.path, app.name, app.hwnd));
+		};
+
+		const poll = async () => {
+			if (isDragging) return;
+			const seq = ++pollSeq;
+			const trayScan = invoke<TrayApp[]>("get_tray_apps").catch(() => lastTrayRef.current ?? []);
+			const windows = await invoke<AppInfo[]>("get_active_windows");
+			// Ignore responses that arrive out of order: an older poll must never
+			// overwrite a newer state, which would resurrect closed apps.
+			if (stopped || seq !== pollSeq) return;
+			// The tray scan is the slow half: show the window change straight away
+			// with the last scan, then settle on the fresh one.
+			if (lastTrayRef.current) apply(windows, lastTrayRef.current);
+			const tray = await trayScan;
+			if (stopped || seq !== pollSeq) return;
+			lastTrayRef.current = tray;
+			apply(windows, tray);
 		};
 
 		poll();
@@ -552,6 +567,40 @@ const Dock = memo(function Dock() {
 			}
 		}
 	};
+
+	// Live previews: once the cards have finished appearing, Windows draws each
+	// window's live thumbnail over its picture; they go when the cards do.
+	const livePreviewShown =
+		previewStyle === "live" &&
+		dockPreviewEnabled &&
+		!!previewData &&
+		hoveredApp === previewData.id;
+	useEffect(() => {
+		if (!livePreviewShown) {
+			void invoke("dock_live_previews", { items: [] }).catch(() => {});
+			return;
+		}
+		const timer = window.setTimeout(() => {
+			const dpr = window.devicePixelRatio || 1;
+			const items = Array.from(
+				document.querySelectorAll<HTMLImageElement>(".preview-tooltip img[data-hwnd]")
+			).map((img) => {
+				const r = img.getBoundingClientRect();
+				return {
+					hwnd: Number(img.dataset.hwnd),
+					left: Math.round(r.left * dpr),
+					top: Math.round(r.top * dpr),
+					right: Math.round(r.right * dpr),
+					bottom: Math.round(r.bottom * dpr)
+				};
+			});
+			void invoke("dock_live_previews", { items }).catch(() => {});
+		}, 220);
+		return () => {
+			window.clearTimeout(timer);
+			void invoke("dock_live_previews", { items: [] }).catch(() => {});
+		};
+	}, [livePreviewShown, previewData]);
 
 	const handleClearIconCache = async () => {
 		try {
@@ -1323,7 +1372,7 @@ const Dock = memo(function Dock() {
 														previewData.id === itemKey(app) &&
 														hoveredApp === itemKey(app) && (
 															<motion.div
-																className={`preview-tooltip ${previewData.previews.length > 1 ? "multi" : ""}`}
+																className={`preview-tooltip ${previewData.previews.length > 1 ? "multi" : ""} ${previewStyle === "live" ? "live" : ""}`}
 																initial={{ opacity: 0, y: 10, scale: 0.95 }}
 																animate={{ opacity: 1, y: 0, scale: 1 }}
 																exit={{ opacity: 0, scale: 0.95 }}
@@ -1344,7 +1393,7 @@ const Dock = memo(function Dock() {
 																			className="preview-item"
 																			onClick={() => invoke("focus_window", { hwnd: prev.hwnd })}
 																		>
-																			<img src={prev.image} alt={`Preview ${idx}`} />
+																			<img src={prev.image} alt={`Preview ${idx}`} data-hwnd={prev.hwnd} />
 																			<div className="preview-label">{prev.title || app.name}</div>
 																			<button
 																				className="preview-close-btn"
@@ -1486,7 +1535,7 @@ const Dock = memo(function Dock() {
 												previewData.id === itemKey(app) &&
 												hoveredApp === itemKey(app) && (
 													<motion.div
-														className={`preview-tooltip ${previewData.previews.length > 1 ? "multi" : ""}`}
+														className={`preview-tooltip ${previewData.previews.length > 1 ? "multi" : ""} ${previewStyle === "live" ? "live" : ""}`}
 														initial={{ opacity: 0, y: 10, scale: 0.95 }}
 														animate={{ opacity: 1, y: 0, scale: 1 }}
 														exit={{ opacity: 0, scale: 0.95 }}
@@ -1507,7 +1556,7 @@ const Dock = memo(function Dock() {
 																	className="preview-item"
 																	onClick={() => invoke("focus_window", { hwnd: prev.hwnd })}
 																>
-																	<img src={prev.image} alt={`Preview ${idx}`} />
+																	<img src={prev.image} alt={`Preview ${idx}`} data-hwnd={prev.hwnd} />
 																	<div className="preview-label">{prev.title || app.name}</div>
 																	<button
 																		className="preview-close-btn"
@@ -1862,6 +1911,21 @@ const Dock = memo(function Dock() {
 											: "window"}
 									</div>
 								</>
+							)}
+							{contextMenu.app.is_running && contextMenu.app.path !== "start" && (
+								<div
+									className="menu-item quit"
+									onClick={() => {
+										// Windows' developer "End task": ends the app's processes.
+										const app = contextMenu.app!;
+										const hwnds =
+											app.all_hwnds?.map(([hwnd]) => hwnd) ?? (app.hwnd ? [app.hwnd] : []);
+										closeMenu();
+										invoke("end_task", { path: app.path, hwnds }).catch(showActionError);
+									}}
+								>
+									End Task
+								</div>
 							)}
 						</>
 					) : (

@@ -112,6 +112,25 @@
         "visible": false
       },
       {
+        "label": "notification-center",
+        "title": "Bloom Notification Center",
+        "url": "notification-center.html",
+        "width": 392,
+        "height": 800,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
+        "focus": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false
+      },
+      {
         "label": "dock",
         "title": "Bloom Dock",
         "url": "dock.html",

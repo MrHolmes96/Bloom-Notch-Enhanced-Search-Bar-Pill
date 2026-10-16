@@ -40,7 +40,8 @@ export default defineConfig(async () => ({
 				settings: "settings.html",
 				dock: "dock.html",
 				launcher: "launcher.html",
-				notifications: "notifications.html"
+				notifications: "notifications.html",
+				"notification-center": "notification-center.html"
 			}
 		}
 	}

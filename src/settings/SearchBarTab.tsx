@@ -8,17 +8,24 @@ import {
 	Clock,
 	Command,
 	Cpu,
+	Droplet,
 	FolderSearch,
 	Gamepad2,
 	Globe,
 	History,
+	Image as ImageIcon,
 	Keyboard,
+	Languages,
 	Link,
+	Map as MapIcon,
 	Monitor,
 	MousePointerClick,
 	MoveVertical,
+	Newspaper,
+	Palette,
 	PanelRight,
 	Pencil,
+	Pipette,
 	Plus,
 	Power,
 	Puzzle,
@@ -33,6 +40,7 @@ import {
 	Target,
 	Trash2,
 	Type,
+	Video,
 	X
 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
@@ -50,6 +58,27 @@ import {
 	type QueryHotkey,
 	type WebSource
 } from "../launcher/config";
+import { ENGINE_CATEGORIES, type EngineCategory } from "../launcher/engines";
+
+/** The page's sections, so it isn't one long list. */
+type Section = "general" | "look" | "engines" | "plugins" | "apps" | "advanced";
+const SECTIONS: [Section, string][] = [
+	["general", "General"],
+	["look", "Look"],
+	["engines", "Search Engines"],
+	["plugins", "Plugins"],
+	["apps", "Apps & Files"],
+	["advanced", "Advanced"]
+];
+
+const ENGINE_ICONS: Record<EngineCategory, typeof Globe> = {
+	web: Globe,
+	images: ImageIcon,
+	videos: Video,
+	maps: MapIcon,
+	news: Newspaper,
+	translate: Languages
+};
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (next: boolean) => void }) {
 	return (
@@ -563,96 +592,262 @@ export function SearchBarTab() {
 	};
 
 	const setBackend = (key: string, value: string) => saveBackendSetting(key, value);
-
+	const [section, setSectionState] = useState<Section>(() => {
+		const saved = localStorage.getItem("bloom-launcher-settings-section") as Section | null;
+		return saved && SECTIONS.some(([id]) => id === saved) ? saved : "general";
+	});
+	const setSection = (next: Section) => {
+		setSectionState(next);
+		localStorage.setItem("bloom-launcher-settings-section", next);
+	};
 	return (
 		<>
-			<div className="setting-group-label">Search Bar Pill</div>
-			<div className="setting-group">
-				<SettingRow
-					icon={Search}
-					label="Search Bar"
-					desc="A Flow Launcher-style search bar under the notch"
-				>
-					<Toggle
-						checked={enabled}
-						onChange={(v) => {
-							setEnabled(v);
-							setBackend(BACKEND_KEYS.enabled, String(v));
-						}}
-					/>
-				</SettingRow>
-				{enabled && (
-					<>
-						<SettingRow
-							icon={Keyboard}
-							label="Shortcut"
-							desc={
-								hotkeyOk === false
-									? "Another app already uses this shortcut. Pick another"
-									: "Click and press the keys that open the search bar"
-							}
+			{enabled && (
+				<div className="sb-tabs">
+					{SECTIONS.map(([id, label]) => (
+						<button
+							key={id}
+							type="button"
+							className={`sb-tab ${section === id ? "active" : ""}`}
+							onClick={() => setSection(id)}
 						>
-							<HotkeyRecorder
-								value={hotkey}
-								onChange={(v) => {
-									setHotkey(v);
-									setBackend(BACKEND_KEYS.hotkey, v);
-								}}
-							/>
-						</SettingRow>
+							{label}
+						</button>
+					))}
+				</div>
+			)}
+			{(section === "general" || !enabled) && (
+				<>
+					<div className="setting-group-label">Search Bar Pill</div>
+					<div className="setting-group">
 						<SettingRow
-							icon={Gamepad2}
-							label="Ignore in Full Screen"
-							desc="The shortcut does nothing while a full-screen app or game is in front"
+							icon={Search}
+							label="Search Bar"
+							desc="A Flow Launcher-style search bar under the notch"
 						>
 							<Toggle
-								checked={ignoreFullscreen}
+								checked={enabled}
 								onChange={(v) => {
-									setIgnoreFullscreen(v);
-									setBackend(BACKEND_KEYS.ignoreFullscreen, String(v));
+									setEnabled(v);
+									setBackend(BACKEND_KEYS.enabled, String(v));
 								}}
 							/>
 						</SettingRow>
-						<SettingRow icon={MoveVertical} label="Position" desc="Where the search bar opens">
-							<Select
-								value={position}
-								options={[
-									["notch", "Under the notch"],
-									["upper", "Upper third"],
-									["center", "Middle"]
-								]}
-								onChange={(v) => {
-									setPosition(v);
-									setBackend(BACKEND_KEYS.position, v);
-								}}
-							/>
-						</SettingRow>
+						{enabled && (
+							<>
+								<SettingRow
+									icon={Keyboard}
+									label="Shortcut"
+									desc={
+										hotkeyOk === false
+											? "Another app already uses this shortcut. Pick another"
+											: "Click and press the keys that open the search bar"
+									}
+								>
+									<HotkeyRecorder
+										value={hotkey}
+										onChange={(v) => {
+											setHotkey(v);
+											setBackend(BACKEND_KEYS.hotkey, v);
+										}}
+									/>
+								</SettingRow>
+								<SettingRow
+									icon={Gamepad2}
+									label="Ignore in Full Screen"
+									desc="The shortcut does nothing while a full-screen app or game is in front"
+								>
+									<Toggle
+										checked={ignoreFullscreen}
+										onChange={(v) => {
+											setIgnoreFullscreen(v);
+											setBackend(BACKEND_KEYS.ignoreFullscreen, String(v));
+										}}
+									/>
+								</SettingRow>
+								<SettingRow icon={MoveVertical} label="Position" desc="Where the search bar opens">
+									<Select
+										value={position}
+										options={[
+											["notch", "Under the notch"],
+											["upper", "Upper third"],
+											["center", "Middle"]
+										]}
+										onChange={(v) => {
+											setPosition(v);
+											setBackend(BACKEND_KEYS.position, v);
+										}}
+									/>
+								</SettingRow>
+								<SettingRow
+									icon={Monitor}
+									label="Screen"
+									desc="Which monitor it opens on"
+									divider={false}
+								>
+									<Select
+										value={screen}
+										options={[
+											["cursor", "With the mouse"],
+											["focus", "With the active window"],
+											["primary", "Main monitor"]
+										]}
+										onChange={(v) => {
+											setScreen(v);
+											setBackend(BACKEND_KEYS.screen, v);
+										}}
+									/>
+								</SettingRow>
+							</>
+						)}
+					</div>
+					{enabled && (
+						<>
+							<div className="setting-group-label">Behaviour</div>
+							<div className="setting-group">
+								<SettingRow
+									icon={Rows3}
+									label="Results Shown"
+									desc={`${config.maxResults} rows before it scrolls`}
+								>
+									<input
+										type="range"
+										min="3"
+										max="12"
+										step="1"
+										value={config.maxResults}
+										className="settings-slider"
+										onChange={(e) => update((c) => (c.maxResults = parseInt(e.target.value)))}
+									/>
+								</SettingRow>
+								<SettingRow
+									icon={RotateCcw}
+									label="When Reopened"
+									desc="What happens to your last search"
+								>
+									<Select
+										value={config.lastQuery}
+										options={[
+											["selected", "Keep it, selected"],
+											["preserved", "Keep it"],
+											["empty", "Start empty"]
+										]}
+										onChange={(v) => update((c) => (c.lastQuery = v))}
+									/>
+								</SettingRow>
+								<SettingRow
+									icon={MousePointerClick}
+									label="Close When Clicking Away"
+									desc="Hide the search bar when another window gets focus"
+								>
+									<Toggle
+										checked={config.hideOnBlur}
+										onChange={(v) => update((c) => (c.hideOnBlur = v))}
+									/>
+								</SettingRow>
+								<SettingRow icon={Target} label="Search Precision" desc="How loose a match can be">
+									<Select
+										value={config.precision}
+										options={[
+											["regular", "Regular"],
+											["low", "Low"],
+											["none", "None"]
+										]}
+										onChange={(v) => update((c) => (c.precision = v))}
+									/>
+								</SettingRow>
+								<SettingRow
+									icon={History}
+									label="Recent Items"
+									desc="Show what you opened last before you type (Ctrl+H for all)"
+								>
+									<Select
+										value={config.homeHistory ? String(config.homeHistoryCount) : "off"}
+										options={[
+											["off", "Off"],
+											["3", "3"],
+											["5", "5"],
+											["8", "8"],
+											["12", "12"]
+										]}
+										onChange={(v) =>
+											update((c) => {
+												c.homeHistory = v !== "off";
+												if (v !== "off") c.homeHistoryCount = parseInt(v);
+											})
+										}
+									/>
+								</SettingRow>
+								<SettingRow
+									icon={PanelRight}
+									label="Always Show Preview"
+									divider={false}
+									desc="File details beside the results (F1 toggles)"
+								>
+									<Toggle
+										checked={config.alwaysPreview}
+										onChange={(v) => update((c) => (c.alwaysPreview = v))}
+									/>
+								</SettingRow>
+							</div>
+						</>
+					)}
+				</>
+			)}
+
+			{enabled && section === "look" && (
+				<>
+					<div className="setting-group-label">Colors</div>
+					<div className="setting-group">
 						<SettingRow
-							icon={Monitor}
-							label="Screen"
-							desc="Which monitor it opens on"
-							divider={false}
+							icon={Palette}
+							label="Colors"
+							desc={
+								config.appearance.theme === "custom"
+									? "The search bar's own color"
+									: "Bloom's colors from Settings > Appearance"
+							}
 						>
 							<Select
-								value={screen}
+								value={config.appearance.theme}
 								options={[
-									["cursor", "With the mouse"],
-									["focus", "With the active window"],
-									["primary", "Main monitor"]
+									["bloom", "Bloom"],
+									["custom", "Custom"]
 								]}
-								onChange={(v) => {
-									setScreen(v);
-									setBackend(BACKEND_KEYS.screen, v);
-								}}
+								onChange={(v) => update((c) => (c.appearance.theme = v))}
 							/>
 						</SettingRow>
-					</>
-				)}
-			</div>
+						{config.appearance.theme === "custom" && (
+							<SettingRow icon={Pipette} label="Color" desc={config.appearance.color.toUpperCase()}>
+								<input
+									type="color"
+									className="sb-color"
+									value={config.appearance.color}
+									onChange={(e) => update((c) => (c.appearance.color = e.target.value))}
+								/>
+							</SettingRow>
+						)}
+						<SettingRow
+							icon={Droplet}
+							label="Opacity"
+							desc={`${Math.round(config.appearance.opacity * 100)}%, higher is easier to read`}
+							divider={false}
+						>
+							<input
+								type="range"
+								min="40"
+								max="100"
+								step="1"
+								value={Math.round(config.appearance.opacity * 100)}
+								className="settings-slider"
+								onChange={(e) =>
+									update((c) => (c.appearance.opacity = parseInt(e.target.value) / 100))
+								}
+							/>
+						</SettingRow>
+					</div>
 
-			{enabled && (
-				<>
-					<div className="setting-group-label">Behaviour</div>
+					<div className="setting-group-label">Layout</div>
 					<div className="setting-group">
 						<SettingRow icon={Ruler} label="Width" desc={`${config.width} px`}>
 							<input
@@ -663,89 +858,6 @@ export function SearchBarTab() {
 								value={config.width}
 								className="settings-slider"
 								onChange={(e) => update((c) => (c.width = parseInt(e.target.value)))}
-							/>
-						</SettingRow>
-						<SettingRow
-							icon={Rows3}
-							label="Results Shown"
-							desc={`${config.maxResults} rows before it scrolls`}
-						>
-							<input
-								type="range"
-								min="3"
-								max="12"
-								step="1"
-								value={config.maxResults}
-								className="settings-slider"
-								onChange={(e) => update((c) => (c.maxResults = parseInt(e.target.value)))}
-							/>
-						</SettingRow>
-						<SettingRow
-							icon={RotateCcw}
-							label="When Reopened"
-							desc="What happens to your last search"
-						>
-							<Select
-								value={config.lastQuery}
-								options={[
-									["selected", "Keep it, selected"],
-									["preserved", "Keep it"],
-									["empty", "Start empty"]
-								]}
-								onChange={(v) => update((c) => (c.lastQuery = v))}
-							/>
-						</SettingRow>
-						<SettingRow
-							icon={MousePointerClick}
-							label="Close When Clicking Away"
-							desc="Hide the search bar when another window gets focus"
-						>
-							<Toggle
-								checked={config.hideOnBlur}
-								onChange={(v) => update((c) => (c.hideOnBlur = v))}
-							/>
-						</SettingRow>
-						<SettingRow icon={Target} label="Search Precision" desc="How loose a match can be">
-							<Select
-								value={config.precision}
-								options={[
-									["regular", "Regular"],
-									["low", "Low"],
-									["none", "None"]
-								]}
-								onChange={(v) => update((c) => (c.precision = v))}
-							/>
-						</SettingRow>
-						<SettingRow
-							icon={History}
-							label="Recent Items"
-							desc="Show what you opened last before you type (Ctrl+H for all)"
-						>
-							<Select
-								value={config.homeHistory ? String(config.homeHistoryCount) : "off"}
-								options={[
-									["off", "Off"],
-									["3", "3"],
-									["5", "5"],
-									["8", "8"],
-									["12", "12"]
-								]}
-								onChange={(v) =>
-									update((c) => {
-										c.homeHistory = v !== "off";
-										if (v !== "off") c.homeHistoryCount = parseInt(v);
-									})
-								}
-							/>
-						</SettingRow>
-						<SettingRow
-							icon={PanelRight}
-							label="Always Show Preview"
-							desc="File details beside the results (F1 toggles)"
-						>
-							<Toggle
-								checked={config.alwaysPreview}
-								onChange={(v) => update((c) => (c.alwaysPreview = v))}
 							/>
 						</SettingRow>
 						<SettingRow icon={Clock} label="Clock" desc="Show the time in the empty search box">
@@ -778,7 +890,159 @@ export function SearchBarTab() {
 							/>
 						</SettingRow>
 					</div>
+				</>
+			)}
 
+			{enabled && section === "engines" && (
+				<>
+					<div className="setting-group-label">Search Engines</div>
+					<div className="setting-group">
+						{ENGINE_CATEGORIES.map((category, i) => {
+							const setting = config.web.engines[category.id];
+							const Icon = ENGINE_ICONS[category.id];
+							return (
+								<SettingRow
+									key={category.id}
+									icon={Icon}
+									label={category.label}
+									desc={
+										setting.enabled
+											? `${category.desc}. Keyword: ${setting.keyword === "*" ? "none needed" : setting.keyword}`
+											: "Off"
+									}
+									divider={i < ENGINE_CATEGORIES.length - 1}
+								>
+									<div className="sb-inline">
+										{setting.enabled && (
+											<>
+												<Select
+													value={setting.provider}
+													options={category.providers.map(
+														(p) =>
+															[
+																p.id,
+																`${p.name.replace(` ${category.label}`, "")}${p.private ? " (private)" : ""}`
+															] as [string, string]
+													)}
+													onChange={(v) => update((c) => (c.web.engines[category.id].provider = v))}
+												/>
+												<TextField
+													value={setting.keyword}
+													width={70}
+													placeholder={category.defaultKeyword}
+													onChange={(v) =>
+														update(
+															(c) =>
+																(c.web.engines[category.id].keyword =
+																	v.trim() || category.defaultKeyword)
+														)
+													}
+												/>
+											</>
+										)}
+										<Toggle
+											checked={setting.enabled}
+											onChange={(v) => update((c) => (c.web.engines[category.id].enabled = v))}
+										/>
+									</div>
+								</SettingRow>
+							);
+						})}
+					</div>
+					<div className="sb-note">
+						Type a keyword, a space and your search: "image cats", "maps Aarhus", "translate hej".
+						The Web engine also shows under every search. "(private)" engines don't track you.
+					</div>
+
+					<div className="setting-group-label">Suggestions & Other Sites</div>
+					<div className="setting-group">
+						<SettingRow
+							icon={Sparkles}
+							label="Search Suggestions"
+							desc="Ask the engine below for suggestions as you type (sends what you type)"
+						>
+							<Toggle
+								checked={config.web.suggestions}
+								onChange={(v) => update((c) => (c.web.suggestions = v))}
+							/>
+						</SettingRow>
+						{config.web.suggestions && (
+							<SettingRow
+								icon={Globe}
+								label="Suggestions From"
+								desc={`Up to ${config.web.maxSuggestions}`}
+								divider={false}
+							>
+								<Select
+									value={config.web.suggestionSource}
+									options={[
+										["google", "Google"],
+										["bing", "Bing"],
+										["duckduckgo", "DuckDuckGo"]
+									]}
+									onChange={(v) => update((c) => (c.web.suggestionSource = v))}
+								/>
+							</SettingRow>
+						)}
+						{!config.web.suggestions && <div className="sb-group-end" />}
+						{!config.web.suggestions && <div className="setting-divider" />}
+						<Block
+							icon={Globe}
+							label="Other Sites"
+							desc='Sites with their own keyword ("youtube lofi")'
+						>
+							<WebSources
+								sources={config.web.sources}
+								onChange={(next) => update((c) => (c.web.sources = next))}
+							/>
+						</Block>
+					</div>
+
+					<div className="setting-group-label">URL & Bookmarks</div>
+					<div className="setting-group">
+						<SettingRow
+							icon={Link}
+							label="Always Use HTTPS"
+							desc='Open "example.com" as https://example.com'
+						>
+							<Toggle
+								checked={config.url.https}
+								onChange={(v) => update((c) => (c.url.https = v))}
+							/>
+						</SettingRow>
+						<Block
+							icon={Bookmark}
+							label="Bookmarks From"
+							desc={`Type "${config.plugins.bookmarks.keyword}" and a name`}
+						>
+							<div className="sb-chips">
+								{BROWSERS.map(([id, name]) => {
+									const on = config.bookmarks.browsers.includes(id);
+									return (
+										<button
+											key={id}
+											type="button"
+											className={`folder-chip ${on ? "active" : ""}`}
+											onClick={() =>
+												update((c) => {
+													c.bookmarks.browsers = on
+														? c.bookmarks.browsers.filter((b) => b !== id)
+														: [...c.bookmarks.browsers, id];
+												})
+											}
+										>
+											{name}
+										</button>
+									);
+								})}
+							</div>
+						</Block>
+					</div>
+				</>
+			)}
+
+			{enabled && section === "plugins" && (
+				<>
 					<div className="setting-group-label">Plugins & Keywords</div>
 					<div className="setting-group">
 						{PLUGINS.map((plugin, i) => {
@@ -817,6 +1081,92 @@ export function SearchBarTab() {
 						means the plugin joins every search.
 					</div>
 
+					<div className="setting-group-label">Calculator</div>
+					<div className="setting-group">
+						<SettingRow
+							icon={Calculator}
+							label="Decimal Separator"
+							desc="How you type and see decimals"
+						>
+							<Select
+								value={config.calculator.decimal}
+								options={[
+									["system", "Windows setting"],
+									["dot", "Dot (1.5)"],
+									["comma", "Comma (1,5)"]
+								]}
+								onChange={(v) => update((c) => (c.calculator.decimal = v))}
+							/>
+						</SettingRow>
+						<SettingRow
+							icon={Rows3}
+							label="Decimal Places"
+							desc={`Round results to ${config.calculator.maxDecimals} places`}
+						>
+							<input
+								type="range"
+								min="0"
+								max="15"
+								step="1"
+								value={config.calculator.maxDecimals}
+								className="settings-slider"
+								onChange={(e) =>
+									update((c) => (c.calculator.maxDecimals = parseInt(e.target.value)))
+								}
+							/>
+						</SettingRow>
+						<SettingRow
+							icon={Type}
+							label="Thousands Separator"
+							desc="Show 1,234,567 instead of 1234567"
+							divider={false}
+						>
+							<Toggle
+								checked={config.calculator.thousands}
+								onChange={(v) => update((c) => (c.calculator.thousands = v))}
+							/>
+						</SettingRow>
+					</div>
+
+					<div className="setting-group-label">System & Processes</div>
+					<div className="setting-group">
+						<SettingRow
+							icon={Power}
+							label="Confirm System Commands"
+							desc="Press Enter twice to shut down, restart, sign out or exit Bloom"
+						>
+							<Toggle
+								checked={config.system.confirm}
+								onChange={(v) => update((c) => (c.system.confirm = v))}
+							/>
+						</SettingRow>
+						<SettingRow
+							icon={Cpu}
+							label="Show Window Titles"
+							desc={`In the process list ("${config.plugins.processes.keyword}")`}
+						>
+							<Toggle
+								checked={config.processes.showTitle}
+								onChange={(v) => update((c) => (c.processes.showTitle = v))}
+							/>
+						</SettingRow>
+						<SettingRow
+							icon={AppWindow}
+							label="Apps With Windows First"
+							desc="List processes that have an open window at the top"
+							divider={false}
+						>
+							<Toggle
+								checked={config.processes.windowsFirst}
+								onChange={(v) => update((c) => (c.processes.windowsFirst = v))}
+							/>
+						</SettingRow>
+					</div>
+				</>
+			)}
+
+			{enabled && section === "apps" && (
+				<>
 					<div className="setting-group-label">Programs</div>
 					<div className="setting-group">
 						<SettingRow
@@ -962,138 +1312,11 @@ export function SearchBarTab() {
 							}
 						/>
 					</div>
+				</>
+			)}
 
-					<div className="setting-group-label">Calculator</div>
-					<div className="setting-group">
-						<SettingRow
-							icon={Calculator}
-							label="Decimal Separator"
-							desc="How you type and see decimals"
-						>
-							<Select
-								value={config.calculator.decimal}
-								options={[
-									["system", "Windows setting"],
-									["dot", "Dot (1.5)"],
-									["comma", "Comma (1,5)"]
-								]}
-								onChange={(v) => update((c) => (c.calculator.decimal = v))}
-							/>
-						</SettingRow>
-						<SettingRow
-							icon={Rows3}
-							label="Decimal Places"
-							desc={`Round results to ${config.calculator.maxDecimals} places`}
-						>
-							<input
-								type="range"
-								min="0"
-								max="15"
-								step="1"
-								value={config.calculator.maxDecimals}
-								className="settings-slider"
-								onChange={(e) =>
-									update((c) => (c.calculator.maxDecimals = parseInt(e.target.value)))
-								}
-							/>
-						</SettingRow>
-						<SettingRow
-							icon={Type}
-							label="Thousands Separator"
-							desc="Show 1,234,567 instead of 1234567"
-							divider={false}
-						>
-							<Toggle
-								checked={config.calculator.thousands}
-								onChange={(v) => update((c) => (c.calculator.thousands = v))}
-							/>
-						</SettingRow>
-					</div>
-
-					<div className="setting-group-label">Web Searches</div>
-					<div className="setting-group">
-						<Block
-							icon={Globe}
-							label="Search Engines"
-							desc='Type the keyword and a search ("youtube lofi")'
-						>
-							<WebSources
-								sources={config.web.sources}
-								onChange={(next) => update((c) => (c.web.sources = next))}
-							/>
-						</Block>
-						<SettingRow
-							icon={Sparkles}
-							label="Search Suggestions"
-							desc="Ask the engine below for suggestions as you type (sends what you type)"
-						>
-							<Toggle
-								checked={config.web.suggestions}
-								onChange={(v) => update((c) => (c.web.suggestions = v))}
-							/>
-						</SettingRow>
-						{config.web.suggestions && (
-							<SettingRow
-								icon={Globe}
-								label="Suggestions From"
-								desc={`Up to ${config.web.maxSuggestions}`}
-								divider={false}
-							>
-								<Select
-									value={config.web.suggestionSource}
-									options={[
-										["google", "Google"],
-										["bing", "Bing"],
-										["duckduckgo", "DuckDuckGo"]
-									]}
-									onChange={(v) => update((c) => (c.web.suggestionSource = v))}
-								/>
-							</SettingRow>
-						)}
-						{!config.web.suggestions && <div className="sb-group-end" />}
-					</div>
-
-					<div className="setting-group-label">URL & Bookmarks</div>
-					<div className="setting-group">
-						<SettingRow
-							icon={Link}
-							label="Always Use HTTPS"
-							desc='Open "example.com" as https://example.com'
-						>
-							<Toggle
-								checked={config.url.https}
-								onChange={(v) => update((c) => (c.url.https = v))}
-							/>
-						</SettingRow>
-						<Block
-							icon={Bookmark}
-							label="Bookmarks From"
-							desc={`Type "${config.plugins.bookmarks.keyword}" and a name`}
-						>
-							<div className="sb-chips">
-								{BROWSERS.map(([id, name]) => {
-									const on = config.bookmarks.browsers.includes(id);
-									return (
-										<button
-											key={id}
-											type="button"
-											className={`folder-chip ${on ? "active" : ""}`}
-											onClick={() =>
-												update((c) => {
-													c.bookmarks.browsers = on
-														? c.bookmarks.browsers.filter((b) => b !== id)
-														: [...c.bookmarks.browsers, id];
-												})
-											}
-										>
-											{name}
-										</button>
-									);
-								})}
-							</div>
-						</Block>
-					</div>
-
+			{enabled && section === "advanced" && (
+				<>
 					<div className="setting-group-label">Shell</div>
 					<div className="setting-group">
 						<SettingRow
@@ -1150,41 +1373,6 @@ export function SearchBarTab() {
 							<Toggle
 								checked={config.shell.admin}
 								onChange={(v) => update((c) => (c.shell.admin = v))}
-							/>
-						</SettingRow>
-					</div>
-
-					<div className="setting-group-label">System & Processes</div>
-					<div className="setting-group">
-						<SettingRow
-							icon={Power}
-							label="Confirm System Commands"
-							desc="Press Enter twice to shut down, restart, sign out or exit Bloom"
-						>
-							<Toggle
-								checked={config.system.confirm}
-								onChange={(v) => update((c) => (c.system.confirm = v))}
-							/>
-						</SettingRow>
-						<SettingRow
-							icon={Cpu}
-							label="Show Window Titles"
-							desc={`In the process list ("${config.plugins.processes.keyword}")`}
-						>
-							<Toggle
-								checked={config.processes.showTitle}
-								onChange={(v) => update((c) => (c.processes.showTitle = v))}
-							/>
-						</SettingRow>
-						<SettingRow
-							icon={AppWindow}
-							label="Apps With Windows First"
-							desc="List processes that have an open window at the top"
-							divider={false}
-						>
-							<Toggle
-								checked={config.processes.windowsFirst}
-								onChange={(v) => update((c) => (c.processes.windowsFirst = v))}
 							/>
 						</SettingRow>
 					</div>

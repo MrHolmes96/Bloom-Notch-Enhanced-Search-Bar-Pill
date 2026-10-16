@@ -305,6 +305,26 @@ pub fn setup_window_change_hook(app_handle: AppHandle) {
             0,
             WINEVENT_OUTOFCONTEXT,
         );
+        // Apps that go to the tray by minimising or cloaking their window
+        // (rather than hiding it) leave the dock just as quickly.
+        let _minimize_hook = SetWinEventHook(
+            windows::Win32::UI::WindowsAndMessaging::EVENT_SYSTEM_MINIMIZESTART,
+            windows::Win32::UI::WindowsAndMessaging::EVENT_SYSTEM_MINIMIZEEND,
+            None,
+            Some(window_change_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        );
+        let _cloak_hook = SetWinEventHook(
+            windows::Win32::UI::WindowsAndMessaging::EVENT_OBJECT_CLOAKED,
+            windows::Win32::UI::WindowsAndMessaging::EVENT_OBJECT_UNCLOAKED,
+            None,
+            Some(window_change_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        );
 
         // Store hooks to prevent them from being dropped
         Box::leak(Box::new(_create_hook));
@@ -3295,6 +3315,7 @@ pub fn trigger_app_scan() {
                                             name.clone()
                                         };
 
+                                        let path = normalize_apps_folder_path(&path);
                                         if is_launchable_entry(&name, &path) {
                                             // AUMIDs have no executable of their own; storing the
                                             // whole id here would make exe-name matching think any
@@ -3373,6 +3394,20 @@ pub fn trigger_app_scan() {
             let _ = app.emit("installed-apps-updated", ());
         }
     });
+}
+
+/// The Start menu's parsing name for a desktop app is often a path under a
+/// known folder written as "{GUID}\dir\app.exe", which no file API can
+/// open: launching it failed and its icon came out generic. It becomes the
+/// real program path, or, when that can't be found, a shell:AppsFolder id
+/// that Windows launches and draws exactly like its Start menu entry.
+pub fn normalize_apps_folder_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.starts_with('{') && trimmed.contains("}\\") {
+        return crate::launcher::actions::launcher_resolve_app_path(trimmed.to_string())
+            .unwrap_or_else(|| format!("shell:AppsFolder\\{}", trimmed));
+    }
+    trimmed.to_string()
 }
 
 /// Filters out shell entries that are not real launchable apps (web links,

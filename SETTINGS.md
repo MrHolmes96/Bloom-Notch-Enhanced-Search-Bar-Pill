@@ -104,6 +104,14 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-brightness-edge-enabled`    | `"true"` / `"false"` | `"true"` | Trigger brightness HUD by hovering the right screen edge.                |
 | `bloom-brightness-key-step` | `"1"` / `"2"` / `"5"` / `"0"` | `"2"` | Percent a brightness key changes the brightness by. Bloom replaces the 10% step Windows (or the keyboard tool) uses; `"0"` keeps it. |
 
+### Windows
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `bloom-window-memory` | `"true"` / `"false"` | `"true"` | Remember each app's window size and position (in `window_positions.json`) and restore it when the app opens again. |
+| `bloom-dock-preview-style` | `"static"` / `"live"` | `"static"` | Dock window previews: a snapshot, or Windows' live preview of the window. |
+| `bloom-notification-center` | `"windows"` / `"bloom"` | `"windows"` | What the notification button opens: Windows' notification center or Bloom's. |
+
 ### Notifications
 
 | Key | Type | Default | Description |

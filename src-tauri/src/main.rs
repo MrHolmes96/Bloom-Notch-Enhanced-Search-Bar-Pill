@@ -3,8 +3,10 @@
 mod bluetooth;
 mod commands;
 mod dock_extras;
+mod ghelper;
 mod jumplist;
 mod launcher;
+mod live_preview;
 mod notifications;
 mod quick_settings;
 mod recycle_bin;
@@ -17,6 +19,7 @@ mod types;
 mod updater;
 mod utils;
 mod wifi;
+mod window_memory;
 
 use std::sync::atomic::Ordering;
 use tauri::Manager;
@@ -118,6 +121,7 @@ fn main() {
             open_wifi_settings,
             open_sound_settings,
             open_notification_center,
+            open_windows_notification_center,
             open_system_tray,
             set_ignore_cursor_events,
             set_window_height,
@@ -234,6 +238,11 @@ fn main() {
             dock_extras::eject_dock_extra,
             dock_extras::get_recycle_bin_extra,
             recycle_bin::empty_recycle_bin,
+            end_task,
+            live_preview::dock_live_previews,
+            window_memory::forget_window_sizes,
+            ghelper::ghelper_brightness,
+            ghelper::set_ghelper_brightness_step,
             quick_settings::quick_settings_state,
             quick_settings::quick_setting_action,
             notifications::notifications_status,
@@ -241,6 +250,10 @@ fn main() {
             notifications::notifications_set_size,
             notifications::notifications_test,
             notifications::notifications_open_privacy,
+            notifications::notification_center_list,
+            notifications::notification_remove,
+            notifications::notification_clear_all,
+            notifications::notification_center_hide,
             recycle_bin::recycle_bin_icons_available,
             wifi::wifi_list_networks,
             wifi::wifi_scan,
@@ -394,6 +407,7 @@ fn main() {
             services::setup_keyboard_hook(app.handle().clone());
             launcher::start_hotkey_listener(app.handle().clone());
             notifications::start(app.handle().clone());
+            window_memory::start(app.handle().clone());
             setup_taskbar_hook();
             setup_audio_visualization(app.handle().clone());
             setup_settings_watcher(app.handle().clone());

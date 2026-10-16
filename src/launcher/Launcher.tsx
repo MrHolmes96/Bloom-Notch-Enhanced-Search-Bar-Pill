@@ -50,6 +50,31 @@ function useClock(enabled: boolean) {
 	return now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: !h24 });
 }
 
+/** The search bar's own colors (Settings > Search Bar Pill > Look). */
+function lookStyle(look: LauncherConfig["appearance"]): React.CSSProperties {
+	const opacity = Math.max(0.2, Math.min(1, look.opacity));
+	if (look.theme !== "custom") {
+		// Bloom's colors with the search bar's own opacity.
+		return {
+			"--launcher-bg": `rgb(from var(--bloom-bg) r g b / ${opacity})`,
+			"--launcher-bg-expanded": `rgb(from var(--bloom-bg-expanded) r g b / ${Math.min(1, opacity + 0.03)})`
+		} as React.CSSProperties;
+	}
+	const hex = /^#?([0-9a-f]{6})$/i.exec(look.color.trim())?.[1] ?? "1c1c1e";
+	const r = parseInt(hex.slice(0, 2), 16);
+	const g = parseInt(hex.slice(2, 4), 16);
+	const b = parseInt(hex.slice(4, 6), 16);
+	const light = (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.55;
+	return {
+		"--launcher-bg": `rgba(${r}, ${g}, ${b}, ${opacity})`,
+		"--launcher-bg-expanded": `rgba(${r}, ${g}, ${b}, ${Math.min(1, opacity + 0.03)})`,
+		"--bloom-text": light ? "#1c1c1e" : "#ffffff",
+		"--bloom-text-muted": light ? "rgba(28, 28, 30, 0.6)" : "rgba(255, 255, 255, 0.6)",
+		"--bloom-border": light ? "rgba(0, 0, 0, 0.12)" : "rgba(255, 255, 255, 0.12)",
+		"--bloom-group-bg": light ? "rgba(0, 0, 0, 0.05)" : "rgba(255, 255, 255, 0.08)"
+	} as React.CSSProperties;
+}
+
 export default function Launcher() {
 	const [config, setConfig] = useState<LauncherConfig>(loadConfig);
 	const [query, setQueryState] = useState("");
@@ -519,7 +544,10 @@ export default function Launcher() {
 		<div
 			className="launcher-shell"
 			ref={shellRef}
-			style={{ width: config.width + 24 + (showPreview ? 280 : 0) }}
+			style={{
+				width: config.width + 24 + (showPreview ? 280 : 0),
+				...lookStyle(config.appearance)
+			}}
 		>
 			<div className="launcher-pill">
 				<Search size={18} className="launcher-search-icon" />

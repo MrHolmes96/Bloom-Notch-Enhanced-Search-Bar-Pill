@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { RecycleBinSettings } from "./RecycleBinSettings";
+import { PreviewStyleRow } from "./PreviewStyleRow";
 import { KNOWN_FOLDER_OPTIONS, parseEnabledFolders, parseCustomFolders } from "../dockExtras";
 
 const START_ICON_PRESETS = [
@@ -176,6 +177,8 @@ export function DockTab({
 								<span className="slider"></span>
 							</label>
 						</SettingRow>
+
+						{dockPreviewEnabled && <PreviewStyleRow />}
 
 						<SettingRow icon={Circle} label="Icon Only" desc="Remove icon background and padding">
 							<label className="toggle-switch">

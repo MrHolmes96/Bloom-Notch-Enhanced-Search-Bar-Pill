@@ -428,6 +428,8 @@ pub struct BloomNotification {
     icon: Option<String>,
     title: String,
     body: String,
+    /// When it arrived, in milliseconds since 1970.
+    time: i64,
 }
 
 fn hstring(value: windows::core::Result<windows::core::HSTRING>) -> String {
@@ -482,6 +484,11 @@ fn read_notification(
         .collect();
     let title = texts.first().cloned().unwrap_or_else(|| app.clone());
     let body = texts.iter().skip(1).cloned().collect::<Vec<_>>().join("\n");
+    // Windows counts 100 ns steps from 1601; the cards want Unix milliseconds.
+    let time = notification
+        .CreationTime()
+        .map(|t| (t.UniversalTime - 116_444_736_000_000_000) / 10_000)
+        .unwrap_or_else(|_| crate::utils::get_now_ms());
     Some(BloomNotification {
         id,
         icon: app_icon(&aumid),
@@ -489,6 +496,7 @@ fn read_notification(
         aumid,
         title,
         body,
+        time,
     })
 }
 
@@ -756,6 +764,7 @@ pub fn notifications_test(app: AppHandle) {
             icon: None,
             title: "This is how notifications look".into(),
             body: "Change the corner and the rounding in Settings > Notifications.".into(),
+            time: crate::utils::get_now_ms(),
         },
     );
 }
@@ -797,5 +806,128 @@ mod tests {
             corner_origin(area, 400, 100, "bottom-right", 0),
             (1520, 932)
         );
+    }
+}
+
+// ---------------------------------------------------------------- Bloom notification center
+
+fn with_listener<T>(
+    f: impl FnOnce(
+        &windows::UI::Notifications::Management::UserNotificationListener,
+    ) -> Result<T, String>,
+) -> Result<T, String> {
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+    use windows::UI::Notifications::Management::{
+        UserNotificationListener, UserNotificationListenerAccessStatus,
+    };
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    let listener = UserNotificationListener::Current().map_err(|_| "unavailable".to_string())?;
+    if listener.GetAccessStatus().ok() != Some(UserNotificationListenerAccessStatus::Allowed) {
+        return Err("denied".to_string());
+    }
+    f(&listener)
+}
+
+/// Everything in Windows' notification center, newest first.
+#[tauri::command]
+pub async fn notification_center_list() -> Result<Vec<BloomNotification>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        with_listener(|listener| {
+            use windows::UI::Notifications::NotificationKinds;
+            let list = listener
+                .GetNotificationsAsync(NotificationKinds::Toast)
+                .and_then(|op| op.get())
+                .map_err(|_| "unavailable".to_string())?;
+            let mut items: Vec<BloomNotification> = list
+                .into_iter()
+                .filter_map(|n| read_notification(&n))
+                .collect();
+            items.sort_by_key(|item| std::cmp::Reverse(item.time));
+            Ok(items)
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn notification_remove(id: u32) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        with_listener(|listener| listener.RemoveNotification(id).map_err(|e| e.to_string()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn notification_clear_all() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        with_listener(|listener| listener.ClearNotifications().map_err(|e| e.to_string()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The notification button opens Bloom's center instead of Windows' when
+/// that is chosen in Settings > Notifications. Returns false to let Windows'
+/// open.
+pub fn try_open_bloom_center() -> bool {
+    let Some(app) = APP.get() else {
+        return false;
+    };
+    if get_setting_str(app, "bloom-notification-center").as_deref() != Some("bloom") {
+        return false;
+    }
+    let Some(window) = app.get_webview_window("notification-center") else {
+        return false;
+    };
+    if window.is_visible().unwrap_or(false) {
+        let _ = window.hide();
+        return true;
+    }
+    // Clicking the bell while the center is open first hides it (it loses
+    // focus); that click must not open it again.
+    if crate::utils::get_now_ms() - CENTER_HIDDEN_AT.load(Ordering::SeqCst) < 400 {
+        return true;
+    }
+    let scale = window.scale_factor().unwrap_or(1.0);
+    unsafe {
+        let primary = windows::Win32::Graphics::Gdi::MonitorFromPoint(
+            Default::default(),
+            MONITOR_DEFAULTTOPRIMARY,
+        );
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(primary, &mut info).as_bool() {
+            let work = info.rcWork;
+            let margin = (8.0 * scale) as i32;
+            let width = (392.0 * scale) as i32;
+            let _ = window.set_size(tauri::PhysicalSize::new(
+                width as u32,
+                (work.bottom - work.top - margin * 2).max(200) as u32,
+            ));
+            let _ = window.set_position(tauri::PhysicalPosition::new(
+                work.right - width - margin,
+                work.top + margin,
+            ));
+        }
+    }
+    let _ = window.show();
+    let _ = window.set_focus();
+    let _ = app.emit_to("notification-center", "notification-center-open", ());
+    true
+}
+
+static CENTER_HIDDEN_AT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+#[tauri::command]
+pub fn notification_center_hide(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("notification-center") {
+        if window.is_visible().unwrap_or(false) {
+            CENTER_HIDDEN_AT.store(crate::utils::get_now_ms(), Ordering::SeqCst);
+        }
+        let _ = window.hide();
     }
 }

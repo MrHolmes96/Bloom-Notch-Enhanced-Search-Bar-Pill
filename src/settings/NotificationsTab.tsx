@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Bell, CornerUpRight, MoveDiagonal, Send, ShieldAlert, Timer } from "lucide-react";
+import {
+	Bell,
+	CornerUpRight,
+	PanelRight,
+	MoveDiagonal,
+	Send,
+	ShieldAlert,
+	Timer
+} from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { useStoredString } from "./useStoredSetting";
 
@@ -11,6 +19,7 @@ export function NotificationsTab() {
 	const [position, setPosition] = useStoredString("bloom-notify-position", "default");
 	const [radius, setRadius] = useStoredString("bloom-notify-radius", "16");
 	const [duration, setDuration] = useStoredString("bloom-notify-duration", "6");
+	const [center, setCenter] = useStoredString("bloom-notification-center", "windows");
 	const [status, setStatus] = useState<string>("off");
 	const bloom = style === "bloom";
 
@@ -48,6 +57,24 @@ export function NotificationsTab() {
 						className="settings-select"
 						value={style}
 						onChange={(e) => setStyle(e.target.value)}
+					>
+						<option value="windows">Windows</option>
+						<option value="bloom">Bloom</option>
+					</select>
+				</SettingRow>
+				<SettingRow
+					icon={PanelRight}
+					label="Notification Center"
+					desc={
+						center === "bloom"
+							? "The bell opens Bloom's own list, in Bloom's look"
+							: "The bell opens Windows' notification center"
+					}
+				>
+					<select
+						className="settings-select"
+						value={center}
+						onChange={(e) => setCenter(e.target.value)}
 					>
 						<option value="windows">Windows</option>
 						<option value="bloom">Bloom</option>

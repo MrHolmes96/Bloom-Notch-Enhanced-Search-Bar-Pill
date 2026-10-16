@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { bestMatch } from "../fuzzy";
 import { copy, open, webUrl } from "../ops";
-import type { WebSource } from "../config";
+import { allWebSources, type WebSource } from "../config";
 import type { Result, SearchContext } from "../types";
 
 function webResult(
@@ -43,7 +43,7 @@ function webResult(
  */
 export function searchWeb(ctx: SearchContext, keyword: string | null, search: string): Result[] {
 	const text = search.trim();
-	const sources = ctx.config.web.sources.filter(
+	const sources = allWebSources(ctx.config).filter(
 		(s) => s.enabled && (keyword ? s.keyword === keyword : s.keyword === "*")
 	);
 	if (!keyword && !text) return [];
@@ -60,7 +60,7 @@ export async function webSuggestions(
 	const { web } = ctx.config;
 	const text = search.trim();
 	if (!web.suggestions || !text) return [];
-	const sources = web.sources.filter(
+	const sources = allWebSources(ctx.config).filter(
 		(s) => s.enabled && (keyword ? s.keyword === keyword : s.keyword === "*")
 	);
 	if (!sources.length) return [];

@@ -1,4 +1,4 @@
-import type { LauncherConfig, PluginId } from "./config";
+import { allWebSources, type LauncherConfig, type PluginId } from "./config";
 import { minScore, scoreMatch } from "./fuzzy";
 import { forgetHistory, recentHistory, type HistoryEntry } from "./history";
 import { open, openApp, runCommandLine } from "./ops";
@@ -32,7 +32,7 @@ export function keywordTargets(config: LauncherConfig): Map<string, Target> {
 		add(config.explorer.contentKeyword, { plugin: "explorer", mode: "content" });
 	}
 	if (config.plugins.web.enabled) {
-		for (const s of config.web.sources) if (s.enabled) add(s.keyword, { plugin: "web" });
+		for (const s of allWebSources(config)) if (s.enabled) add(s.keyword, { plugin: "web" });
 	}
 	return map;
 }
