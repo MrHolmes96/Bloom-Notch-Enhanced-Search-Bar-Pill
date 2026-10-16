@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Bell, X } from "lucide-react";
 import { initTheme } from "../theme";
 import { useSettingsSync } from "../hooks/useSettingsSync";
+import { ToastActions, type ToastButton, type ToastInput } from "./ToastActions";
 import "./Notifications.css";
 
 /**
@@ -20,6 +21,9 @@ interface Incoming {
 	icon: string | null;
 	title: string;
 	body: string;
+	time: number;
+	buttons: ToastButton[];
+	inputs: ToastInput[];
 }
 
 interface Card extends Incoming {
@@ -43,6 +47,7 @@ export default function Notifications() {
 		() => localStorage.getItem("bloom-notify-position") ?? "default"
 	);
 	const [hovered, setHovered] = useState(false);
+	const [typing, setTyping] = useState(false);
 	const stackRef = useRef<HTMLDivElement>(null);
 	const nextKey = useRef(1);
 	const timers = useRef(new Map<number, number>());
@@ -72,9 +77,10 @@ export default function Notifications() {
 		};
 	}, []);
 
-	// Each card leaves after the set time; hovering the stack holds them all.
+	// Each card leaves after the set time; hovering the stack, or typing a
+	// reply, holds them all.
 	useEffect(() => {
-		if (hovered) {
+		if (hovered || typing) {
 			for (const timer of timers.current.values()) window.clearTimeout(timer);
 			timers.current.clear();
 			return;
@@ -86,7 +92,12 @@ export default function Notifications() {
 				window.setTimeout(() => remove(card.key), Math.max(2, duration) * 1000)
 			);
 		}
-	}, [cards, hovered, duration]);
+	}, [cards, hovered, typing, duration]);
+
+	const allowTyping = (on: boolean) => {
+		setTyping(on);
+		void invoke("notifications_allow_typing", { typing: on }).catch(() => {});
+	};
 
 	// The window follows the stack's height; an empty stack hides it.
 	useEffect(() => {
@@ -126,9 +137,11 @@ export default function Notifications() {
 						onClick={() => {
 							remove(card.key);
 							if (card.id !== 0) {
-								invoke("notification_activate", { id: card.id, aumid: card.aumid }).catch(
-									console.error
-								);
+								invoke("notification_activate", {
+									id: card.id,
+									aumid: card.aumid,
+									time: card.time
+								}).catch(console.error);
 							}
 						}}
 					>
@@ -154,6 +167,22 @@ export default function Notifications() {
 						</div>
 						<div className="notify-title">{card.title}</div>
 						{card.body && <div className="notify-body">{card.body}</div>}
+						<ToastActions
+							buttons={card.buttons ?? []}
+							inputs={card.inputs ?? []}
+							onTyping={allowTyping}
+							onPress={(button, typed) => {
+								remove(card.key);
+								allowTyping(false);
+								invoke("notification_action", {
+									id: card.id,
+									aumid: card.aumid,
+									time: card.time,
+									button,
+									typed
+								}).catch(console.error);
+							}}
+						/>
 					</motion.div>
 				))}
 			</AnimatePresence>

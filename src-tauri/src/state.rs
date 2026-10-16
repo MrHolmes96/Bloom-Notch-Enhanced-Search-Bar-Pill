@@ -35,7 +35,7 @@ pub static ICON_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new(
 pub static INSTALLED_APPS_CACHE: OnceLock<Mutex<Vec<AppInfo>>> = OnceLock::new();
 pub static IS_SCANNING: AtomicBool = AtomicBool::new(false);
 
-pub static BRIGHTNESS_SENDER: OnceLock<Sender<u32>> = OnceLock::new();
+pub static BRIGHTNESS_SENDER: OnceLock<Sender<crate::brightness::Job>> = OnceLock::new();
 pub static CURRENT_BRIGHTNESS: AtomicU32 = AtomicU32::new(50);
 pub static CURRENT_VOLUME: AtomicU32 = AtomicU32::new(50);
 pub static LAST_BRIGHTNESS_CHANGE: AtomicI64 = AtomicI64::new(0);

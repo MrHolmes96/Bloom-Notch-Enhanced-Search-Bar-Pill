@@ -119,3 +119,88 @@ body {
 	-webkit-box-orient: vertical;
 	overflow: hidden;
 }
+
+/* A notification's own buttons and reply box, as on Windows' pop-up. */
+.notify-actions-area {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-top: 10px;
+	cursor: default;
+}
+
+.notify-actions {
+	display: flex;
+	gap: 6px;
+}
+
+.notify-action {
+	flex: 1;
+	min-width: 0;
+	padding: 6px 10px;
+	border: none;
+	border-radius: max(6px, calc(var(--notify-radius, 16px) - 8px));
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.08));
+	color: var(--bloom-text, #fff);
+	font-family: inherit;
+	font-size: 12px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	cursor: pointer;
+	transition: background 0.15s ease;
+}
+
+.notify-action:hover {
+	background: var(--bloom-border, rgba(255, 255, 255, 0.16));
+}
+
+.notify-reply {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0 4px 0 10px;
+	border-radius: max(6px, calc(var(--notify-radius, 16px) - 8px));
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.08));
+}
+
+.notify-reply input {
+	flex: 1;
+	min-width: 0;
+	padding: 7px 0;
+	border: none;
+	outline: none;
+	background: transparent;
+	color: var(--bloom-text, #fff);
+	font-family: inherit;
+	font-size: 12px;
+	user-select: text;
+	-webkit-user-select: text;
+}
+
+.notify-reply input::placeholder {
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.5));
+}
+
+.notify-reply-send {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	border: none;
+	border-radius: 7px;
+	background: transparent;
+	color: var(--bloom-text, #fff);
+	cursor: pointer;
+}
+
+.notify-reply-send:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
+.notify-reply-send:not(:disabled):hover {
+	background: var(--bloom-border, rgba(255, 255, 255, 0.16));
+}

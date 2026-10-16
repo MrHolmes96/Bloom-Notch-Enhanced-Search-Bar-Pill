@@ -26,7 +26,9 @@ serde_json = "1"
 windows-core = "0.61"
 windows-collections = "0.2"
 windows = { version = "0.61", features = [
+	"Win32_UI_Input",
 	"Win32_UI_Input_KeyboardAndMouse",
+	"Win32_Devices_HumanInterfaceDevice",
 	"Win32_UI_Shell",
 	"Win32_UI_Shell_PropertiesSystem",
 	"Win32_UI_Shell_Common",
@@ -64,6 +66,7 @@ windows = { version = "0.61", features = [
 	"Win32_System_LibraryLoader",
 	"Win32_System_IO",
 	"Win32_Security",
+	"Win32_Security_Cryptography",
 	"Win32_System_Registry",
 	"Win32_Devices_FunctionDiscovery",
 	"Devices_Radios",
@@ -80,6 +83,8 @@ windows = { version = "0.61", features = [
 	"Networking_NetworkOperators",
 	"UI_Notifications",
 	"UI_Notifications_Management",
+	"Data_Xml_Dom",
+	"Win32_UI_Notifications",
 	"ApplicationModel"
 ] }
 base64 = "0.22"

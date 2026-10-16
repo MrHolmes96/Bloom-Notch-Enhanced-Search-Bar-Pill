@@ -1,7 +1,7 @@
-/* Bloom's notification center: one Bloom surface down the right side. */
+/* Bloom's notification center: one Bloom surface at the top right, as tall as
+   its notifications (the window follows its height). */
 .center-panel {
 	box-sizing: border-box;
-	height: 100vh;
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
@@ -26,6 +26,30 @@
 	font-weight: 600;
 }
 
+.center-header-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.center-icon-button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	border: none;
+	border-radius: 999px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.08));
+	color: var(--bloom-text, #fff);
+	cursor: pointer;
+}
+
+.center-icon-button:hover {
+	background: var(--bloom-border, rgba(255, 255, 255, 0.15));
+}
+
 .center-clear,
 .center-actions button {
 	padding: 4px 12px;
@@ -44,7 +68,7 @@
 }
 
 .center-list {
-	flex: 1;
+	max-height: var(--center-list-max, 600px);
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
@@ -63,7 +87,7 @@
 }
 
 .center-empty {
-	flex: 1;
+	padding: 18px 0 14px;
 	display: flex;
 	flex-direction: column;
 	align-items: center;

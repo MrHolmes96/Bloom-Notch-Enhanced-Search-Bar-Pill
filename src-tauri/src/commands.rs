@@ -714,7 +714,7 @@ fn is_pwa_shortcut_for(app: &AppInfo, name: &str, host_exe: &str) -> bool {
 }
 
 /// Opens a file path, shortcut, or shell application id through the shell.
-fn launch_path(path: &str) {
+pub(crate) fn launch_path(path: &str) {
     unsafe {
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -1171,6 +1171,7 @@ fn get_cache_key(path: &str, name: Option<&str>) -> String {
         || path_lc.contains("chrome.exe")
         || path_lc.contains("brave.exe")
         || path_lc.contains("applicationframehost.exe")
+        || is_java_runtime(path)
     {
         format!("{}:{}", path, name_lc)
     } else {
@@ -1242,6 +1243,61 @@ pub fn is_aumid_path(path: &str) -> bool {
         return false;
     }
     true
+}
+
+/// A Java desktop window (AWT/Swing "SunAwt…", JavaFX "Glass…").
+unsafe fn is_java_window(hwnd: HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::GetClassNameW;
+    let mut class = [0u16; 64];
+    let length = GetClassNameW(hwnd, &mut class) as usize;
+    let class = String::from_utf16_lossy(&class[..length.min(class.len())]);
+    class.starts_with("SunAwt") || class.starts_with("GlassWndClass")
+}
+
+/// The Java runtime itself hosts the app (no launcher exe of its own).
+fn is_java_runtime(path: &str) -> bool {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| {
+            ["java.exe", "javaw.exe", "jp2launcher.exe"]
+                .iter()
+                .any(|runtime| n.eq_ignore_ascii_case(runtime))
+        })
+}
+
+/// An app that ships its own Java runtime (`RuneLite\jre\bin\javaw.exe`)
+/// usually has a launcher named after its folder (`RuneLite\RuneLite.exe`).
+fn bundled_java_launcher(runtime: &str) -> Option<String> {
+    let app_dir = std::path::Path::new(runtime).parent()?.parent()?.parent()?;
+    let name = app_dir.file_name()?.to_str()?;
+    let launcher = app_dir.join(format!("{}.exe", name));
+    launcher
+        .is_file()
+        .then(|| launcher.to_string_lossy().into_owned())
+}
+
+/// The icon an app set on its window, as the taskbar shows it.
+unsafe fn window_own_icon(hwnd: HWND) -> Option<windows::Win32::UI::WindowsAndMessaging::HICON> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, HICON, ICON_BIG, ICON_SMALL, ICON_SMALL2, SMTO_ABORTIFHUNG, WM_GETICON,
+    };
+    for kind in [ICON_BIG, ICON_SMALL2, ICON_SMALL] {
+        let mut result = 0usize;
+        let _ = SendMessageTimeoutW(
+            hwnd,
+            WM_GETICON,
+            windows::Win32::Foundation::WPARAM(kind as usize),
+            windows::Win32::Foundation::LPARAM(0),
+            SMTO_ABORTIFHUNG,
+            250,
+            Some(&mut result),
+        );
+        if result != 0 {
+            return Some(HICON(result as *mut _));
+        }
+    }
+    None
 }
 
 fn is_browser_host_process(path: &str) -> bool {
@@ -1645,7 +1701,8 @@ fn image_size_score(path: &std::path::Path) -> u64 {
 
 /// v2: pinned apps use the shell's large shortcut icon; icons cached by the
 /// old lookup are dropped once so they are fetched again.
-const ICON_CACHE_FILE: &str = "icons_cache_v2.json";
+/// v3: Java windows (RuneLite) were cached with the Java runtime's icon.
+const ICON_CACHE_FILE: &str = "icons_cache_v3.json";
 
 static LAST_ICON_SAVE_REQUEST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
@@ -1700,7 +1757,9 @@ pub async fn get_app_icon(
     }
 
     let cache = ICON_CACHE.get_or_init(|| {
-        let _ = std::fs::remove_file(cache_dir.join("icons_cache.json"));
+        for old in ["icons_cache.json", "icons_cache_v2.json"] {
+            let _ = std::fs::remove_file(cache_dir.join(old));
+        }
         let mut map = std::collections::HashMap::new();
         if let Ok(content) = std::fs::read_to_string(&cache_path) {
             if let Ok(existing) =
@@ -1796,6 +1855,24 @@ pub async fn get_app_icon(
             }
 
             let h_hwnd = HWND(h as *mut _);
+
+            // Java windows (AWT/Swing, JavaFX) all carry the Java runtime's
+            // class icon; the app's own icon is the one set on the window.
+            // An app with its own launcher (RuneLite.exe) has that icon on
+            // its exe too, sharper, so the file icon below is used instead.
+            if is_java_window(h_hwnd) {
+                if !is_java_runtime(&path_owned) {
+                    CoUninitialize();
+                    return None;
+                }
+                let icon = bundled_java_launcher(&path_owned)
+                    .and_then(|launcher| shell_item_icon(&launcher))
+                    .or_else(|| window_own_icon(h_hwnd).and_then(|i| icon_to_base64(i)));
+                if icon.is_some() {
+                    CoUninitialize();
+                    return icon;
+                }
+            }
 
             let mut h_icon = windows::Win32::UI::WindowsAndMessaging::HICON(GetClassLongPtrW(
                 h_hwnd, GCLP_HICON,
@@ -2192,6 +2269,13 @@ pub fn hide_native_osd() {
             let _ = ShowWindow(hwnd, SW_HIDE);
         }
     }
+}
+
+/// Opens Bloom's settings on one page ("integrations", "notch", …).
+#[tauri::command]
+pub fn open_settings_tab(app: AppHandle, tab: String) {
+    open_settings_window(app.clone());
+    let _ = app.emit_to("settings", "settings-open-tab", tab);
 }
 
 #[tauri::command]
@@ -3453,7 +3537,7 @@ pub fn set_brightness(app: AppHandle, brightness: u32) {
         BrightnessChangeEvent { brightness: val },
     );
     if let Some(tx) = crate::state::BRIGHTNESS_SENDER.get() {
-        let _ = tx.send(val);
+        let _ = tx.send(crate::brightness::Job::everywhere(val));
     }
 }
 
@@ -4182,6 +4266,19 @@ mod pwa_icon_tests {
             Some("C:\\Start Menu\\Netflix.lnk".into())
         );
     }
+}
+
+/// The notch's tray: each live icon, where Windows keeps it, and what Tray
+/// Icon Manager hides.
+#[tauri::command]
+pub async fn get_tray_state() -> crate::tray::TrayState {
+    tauri::async_runtime::spawn_blocking(crate::tray::tray_state)
+        .await
+        .unwrap_or(crate::tray::TrayState {
+            icons: Vec::new(),
+            manager_found: false,
+            manager_entries: Vec::new(),
+        })
 }
 
 #[tauri::command]

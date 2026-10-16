@@ -18,6 +18,7 @@ import {
 import { SettingRow } from "./SettingRow";
 import { useStoredFlag } from "./useStoredSetting";
 import { ControlCenterSettings } from "./ControlCenterSettings";
+import { TraySettings } from "./TraySettings";
 import { StatusWidgetConfig } from "../components/StatusWidgetConfig";
 import type { WidgetConfig } from "./types";
 
@@ -429,6 +430,7 @@ export function NotchTab({
 			</div>
 
 			<ControlCenterSettings />
+			<TraySettings />
 		</>
 	);
 }

@@ -1,0 +1,257 @@
+/* Blitzit in the notch. Sits below the notch's 36px top strip, like notes. */
+.blitzit-panel {
+	position: absolute;
+	top: 36px;
+	left: 0;
+	width: 100%;
+	height: calc(100% - 36px);
+	box-sizing: border-box;
+	z-index: 2;
+	padding: 12px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	color: var(--bloom-text, white);
+	border-radius: 0 0 18px 18px;
+	overflow: hidden;
+	font-size: 12px;
+}
+
+.blitzit-top {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 30px;
+	flex: none;
+}
+
+.blitzit-mark {
+	width: 16px;
+	height: 16px;
+	color: #ffc23d;
+	flex: none;
+}
+
+.blitzit-title {
+	flex: 1;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.blitzit-icon {
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: none;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.65));
+	cursor: pointer;
+}
+
+.blitzit-icon:hover:not(:disabled) {
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.08));
+	color: var(--bloom-text, white);
+}
+
+.blitzit-icon:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
+.blitzit-icon svg,
+.blitzit-start svg,
+.blitzit-check svg {
+	width: 14px;
+	height: 14px;
+}
+
+.blitzit-start {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 28px;
+	padding: 0 12px;
+	border: none;
+	border-radius: 999px;
+	background: var(--bloom-accent, #0a84ff);
+	color: #fff;
+	font-family: inherit;
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: filter 0.15s ease;
+}
+
+.blitzit-start:hover:not(:disabled) {
+	filter: brightness(1.12);
+}
+
+.blitzit-start:disabled {
+	opacity: 0.7;
+	cursor: default;
+}
+
+.blitzit-add {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	height: 34px;
+	flex: none;
+	padding: 0 4px 0 10px;
+	border-radius: 12px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.06));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.08));
+}
+
+.blitzit-input {
+	flex: 1;
+	min-width: 0;
+	border: none;
+	outline: none;
+	background: transparent;
+	color: var(--bloom-text, white);
+	font-family: inherit;
+	font-size: 12px;
+}
+
+.blitzit-input::placeholder {
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.45));
+}
+
+.blitzit-select {
+	max-width: 92px;
+	height: 24px;
+	padding: 0 4px;
+	border: none;
+	border-radius: 7px;
+	background: var(--bloom-border, rgba(255, 255, 255, 0.1));
+	color: var(--bloom-text, white);
+	font-family: inherit;
+	font-size: 11px;
+	outline: none;
+	cursor: pointer;
+}
+
+.blitzit-select option {
+	background: #1c1c1e;
+	color: #fff;
+}
+
+.blitzit-tasks {
+	display: flex;
+	flex-direction: column;
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bloom-scrollbar-thumb, rgba(255, 255, 255, 0.15)) transparent;
+}
+
+.blitzit-task {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 28px;
+	flex: none;
+	padding: 0 4px;
+	border-radius: 8px;
+}
+
+.blitzit-task:hover {
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.05));
+}
+
+.blitzit-check {
+	width: 16px;
+	height: 16px;
+	padding: 0;
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 1.5px solid var(--bloom-text-muted, rgba(255, 255, 255, 0.5));
+	border-radius: 5px;
+	background: transparent;
+	color: var(--bloom-text, white);
+	cursor: pointer;
+}
+
+.blitzit-check:disabled {
+	cursor: default;
+}
+
+.blitzit-task.is-done .blitzit-check {
+	border-color: var(--bloom-accent, #0a84ff);
+	background: var(--bloom-accent, #0a84ff);
+	color: #fff;
+}
+
+.blitzit-check svg {
+	width: 11px;
+	height: 11px;
+}
+
+.blitzit-task-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.blitzit-task.is-done .blitzit-task-name {
+	opacity: 0.5;
+	text-decoration: line-through;
+}
+
+.blitzit-message {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 30px;
+	padding: 0 8px;
+	border: none;
+	border-radius: 10px;
+	background: transparent;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.6));
+	font-family: inherit;
+	font-size: 11px;
+	text-align: center;
+}
+
+.blitzit-message.is-action {
+	cursor: pointer;
+}
+
+.blitzit-message.is-action:hover {
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.06));
+	color: var(--bloom-text, white);
+}
+
+.blitzit-toast {
+	position: absolute;
+	left: 14px;
+	right: 14px;
+	bottom: 8px;
+	padding: 5px 10px;
+	border-radius: 8px;
+	background: var(--bloom-bg-expanded, rgba(0, 0, 0, 0.9));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.12));
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.75));
+	font-size: 11px;
+	text-align: center;
+	pointer-events: none;
+}
+
+.blitzit-spin {
+	animation: blitzit-spin 0.9s linear infinite;
+}
+
+@keyframes blitzit-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}

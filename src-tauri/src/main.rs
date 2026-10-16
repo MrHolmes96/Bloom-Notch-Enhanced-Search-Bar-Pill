@@ -1,9 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bluetooth;
+mod brightness;
 mod commands;
 mod dock_extras;
-mod ghelper;
+mod integrations;
 mod jumplist;
 mod launcher;
 mod live_preview;
@@ -14,6 +15,7 @@ mod services;
 mod shelf;
 mod shelf_preview;
 mod state;
+mod toast;
 mod tray;
 mod types;
 mod updater;
@@ -104,7 +106,7 @@ fn main() {
         }
     }
 
-    setup_brightness_worker();
+    brightness::setup_worker();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -118,6 +120,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             hide_native_osd,
             open_settings_window,
+            open_settings_tab,
             open_wifi_settings,
             open_sound_settings,
             open_notification_center,
@@ -153,6 +156,7 @@ fn main() {
             shelf_open,
             get_active_windows,
             get_tray_apps,
+            get_tray_state,
             show_tray_context_menu,
             activate_tray_icon,
             open_system_action,
@@ -241,12 +245,23 @@ fn main() {
             end_task,
             live_preview::dock_live_previews,
             window_memory::forget_window_sizes,
-            ghelper::ghelper_brightness,
-            ghelper::set_ghelper_brightness_step,
             quick_settings::quick_settings_state,
             quick_settings::quick_setting_action,
             notifications::notifications_status,
+            integrations::blitzit::blitzit_status,
+            integrations::blitzit::blitzit_connect,
+            integrations::blitzit::blitzit_cancel_connect,
+            integrations::blitzit::blitzit_disconnect,
+            integrations::blitzit::blitzit_lists,
+            integrations::blitzit::blitzit_tasks,
+            integrations::blitzit::blitzit_add_task,
+            integrations::blitzit::blitzit_complete_task,
+            integrations::blitzit::blitzit_start,
+            integrations::blitzit::blitzit_open,
             notifications::notification_activate,
+            notifications::notification_action,
+            notifications::notification_center_fit,
+            notifications::notifications_allow_typing,
             notifications::notifications_set_size,
             notifications::notifications_test,
             notifications::notifications_open_privacy,

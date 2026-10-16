@@ -49,8 +49,8 @@ export function NotificationsTab() {
 					label="Style"
 					desc={
 						bloom
-							? "Bloom cards with Bloom's colors and opacity. Clicking one opens its app"
-							: "Windows' own pop-ups, with buttons and replies"
+							? "Bloom cards in Bloom's colors and opacity, with the notification's own buttons and replies"
+							: "Windows' own pop-ups"
 					}
 				>
 					<select
@@ -67,7 +67,7 @@ export function NotificationsTab() {
 					label="Notification Center"
 					desc={
 						center === "bloom"
-							? "The bell opens Bloom's own list, in Bloom's look"
+							? "The bell opens Bloom's own list, in Bloom's look, sized to what's in it"
 							: "The bell opens Windows' notification center"
 					}
 				>

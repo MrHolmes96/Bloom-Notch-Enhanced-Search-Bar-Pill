@@ -32,6 +32,7 @@ import { ShelfTypeIcon } from "./components/ShelfTypeIcon";
 import { WifiPanel } from "./components/WifiPanel";
 import { BluetoothPanel } from "./components/BluetoothPanel";
 import { TrayPanel, trayPanelHeight } from "./components/TrayPanel";
+import { BlitzitPanel, blitzitPanelHeight } from "./components/BlitzitPanel";
 import {
 	NOTES_KEY,
 	NotesPanel,
@@ -459,6 +460,7 @@ type BloomMode =
 	| "status"
 	| "shelf"
 	| "notes"
+	| "blitzit"
 	| "tray"
 	| "wifi"
 	| "bluetooth";
@@ -927,13 +929,18 @@ function App() {
 	const [shelfInScroll, setShelfInScroll] = useState(
 		() => localStorage.getItem("bloom-notch-shelf-in-scroll") !== "false"
 	);
-	// How many tray icons the notch's tray view shows (for its height).
-	const [trayCount, setTrayCount] = useState(5);
+	// The notch tray view's height, as the tray panel reports it.
+	const [trayHeight, setTrayHeight] = useState(() => trayPanelHeight(5, 0, 0, false, false));
 	// Quick notes and to-dos, reached through the scroll menu.
 	const [notes, setNotes] = useState<NoteItem[]>(() => parseNotes(localStorage.getItem(NOTES_KEY)));
 	const [notesInScroll, setNotesInScroll] = useState(
 		() => localStorage.getItem("bloom-notch-notes-in-scroll") !== "false"
 	);
+	// Blitzit's page in the scroll menu (Settings > Integrations).
+	const [blitzitInScroll, setBlitzitInScroll] = useState(
+		() => localStorage.getItem("bloom-notch-blitzit") !== "false"
+	);
+	const [blitzitHeight, setBlitzitHeight] = useState(() => blitzitPanelHeight(false, 0, true));
 	const saveNotes = (next: NoteItem[]) => {
 		setNotes(next);
 		const value = JSON.stringify(next);
@@ -1002,6 +1009,7 @@ function App() {
 				setCcButtons(parseCCButtons(getVal(CC_KEY)));
 				setNotes(parseNotes(getVal(NOTES_KEY)));
 				setNotesInScroll(getVal("bloom-notch-notes-in-scroll", "true") !== "false");
+				setBlitzitInScroll(getVal("bloom-notch-blitzit", "true") !== "false");
 				setSettingsMusicCompactNotch(getVal("bloom-music-compact-notch", "true") !== "false");
 				setWidgetsOnHoverOnly(getVal("bloom-notch-widgets-on-hover", "true") !== "false");
 				setLastPanel(asNotchPanel(getVal("bloom-notch-last-panel")));
@@ -1160,6 +1168,7 @@ function App() {
 			[CC_KEY]: (v: unknown) => setCcButtons(parseCCButtons(v)),
 			[NOTES_KEY]: (v: unknown) => setNotes(parseNotes(v)),
 			"bloom-notch-notes-in-scroll": setNotesInScroll,
+			"bloom-notch-blitzit": (v: unknown) => setBlitzitInScroll(v !== false && v !== "false"),
 			"bloom-music-compact-notch": setSettingsMusicCompactNotch,
 			"bloom-notch-widgets-on-hover": setWidgetsOnHoverOnly,
 			"bloom-notch-last-panel": (v: unknown) => setLastPanel(asNotchPanel(v)),
@@ -1492,6 +1501,7 @@ function App() {
 			prev === "status" ||
 			prev === "shelf" ||
 			prev === "notes" ||
+			prev === "blitzit" ||
 			prev === "tray" ||
 			prev === "wifi" ||
 			prev === "bluetooth"
@@ -1776,7 +1786,8 @@ function App() {
 	const scrollModes = (): BloomMode[] => [
 		...NOTCH_PANELS.filter(panelAvailable),
 		...(shelfInScroll ? (["shelf"] as const) : []),
-		...(notesInScroll ? (["notes"] as const) : [])
+		...(notesInScroll ? (["notes"] as const) : []),
+		...(blitzitInScroll ? (["blitzit"] as const) : [])
 	];
 
 	// Wheel and swipe navigate panels, even from a collapsed live activity.
@@ -2594,7 +2605,7 @@ function App() {
 	const getDynamicWidth = () => {
 		if (bloomMode === "announcement" && announcement && !announcementDismissed) return 380;
 		if (isCalendarMode) return 480;
-		if (bloomMode === "shelf" || bloomMode === "notes") return 380;
+		if (bloomMode === "shelf" || bloomMode === "notes" || bloomMode === "blitzit") return 380;
 		if (bloomMode === "command-center" && isOpen) return 350;
 		if (bloomMode === "wifi" || bloomMode === "bluetooth" || bloomMode === "tray") return 350;
 		if (showMusicOnStatusHover) {
@@ -2634,6 +2645,7 @@ function App() {
 			return shelfOverflowing ? 190 : 176;
 		}
 		if (bloomMode === "notes") return 36 + notesPanelHeight(notes);
+		if (bloomMode === "blitzit") return 36 + blitzitHeight;
 		if (bloomMode === "command-center") {
 			if (!isOpen) return 36;
 			// One row of round buttons is part of the base height; each extra row
@@ -2642,7 +2654,7 @@ function App() {
 			return 230 + (rows === 0 ? -42 : (rows - 1) * 42);
 		}
 		if (bloomMode === "wifi" || bloomMode === "bluetooth") return 300;
-		if (bloomMode === "tray") return 36 + trayPanelHeight(trayCount);
+		if (bloomMode === "tray") return 36 + trayHeight;
 		if (bloomMode === "status") return 36;
 		if (isMusicMode && isOpen) {
 			const hasProgressBar = (mediaInfo.duration_ms ?? 0) > 0;
@@ -3522,7 +3534,7 @@ function App() {
 										>
 											<TrayPanel
 												onBack={() => setBloomMode("command-center")}
-												onCountChange={setTrayCount}
+												onHeightChange={setTrayHeight}
 											/>
 										</motion.div>
 									)}
@@ -3901,6 +3913,27 @@ function App() {
 													</div>
 												</div>
 											</div>
+										</motion.div>
+									)}
+								</AnimatePresence>
+
+								{/* Blitzit: add tasks, start Blitz mode */}
+								<AnimatePresence>
+									{bloomMode === "blitzit" && (
+										<motion.div
+											key="blitzit-view"
+											initial={{ opacity: 0 }}
+											animate={{ opacity: 1 }}
+											exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.1 } }}
+											transition={{ type: "spring", stiffness: 400, damping: 30 }}
+										>
+											<BlitzitPanel
+												onPinChange={setNotchPinned}
+												onHeightChange={setBlitzitHeight}
+												onOpenSettings={() =>
+													void invoke("open_settings_tab", { tab: "integrations" })
+												}
+											/>
 										</motion.div>
 									)}
 								</AnimatePresence>

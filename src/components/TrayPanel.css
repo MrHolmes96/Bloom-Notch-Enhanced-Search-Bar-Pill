@@ -1,12 +1,28 @@
 /* The system tray inside the notch. */
+.tray-body {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bloom-scrollbar-thumb, rgba(255, 255, 255, 0.15)) transparent;
+}
+
 .tray-grid {
 	display: grid;
 	grid-template-columns: repeat(5, 1fr);
 	grid-auto-rows: 64px;
 	gap: 6px;
-	overflow-y: auto;
-	scrollbar-width: thin;
-	scrollbar-color: var(--bloom-scrollbar-thumb, rgba(255, 255, 255, 0.15)) transparent;
+	flex: none;
+}
+
+.tray-tile-wrap {
+	position: relative;
+	min-width: 0;
+}
+
+.tray-tile-wrap.is-hidden .tray-tile {
+	opacity: 0.45;
 }
 
 .tray-tile {
@@ -15,6 +31,8 @@
 	align-items: center;
 	justify-content: center;
 	gap: 5px;
+	width: 100%;
+	height: 100%;
 	min-width: 0;
 	padding: 6px 4px;
 	border: none;
@@ -23,7 +41,9 @@
 	color: var(--bloom-text, white);
 	font-family: inherit;
 	cursor: pointer;
-	transition: background 0.15s ease;
+	transition:
+		background 0.15s ease,
+		opacity 0.15s ease;
 }
 
 .tray-tile:hover {
@@ -54,6 +74,96 @@
 	white-space: nowrap;
 	font-size: 10px;
 	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.75));
+}
+
+/* Editing: small round buttons on the tile's top corners. */
+.tray-tile-edit {
+	position: absolute;
+	top: 3px;
+	left: 3px;
+	right: 3px;
+	display: flex;
+	justify-content: space-between;
+	pointer-events: none;
+}
+
+.tray-tile-edit button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border: none;
+	border-radius: 999px;
+	background: var(--bloom-bg-expanded, rgba(0, 0, 0, 0.85));
+	color: var(--bloom-text, white);
+	cursor: pointer;
+	pointer-events: auto;
+	box-shadow: 0 0 0 1px var(--bloom-border, rgba(255, 255, 255, 0.15));
+}
+
+.tray-tile-edit button:only-child {
+	margin-left: auto;
+}
+
+.tray-tile-edit button:hover {
+	background: var(--bloom-accent, #0a84ff);
+}
+
+.tray-tile-edit svg {
+	width: 11px;
+	height: 11px;
+}
+
+/* "Hidden icons", like the ^ button on Windows' taskbar. */
+.tray-section {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: none;
+	height: 28px;
+	padding: 0 10px;
+	border: none;
+	border-radius: 10px;
+	background: transparent;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.7));
+	font-family: inherit;
+	font-size: 11px;
+	text-align: left;
+	cursor: pointer;
+}
+
+button.tray-section:hover {
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.06));
+	color: var(--bloom-text, white);
+}
+
+.tray-section.is-static {
+	cursor: default;
+}
+
+.tray-section-count {
+	padding: 1px 6px;
+	border-radius: 999px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.08));
+	font-size: 10px;
+}
+
+.tray-section-chevron {
+	width: 14px;
+	height: 14px;
+	margin-left: auto;
+	transition: transform 0.2s ease;
+}
+
+.tray-section.is-open .tray-section-chevron {
+	transform: rotate(180deg);
+}
+
+.qp-icon-btn.is-active {
+	background: var(--bloom-border, rgba(255, 255, 255, 0.15));
+	color: var(--bloom-text, white);
 }
 
 .tray-message {

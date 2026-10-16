@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { Bell, BellOff, ShieldAlert, X } from "lucide-react";
+import { Bell, BellOff, PanelRight, ShieldAlert, X } from "lucide-react";
 import { initTheme } from "../theme";
 import { useSettingsSync } from "../hooks/useSettingsSync";
+import { ToastActions, type ToastButton, type ToastInput } from "./ToastActions";
 import "./Notifications.css";
 import "./NotificationCenter.css";
 
 /**
  * Bloom's notification center (Settings > Notifications > Notification
- * Center: Bloom): the same notifications as Windows' sidebar, in Bloom's look.
+ * Center: Bloom): the same notifications as Windows' sidebar, in Bloom's look,
+ * with their buttons and reply boxes. It hangs from the top of the screen and
+ * is only as tall as its notifications; past about six the list scrolls.
  * Opened by the notch's bell button; closes when it loses focus or on Escape.
  */
 
@@ -23,6 +26,8 @@ interface Item {
 	title: string;
 	body: string;
 	time: number;
+	buttons: ToastButton[];
+	inputs: ToastInput[];
 }
 
 const appWindow = getCurrentWebviewWindow();
@@ -48,6 +53,21 @@ export default function NotificationCenter() {
 	const [radius, setRadius] = useState(() =>
 		Number(localStorage.getItem("bloom-notify-radius") ?? 16)
 	);
+	const panelRef = useRef<HTMLDivElement>(null);
+
+	// The window follows the panel's height, so nothing below it blocks clicks.
+	useEffect(() => {
+		const panel = panelRef.current;
+		if (!panel) return;
+		const fit = () => {
+			const height = Math.ceil(panel.getBoundingClientRect().height);
+			if (height > 0) void invoke("notification_center_fit", { height }).catch(() => {});
+		};
+		const observer = new ResizeObserver(fit);
+		observer.observe(panel);
+		fit();
+		return () => observer.disconnect();
+	}, []);
 
 	useEffect(() => initTheme(), []);
 	useSettingsSync({ "bloom-notify-radius": (v) => setRadius(Number(v) || 0) });
@@ -85,25 +105,47 @@ export default function NotificationCenter() {
 		void invoke("notification_remove", { id }).catch(console.error);
 	};
 
+	const openWindowsCenter = () => {
+		void invoke("notification_center_hide");
+		void invoke("open_windows_notification_center");
+	};
+
 	return (
 		<div
+			ref={panelRef}
 			className="center-panel"
-			style={{ "--notify-radius": `${radius}px` } as React.CSSProperties}
+			style={
+				{
+					"--notify-radius": `${radius}px`,
+					// Room for about six notifications; more scroll.
+					"--center-list-max": `${Math.max(240, Math.min(600, window.screen.availHeight - 140))}px`
+				} as React.CSSProperties
+			}
 		>
 			<div className="center-header">
 				<span className="center-title">Notifications</span>
-				{items.length > 0 && (
+				<div className="center-header-actions">
+					{items.length > 0 && (
+						<button
+							type="button"
+							className="center-clear"
+							onClick={() => {
+								setItems([]);
+								void invoke("notification_clear_all").catch(console.error);
+							}}
+						>
+							Clear all
+						</button>
+					)}
 					<button
 						type="button"
-						className="center-clear"
-						onClick={() => {
-							setItems([]);
-							void invoke("notification_clear_all").catch(console.error);
-						}}
+						className="center-icon-button"
+						title="Windows' notification center (Do not disturb, notification settings)"
+						onClick={openWindowsCenter}
 					>
-						Clear all
+						<PanelRight size={14} />
 					</button>
-				)}
+				</div>
 			</div>
 
 			{problem ? (
@@ -120,13 +162,7 @@ export default function NotificationCenter() {
 								Allow access
 							</button>
 						)}
-						<button
-							type="button"
-							onClick={() => {
-								void invoke("notification_center_hide");
-								void invoke("open_windows_notification_center");
-							}}
-						>
+						<button type="button" onClick={openWindowsCenter}>
 							Open Windows' center
 						</button>
 					</div>
@@ -149,7 +185,11 @@ export default function NotificationCenter() {
 								exit={{ opacity: 0, x: 40, transition: { duration: 0.15 } }}
 								onClick={() => {
 									setItems((prev) => prev.filter((n) => n.id !== item.id));
-									void invoke("notification_activate", { id: item.id, aumid: item.aumid });
+									void invoke("notification_activate", {
+										id: item.id,
+										aumid: item.aumid,
+										time: item.time
+									}).catch(console.error);
 									void invoke("notification_center_hide");
 								}}
 							>
@@ -175,6 +215,20 @@ export default function NotificationCenter() {
 								</div>
 								<div className="notify-title">{item.title}</div>
 								{item.body && <div className="notify-body">{item.body}</div>}
+								<ToastActions
+									buttons={item.buttons ?? []}
+									inputs={item.inputs ?? []}
+									onPress={(button, typed) => {
+										setItems((prev) => prev.filter((n) => n.id !== item.id));
+										invoke("notification_action", {
+											id: item.id,
+											aumid: item.aumid,
+											time: item.time,
+											button,
+											typed
+										}).catch(console.error);
+									}}
+								/>
 							</motion.div>
 						))}
 					</AnimatePresence>

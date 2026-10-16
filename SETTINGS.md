@@ -53,6 +53,8 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-notch-notes-in-scroll` | `"true"` / `"false"` | `"true"` | Scrolling or swiping on the notch also reaches the notes and to-dos panel. |
 | `bloom-notch-notes` | JSON array of `{ id, text, todo, done, created }` | `"[]"` | The notch's quick notes and to-dos, newest first. |
 | `bloom-control-center-buttons` | comma-separated ids, or `"none"` | `"dnd,energy-saver,tray,notifications,bloom-settings,restart-bloom"` | The control center's round buttons, in order. Also: `night-light`, `airplane`, `hotspot`, `rotation-lock`, `live-captions`, `project`, `cast`, `keyboard-layout`, `accessibility`, `nearby-sharing`, `vpn`, `color-filters`. |
+| `bloom-tray-placement` | JSON object of icon key → `"tray"` / `"menu"` / `"hidden"` | `"{}"` | Where an icon shows in the notch's tray when changed in Bloom: in the tray, in its hidden icons, or not at all. Keys are the program's file name (plus Windows' icon id when one program has several icons). Icons not listed follow Windows (taskbar or hidden icons). Bloom only; Windows' tray isn't changed. |
+| `bloom-tray-follow-manager` | `"true"` / `"false"` | `"true"` | Icons Tray Icon Manager hides (`%AppData%\TrayIconManager\config.json`, read only) stay hidden in the notch's tray. |
 
 ### Weather
 
@@ -102,7 +104,7 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-volume-edge-enabled`        | `"true"` / `"false"` | `"true"` | Trigger volume HUD by hovering the left screen edge.                     |
 | `bloom-brightness-overlay-enabled` | `"true"` / `"false"` | `"true"` | Show Bloom brightness HUD when brightness changes.                       |
 | `bloom-brightness-edge-enabled`    | `"true"` / `"false"` | `"true"` | Trigger brightness HUD by hovering the right screen edge.                |
-| `bloom-brightness-key-step` | `"1"` / `"2"` / `"5"` / `"0"` | `"2"` | Percent a brightness key changes the brightness by. Bloom replaces the 10% step Windows (or the keyboard tool) uses; `"0"` keeps it. |
+| `bloom-brightness-key-step` | `"1"` / `"2"` / `"5"` / `"0"` | `"2"` | Percent a brightness key changes the brightness by, on any keyboard: keys that send HID brightness codes (seen through Raw Input) and laptop keys handled by the firmware. Bloom replaces Windows' 10% step; without a built-in screen the keys change external monitors over DDC/CI. `"0"` keeps Windows' own step. |
 
 ### Windows
 
@@ -110,16 +112,25 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | --- | --- | --- | --- |
 | `bloom-window-memory` | `"true"` / `"false"` | `"true"` | Remember each app's window size and position (in `window_positions.json`) and restore it when the app opens again. |
 | `bloom-dock-preview-style` | `"static"` / `"live"` | `"static"` | Dock window previews: a snapshot, or Windows' live preview of the window. |
-| `bloom-notification-center` | `"windows"` / `"bloom"` | `"windows"` | What the notification button opens: Windows' notification center or Bloom's. |
+| `bloom-notification-center` | `"windows"` / `"bloom"` | `"windows"` | What the notification button opens: Windows' notification center or Bloom's (top right, as tall as its notifications, scrolling past about six; buttons and replies work as in Windows). |
 
 ### Notifications
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `bloom-notify-style` | `"windows"` / `"bloom"` | `"windows"` | Windows' own pop-ups, or Bloom cards in Bloom's colors and opacity (Windows' pop-up is then hidden). |
+| `bloom-notify-style` | `"windows"` / `"bloom"` | `"windows"` | Windows' own pop-ups, or Bloom cards in Bloom's colors and opacity with the notification's buttons and reply box (Windows' pop-up is then hidden). |
 | `bloom-notify-position` | `"default"` / `"top-right"` / `"top-left"` / `"bottom-right"` / `"bottom-left"` | `"default"` | Corner notifications come from, in either style. |
 | `bloom-notify-radius` | number (px) | `"16"` | Corner rounding of Bloom cards. |
 | `bloom-notify-duration` | number (seconds) | `"6"` | How long a Bloom card stays. |
+
+### Integrations
+
+| Key | Values | Default | Description |
+| --- | --- | --- | --- |
+| `bloom-notch-blitzit` | `"true"` / `"false"` | `"true"` | Scrolling or swiping on the notch also reaches Blitzit's page (add tasks, today's tasks, Blitz now). |
+| `bloom-blitzit-server` | URL | `"https://core.blitzit.app/v3/mcp"` | Blitzit's connection for other apps (its MCP server). `https://integration-prd.blitzit.app/mcp` for Blitzit before version 3. The sign-in itself is not a setting: it is stored encrypted for this Windows user in `integrations\blitzit.bin` in Bloom's config folder. |
+| `bloom-blitzit-list` | JSON `{ id, name }` | none | The Blitzit list new tasks go in, last chosen in the notch. |
+| `bloom-blitzit-column` | text | `""` | The column new tasks go in (Today, This week, …) when Blitzit offers a choice; Today when not set. |
 
 ### Search Bar Pill
 

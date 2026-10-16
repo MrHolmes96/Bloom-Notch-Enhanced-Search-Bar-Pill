@@ -430,6 +430,32 @@ pub struct BloomNotification {
     body: String,
     /// When it arrived, in milliseconds since 1970.
     time: i64,
+    /// Its buttons and reply boxes, as on Windows' own pop-up.
+    buttons: Vec<crate::toast::ToastButton>,
+    inputs: Vec<crate::toast::ToastInput>,
+}
+
+/// Adds each notification's buttons and reply boxes, read from Windows'
+/// notification database in one go.
+fn attach_content(items: &mut [BloomNotification]) {
+    if items.is_empty() {
+        return;
+    }
+    let wanted: Vec<crate::toast::Wanted> = items
+        .iter()
+        .map(|item| crate::toast::Wanted {
+            id: item.id,
+            aumid: &item.aumid,
+            time: item.time,
+        })
+        .collect();
+    let mut content = crate::toast::content_for(&wanted);
+    for item in items.iter_mut() {
+        if let Some(found) = content.remove(&item.id) {
+            item.buttons = found.buttons;
+            item.inputs = found.inputs;
+        }
+    }
 }
 
 fn hstring(value: windows::core::Result<windows::core::HSTRING>) -> String {
@@ -497,6 +523,8 @@ fn read_notification(
         title,
         body,
         time,
+        buttons: Vec::new(),
+        inputs: Vec::new(),
     })
 }
 
@@ -577,6 +605,7 @@ fn poll(seen: &mut HashSet<u32>, primed: &mut bool, app: &AppHandle) -> Result<(
         .and_then(|op| op.get())
         .map_err(|_| PollError::Unavailable)?;
     let mut current = HashSet::new();
+    let mut fresh = Vec::new();
     for notification in list {
         let Ok(id) = notification.Id() else {
             continue;
@@ -587,9 +616,13 @@ fn poll(seen: &mut HashSet<u32>, primed: &mut bool, app: &AppHandle) -> Result<(
         }
         if let Some(item) = read_notification(&notification) {
             if windows_would_show(&item) {
-                let _ = app.emit_to("notifications", "bloom-notification", item);
+                fresh.push(item);
             }
         }
+    }
+    attach_content(&mut fresh);
+    for item in fresh {
+        let _ = app.emit_to("notifications", "bloom-notification", item);
     }
     *seen = current;
     *primed = true;
@@ -639,6 +672,11 @@ pub fn start(app: AppHandle) {
     let _ = APP.set(app.clone());
     repair_leftover();
     start_toast_watcher();
+    let uses_bloom = style(&app) == "bloom"
+        || get_setting_str(&app, "bloom-notification-center").as_deref() == Some("bloom");
+    if uses_bloom {
+        crate::toast::prewarm();
+    }
     start_listener(app);
     std::thread::spawn(apply_now);
 }
@@ -651,42 +689,69 @@ pub fn notifications_status() -> String {
     STATUS.lock().map(|s| s.to_string()).unwrap_or_default()
 }
 
-/// Opens the app a card came from and clears it from the notification
-/// center, like clicking Windows' own pop-up.
+/// Does what clicking the notification in Windows does (opens its page, its
+/// app, or hands the app its arguments) and clears it from the notification
+/// center, as Windows does.
 #[tauri::command]
-pub async fn notification_activate(id: u32, aumid: String) -> Result<(), String> {
+pub async fn notification_activate(
+    id: u32,
+    aumid: String,
+    time: Option<i64>,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let content = crate::toast::content_for(&[crate::toast::Wanted {
+            id,
+            aumid: &aumid,
+            time: time.unwrap_or_default(),
+        }])
+        .remove(&id);
+        let result = match &content {
+            Some(content) => crate::toast::activate(&aumid, content),
+            None if aumid.is_empty() => {
+                crate::commands::open_notification_center();
+                Ok(())
+            }
+            None => crate::toast::open_app(&aumid),
+        };
         if let Ok(listener) =
             windows::UI::Notifications::Management::UserNotificationListener::Current()
         {
             let _ = listener.RemoveNotification(id);
         }
-        if aumid.is_empty() {
-            crate::commands::open_notification_center();
-            return Ok(());
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// One of a notification's buttons, with the text typed into its reply box.
+#[tauri::command]
+pub async fn notification_action(
+    id: u32,
+    aumid: String,
+    time: Option<i64>,
+    button: usize,
+    typed: HashMap<String, String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let content = crate::toast::content_for(&[crate::toast::Wanted {
+            id,
+            aumid: &aumid,
+            time: time.unwrap_or_default(),
+        }])
+        .remove(&id)
+        .ok_or("This notification is gone")?;
+        let result = crate::toast::press(&aumid, &content, button, &typed);
+        if let Ok(listener) =
+            windows::UI::Notifications::Management::UserNotificationListener::Current()
+        {
+            let _ = listener.RemoveNotification(id);
         }
-        let file = wide("explorer.exe");
-        let args = wide(&format!("shell:AppsFolder\\{}", aumid));
-        let verb = wide("open");
-        let result = unsafe {
-            ShellExecuteW(
-                None,
-                PCWSTR(verb.as_ptr()),
-                PCWSTR(file.as_ptr()),
-                PCWSTR(args.as_ptr()),
-                PCWSTR::null(),
-                SW_SHOWNORMAL,
-            )
-        };
-        if result.0 as usize > 32 {
-            Ok(())
-        } else {
-            Err("Couldn't open the app".to_string())
-        }
+        result.map(|_| ())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -723,7 +788,10 @@ pub fn notifications_set_size(app: AppHandle, width: f64, height: f64) {
     };
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let wanted = style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize;
+        let mut wanted = style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize;
+        if CARD_TYPING.load(Ordering::Relaxed) {
+            wanted &= !(WS_EX_NOACTIVATE.0 as isize);
+        }
         if style != wanted {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
         }
@@ -751,6 +819,33 @@ pub fn notifications_set_size(app: AppHandle, width: f64, height: f64) {
     }
 }
 
+/// A reply box on a card is being typed in.
+static CARD_TYPING: AtomicBool = AtomicBool::new(false);
+
+/// The cards never take the keyboard, so typing a reply needs it for a moment.
+#[tauri::command]
+pub fn notifications_allow_typing(app: AppHandle, typing: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, WS_EX_NOACTIVATE};
+    let Some(window) = app.get_webview_window("notifications") else {
+        return;
+    };
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    let hwnd = HWND(hwnd.0);
+    CARD_TYPING.store(typing, Ordering::Relaxed);
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if typing {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style & !(WS_EX_NOACTIVATE.0 as isize));
+            let _ = SetForegroundWindow(hwnd);
+            let _ = window.set_focus();
+        } else {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE.0 as isize);
+        }
+    }
+}
+
 /// A sample card, for trying the look from Settings.
 #[tauri::command]
 pub fn notifications_test(app: AppHandle) {
@@ -765,6 +860,8 @@ pub fn notifications_test(app: AppHandle) {
             title: "This is how notifications look".into(),
             body: "Change the corner and the rounding in Settings > Notifications.".into(),
             time: crate::utils::get_now_ms(),
+            buttons: Vec::new(),
+            inputs: Vec::new(),
         },
     );
 }
@@ -843,6 +940,7 @@ pub async fn notification_center_list() -> Result<Vec<BloomNotification>, String
                 .filter_map(|n| read_notification(&n))
                 .collect();
             items.sort_by_key(|item| std::cmp::Reverse(item.time));
+            attach_content(&mut items);
             Ok(items)
         })
     })
@@ -904,9 +1002,12 @@ pub fn try_open_bloom_center() -> bool {
             let work = info.rcWork;
             let margin = (8.0 * scale) as i32;
             let width = (392.0 * scale) as i32;
+            // As tall as its notifications were last time; it fits itself to
+            // the current ones as soon as they are shown.
+            let height = (CENTER_HEIGHT.load(Ordering::Relaxed) as f64 * scale) as i32;
             let _ = window.set_size(tauri::PhysicalSize::new(
                 width as u32,
-                (work.bottom - work.top - margin * 2).max(200) as u32,
+                height.clamp(120, (work.bottom - work.top - margin * 2).max(120)) as u32,
             ));
             let _ = window.set_position(tauri::PhysicalPosition::new(
                 work.right - width - margin,
@@ -921,6 +1022,43 @@ pub fn try_open_bloom_center() -> bool {
 }
 
 static CENTER_HIDDEN_AT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+/// The center's last height, in CSS pixels.
+static CENTER_HEIGHT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(160);
+
+/// Fits the center to its notifications: it hangs from the top of the screen
+/// and is only as tall as what it shows (the list scrolls past about six).
+#[tauri::command]
+pub fn notification_center_fit(app: AppHandle, height: f64) {
+    if !height.is_finite() || height <= 0.0 {
+        return;
+    }
+    CENTER_HEIGHT.store(height.round() as u32, Ordering::Relaxed);
+    let Some(window) = app.get_webview_window("notification-center") else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let mut limit = i32::MAX;
+    unsafe {
+        let primary = windows::Win32::Graphics::Gdi::MonitorFromPoint(
+            Default::default(),
+            MONITOR_DEFAULTTOPRIMARY,
+        );
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(primary, &mut info).as_bool() {
+            limit = info.rcWork.bottom - info.rcWork.top - (16.0 * scale) as i32;
+        }
+    }
+    let wanted = ((height * scale).round() as i32).clamp(1, limit.max(120)) as u32;
+    if size.height != wanted {
+        let _ = window.set_size(tauri::PhysicalSize::new(size.width, wanted));
+    }
+}
 
 #[tauri::command]
 pub fn notification_center_hide(app: AppHandle) {
