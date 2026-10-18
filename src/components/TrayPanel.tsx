@@ -218,15 +218,20 @@ export function TrayPanel({
 	// (`tray-menu-open`). Bloom says when the menu is gone; a click that
 	// failed lets go at once. Only if Bloom never answers does the notch let
 	// go, after 10 min.
+	// Which icons' menus are open (and how many clicks each), and whether this
+	// panel is holding the notch open: the hold is let go whenever nothing is
+	// open any more.
 	const openRef = useRef(new Map<string, number>());
+	const holdingRef = useRef(false);
 	const backstopRef = useRef<number | null>(null);
 	const pinChangeRef = useRef(onPinChange);
 	pinChangeRef.current = onPinChange;
 	const releaseAll = () => {
 		if (backstopRef.current !== null) window.clearTimeout(backstopRef.current);
 		backstopRef.current = null;
-		if (openRef.current.size > 0) {
-			openRef.current.clear();
+		openRef.current.clear();
+		if (holdingRef.current) {
+			holdingRef.current = false;
 			pinChangeRef.current?.(false);
 		}
 	};
@@ -240,7 +245,10 @@ export function TrayPanel({
 	};
 	const pin = (id: string) => {
 		const open = openRef.current;
-		if (open.size === 0) pinChangeRef.current?.(true);
+		if (!holdingRef.current) {
+			holdingRef.current = true;
+			pinChangeRef.current?.(true);
+		}
 		open.set(id, (open.get(id) ?? 0) + 1);
 		if (backstopRef.current !== null) window.clearTimeout(backstopRef.current);
 		backstopRef.current = window.setTimeout(releaseAll, 10 * 60 * 1000);

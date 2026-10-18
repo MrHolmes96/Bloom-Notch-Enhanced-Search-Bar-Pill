@@ -7,6 +7,11 @@
 //! the icon group from the file and taking its biggest picture gives the
 //! sharpest version the program has, which the dock then draws at the same
 //! size as every other icon.
+//!
+//! The picture is taken exactly as the program stores it: a PNG as it is, a
+//! 32-bit bitmap with its own transparency converted pixel for pixel. Going
+//! through a Windows icon handle instead can darken the see-through parts of
+//! a picture (a glow, soft edges), which made icons like Razer's look dull.
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{FreeLibrary, HMODULE};
@@ -114,6 +119,65 @@ fn best_entry(group: &[u8]) -> Option<(u16, u32)> {
     best.map(|(id, size, _)| (id, size))
 }
 
+fn png_data_uri(png: &[u8]) -> String {
+    use base64::Engine;
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    )
+}
+
+/// One icon picture as stored in a program, as a PNG data URI with its colours
+/// untouched: a PNG picture as it is, a 32-bit bitmap with transparency
+/// converted directly. `None` for older pictures (fewer colours, or a mask
+/// for transparency), which Windows converts.
+pub fn stored_picture(bits: &[u8]) -> Option<String> {
+    const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if bits.starts_with(PNG_SIGNATURE) {
+        return Some(png_data_uri(bits));
+    }
+    let rgba = bitmap_pixels(bits)?;
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(rgba)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    Some(png_data_uri(&png))
+}
+
+/// The pixels of a 32-bit icon bitmap (BITMAPINFOHEADER, then the colour rows
+/// from the bottom up, then the mask), top row first. `None` unless it is
+/// uncompressed 32-bit with transparency of its own.
+fn bitmap_pixels(bits: &[u8]) -> Option<image::RgbaImage> {
+    let u32_at = |at: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(bits.get(at..at + 4)?.try_into().ok()?))
+    };
+    let header = u32_at(0)? as usize;
+    let width = u32_at(4)? as i32;
+    let height = u32_at(8)? as i32 / 2;
+    let bit_count = u16::from_le_bytes(bits.get(14..16)?.try_into().ok()?);
+    let compression = u32_at(16)?;
+    if header < 40 || bit_count != 32 || compression != 0 || width <= 0 || height <= 0 {
+        return None;
+    }
+    let (width, height) = (width as usize, height as usize);
+    if width > 1024 || height > 1024 {
+        return None;
+    }
+    let row = width * 4;
+    let colours = bits.get(header..header + row * height)?;
+    let mut rgba = Vec::with_capacity(row * height);
+    for y in (0..height).rev() {
+        for pixel in colours[y * row..(y + 1) * row].chunks_exact(4) {
+            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        }
+    }
+    // A picture without any transparency of its own uses the mask instead.
+    if rgba.chunks_exact(4).all(|pixel| pixel[3] == 0) {
+        return None;
+    }
+    image::RgbaImage::from_raw(width as u32, height as u32, rgba)
+}
+
 /// The largest picture of a program's or library's icon as a PNG data URI,
 /// when that picture is at least `min_size` px. `index` is the icon's index
 /// as shortcuts and the shell give it (0 for a program's own icon).
@@ -134,6 +198,9 @@ pub fn resource_icon(file: &str, index: i32, min_size: u32) -> Option<String> {
                 return None;
             }
             let bits = resource_bytes(module, PCWSTR(id as usize as *const u16), RT_ICON)?;
+            if let Some(png) = stored_picture(bits) {
+                return Some(png);
+            }
             let icon = CreateIconFromResourceEx(
                 bits,
                 true,
@@ -224,6 +291,41 @@ pub fn hosts_other_apps(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_pictures_keep_their_colours() {
+        // A PNG picture is passed through as it is.
+        let png = b"\x89PNG\r\n\x1a\nrest";
+        assert!(stored_picture(png)
+            .unwrap()
+            .starts_with("data:image/png;base64,iVBORw0KGg"));
+
+        // A 2 x 1 32-bit bitmap: a half see-through green and an opaque red,
+        // stored blue-green-red-alpha, bottom row first, then the mask.
+        let mut bmp = vec![0u8; 40];
+        bmp[0] = 40;
+        bmp[4] = 2;
+        bmp[8] = 2; // twice the height: colours and mask
+        bmp[12] = 1;
+        bmp[14] = 32;
+        bmp.extend_from_slice(&[0x2C, 0xD6, 0x44, 0x80, 0x00, 0x00, 0xFF, 0xFF]);
+        bmp.extend_from_slice(&[0; 4]);
+        let pixels = bitmap_pixels(&bmp).unwrap();
+        assert_eq!(pixels.get_pixel(0, 0).0, [0x44, 0xD6, 0x2C, 0x80]);
+        assert_eq!(pixels.get_pixel(1, 0).0, [0xFF, 0x00, 0x00, 0xFF]);
+        assert!(stored_picture(&bmp).is_some());
+
+        // No transparency of its own: left to Windows (it uses the mask).
+        let mut masked = bmp.clone();
+        masked[43] = 0;
+        masked[47] = 0;
+        assert!(bitmap_pixels(&masked).is_none());
+
+        // Fewer colours: left to Windows.
+        let mut paletted = bmp.clone();
+        paletted[14] = 8;
+        assert!(stored_picture(&paletted).is_none());
+    }
 
     fn group(entries: &[(u8, u16, u16)]) -> Vec<u8> {
         let mut bytes = vec![0, 0, 1, 0, entries.len() as u8, 0];

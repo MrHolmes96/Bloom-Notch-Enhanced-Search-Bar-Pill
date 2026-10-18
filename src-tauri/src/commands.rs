@@ -1697,7 +1697,7 @@ fn image_size_score(path: &std::path::Path) -> u64 {
 /// v3: Java windows (RuneLite) were cached with the Java runtime's icon.
 /// v4: icons come from the program's own icon resource at its largest size
 /// (RuneLite's 128 px instead of a small or blurry copy).
-const ICON_CACHE_FILE: &str = "icons_cache_v4.json";
+const ICON_CACHE_FILE: &str = "icons_cache_v5.json";
 
 static LAST_ICON_SAVE_REQUEST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
@@ -1756,6 +1756,7 @@ pub async fn get_app_icon(
             "icons_cache.json",
             "icons_cache_v2.json",
             "icons_cache_v3.json",
+            "icons_cache_v4.json",
         ] {
             let _ = std::fs::remove_file(cache_dir.join(old));
         }
