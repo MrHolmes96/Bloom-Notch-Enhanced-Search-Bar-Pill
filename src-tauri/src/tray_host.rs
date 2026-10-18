@@ -178,8 +178,11 @@ static HOST: AtomicIsize = AtomicIsize::new(0);
 static EXPLORER: AtomicIsize = AtomicIsize::new(0);
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
-/// Our own `TaskbarCreated` broadcasts come back to us; ignored until then.
-static IGNORE_BROADCAST_UNTIL: AtomicI64 = AtomicI64::new(0);
+/// Sent with Bloom's own `TaskbarCreated` broadcasts (as `lParam`, which apps
+/// ignore), so Bloom tells them from Explorer's when they come back to it.
+const BLOOM_MARK: isize = 0x426C_6F6F;
+/// Explorer's taskbar window as last seen, to notice it being (re)created.
+static EXPLORER_SEEN: AtomicIsize = AtomicIsize::new(0);
 static LAST_RESYNC: AtomicI64 = AtomicI64::new(0);
 /// When apps were last asked to add their icons again.
 static SYNCED_AT: AtomicI64 = AtomicI64::new(0);
@@ -413,10 +416,9 @@ unsafe fn request_icons() {
     if message == 0 {
         return;
     }
-    IGNORE_BROADCAST_UNTIL.store(now_ms() + 3000, Ordering::Relaxed);
     LAST_RESYNC.store(now_ms(), Ordering::Relaxed);
     SYNCED_AT.store(now_ms(), Ordering::Relaxed);
-    let _ = SendNotifyMessageW(HWND_BROADCAST, message, WPARAM(0), LPARAM(0));
+    let _ = SendNotifyMessageW(HWND_BROADCAST, message, WPARAM(0), LPARAM(BLOOM_MARK));
 }
 
 unsafe fn raise(hwnd: HWND) {
@@ -475,7 +477,7 @@ unsafe extern "system" fn window_proc(
 
     let taskbar_created = TASKBAR_CREATED.load(Ordering::Relaxed);
     if taskbar_created != 0 && msg == taskbar_created {
-        if now_ms() > IGNORE_BROADCAST_UNTIL.load(Ordering::Relaxed) {
+        if lparam.0 != BLOOM_MARK {
             // Explorer restarted: its new taskbar is in front of Bloom's
             // window, so apps re-add their icons there. Get back in front,
             // then ask them once more.
@@ -502,6 +504,15 @@ unsafe extern "system" fn window_proc(
                 request_icons();
             }
             TIMER_ZORDER => {
+                // Explorer's taskbar was created (Bloom started before it, at
+                // sign-in) or recreated: apps added their icons there, so
+                // ask them again once it has settled.
+                let explorer = explorer_taskbar().map(|h| h.0 as isize).unwrap_or(0);
+                let seen = EXPLORER_SEEN.swap(explorer, Ordering::Relaxed);
+                if explorer != 0 && explorer != seen {
+                    EXPLORER.store(0, Ordering::Relaxed);
+                    SetTimer(Some(hwnd), TIMER_RESYNC, 1500, None);
+                }
                 let first = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()).unwrap_or_default();
                 if first != hwnd {
                     // Explorer's taskbar came in front (it was shown), so apps
@@ -582,6 +593,10 @@ pub fn start(app: AppHandle) {
             }
             raise(hwnd);
             HOST.store(hwnd.0 as isize, Ordering::Relaxed);
+            EXPLORER_SEEN.store(
+                explorer_taskbar().map(|h| h.0 as isize).unwrap_or(0),
+                Ordering::Relaxed,
+            );
             RUNNING.store(true, Ordering::Relaxed);
             request_icons();
             SetTimer(Some(hwnd), TIMER_ZORDER, ZORDER_CHECK_MS, None);
