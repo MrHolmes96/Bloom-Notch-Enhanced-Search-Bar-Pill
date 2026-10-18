@@ -566,7 +566,7 @@ pub fn get_shortcut_icon_location(path: &str) -> Option<String> {
 }
 
 /// Expands `%VAR%` references using the current process environment.
-fn expand_env_vars(input: &str) -> String {
+pub fn expand_env_vars(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut rest = input;
     while let Some(start) = rest.find('%') {

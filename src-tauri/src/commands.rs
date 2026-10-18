@@ -1690,7 +1690,9 @@ fn image_size_score(path: &std::path::Path) -> u64 {
 /// v2: pinned apps use the shell's large shortcut icon; icons cached by the
 /// old lookup are dropped once so they are fetched again.
 /// v3: Java windows (RuneLite) were cached with the Java runtime's icon.
-const ICON_CACHE_FILE: &str = "icons_cache_v3.json";
+/// v4: icons come from the program's own icon resource at its largest size
+/// (RuneLite's 128 px instead of a small or blurry copy).
+const ICON_CACHE_FILE: &str = "icons_cache_v4.json";
 
 static LAST_ICON_SAVE_REQUEST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
@@ -1745,7 +1747,11 @@ pub async fn get_app_icon(
     }
 
     let cache = ICON_CACHE.get_or_init(|| {
-        for old in ["icons_cache.json", "icons_cache_v2.json"] {
+        for old in [
+            "icons_cache.json",
+            "icons_cache_v2.json",
+            "icons_cache_v3.json",
+        ] {
             let _ = std::fs::remove_file(cache_dir.join(old));
         }
         let mut map = std::collections::HashMap::new();
@@ -1854,11 +1860,24 @@ pub async fn get_app_icon(
                     return None;
                 }
                 let icon = bundled_java_launcher(&path_owned)
-                    .and_then(|launcher| shell_item_icon(&launcher))
+                    .and_then(|launcher| {
+                        crate::app_icon::resource_icon(&launcher, 0, 48)
+                            .or_else(|| shell_item_icon(&launcher))
+                    })
                     .or_else(|| window_own_icon(h_hwnd).and_then(|i| icon_to_base64(i)));
                 if icon.is_some() {
                     CoUninitialize();
                     return icon;
+                }
+            }
+
+            // A program's own icon, at the largest size it ships, is sharper
+            // than its window's (usually 32 px). Programs that host other
+            // apps' windows keep the window's icon.
+            if !crate::app_icon::hosts_other_apps(&path_owned) && path_owned.contains('\\') {
+                if let Some(icon) = crate::app_icon::resource_icon(&path_owned, 0, 48) {
+                    CoUninitialize();
+                    return Some(icon);
                 }
             }
 
@@ -1930,13 +1949,24 @@ pub async fn get_app_icon(
                 ((path_clone.clone(), String::new()), false)
             };
 
-            // The shell's own large icon for the pinned item (the shortcut
-            // itself, not its target) before the older fallbacks below.
-            let mut icon_data = if std::path::Path::new(&path_clone).exists() {
-                shell_item_icon(&path_clone)
+            // The program's own icon resource at its largest size first: the
+            // shell's 256 px lookup turns a program whose icon stops at 128 px
+            // (RuneLite) into a small or blurry picture. For a shortcut that
+            // is the program or library its icon setting names.
+            let mut icon_data = if is_lnk {
+                crate::app_icon::shortcut_resource(&path_clone)
+                    .and_then(|(file, index)| crate::app_icon::resource_icon(&file, index, 48))
+            } else if path_clone.to_lowercase().ends_with(".exe") {
+                crate::app_icon::resource_icon(&path_clone, 0, 48)
             } else {
                 None
             };
+
+            // The shell's own large icon for the pinned item (the shortcut
+            // itself, not its target) before the older fallbacks below.
+            if icon_data.is_none() && std::path::Path::new(&path_clone).exists() {
+                icon_data = shell_item_icon(&path_clone);
+            }
 
             // A shortcut can carry its own icon file (Firefox web apps, user edits).
             if icon_data.is_none() && is_lnk {
