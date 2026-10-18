@@ -360,6 +360,9 @@ unsafe extern "system" fn window_change_event_proc(
         {
             CAPTURE_RECHECK.store(true, Ordering::Relaxed);
         }
+        if id_object == 0 && id_child == 0 {
+            NOTCH_RECHECK.store(true, Ordering::Relaxed);
+        }
     }
 
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -448,6 +451,7 @@ unsafe extern "system" fn focus_event_proc(
     }
     // Foreground moved — e.g. Snipping Tool opened/closed or got minimised.
     CAPTURE_RECHECK.store(true, Ordering::Relaxed);
+    NOTCH_RECHECK.store(true, Ordering::Relaxed);
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowLongW, IsWindow, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
     };
@@ -627,6 +631,8 @@ unsafe extern "system" fn taskbar_event_proc(
     if _id_object != 0 || _id_child != 0 || hwnd.0.is_null() {
         return;
     }
+    // A window moved or changed size: it may now be under the notch.
+    NOTCH_RECHECK.store(true, Ordering::Relaxed);
     if NATIVE_TASKBAR_HIDDEN.load(Ordering::Relaxed) {
         let mut class_name = [0u8; 256];
         let len = windows::Win32::UI::WindowsAndMessaging::GetClassNameA(hwnd, &mut class_name);
@@ -1297,6 +1303,10 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
         // Re-check the native flyout every ~1.5s: picks up setting changes and
         // a host window recreated by an Explorer restart.
         let mut osd_sync_ticks = 0u32;
+        // Whether an app window lies under the notch, looked at again when
+        // windows change (and at least every second).
+        let mut strip_covered = false;
+        let mut strip_checked = Instant::now() - Duration::from_secs(5);
 
         loop {
             if SHUTTING_DOWN.load(Ordering::Relaxed) {
@@ -1418,6 +1428,18 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     current_is_fs = false;
                     is_known_shell = false;
                 }
+
+                // Smart mode also steps aside for any app window under the
+                // notch, not only the one in front: a small pop-up or dialog
+                // in front of a maximized window keeps the notch hidden, and
+                // so does a window partly behind another.
+                if NOTCH_RECHECK.swap(false, Ordering::Relaxed)
+                    || strip_checked.elapsed() >= Duration::from_secs(1)
+                {
+                    strip_covered = notch_strip_covered(my_process_id, cached_scale);
+                    strip_checked = Instant::now();
+                }
+                should_notch_overlap |= strip_covered;
 
                 // Only report dock overlap when the dock window is actually visible.
                 // On autostart, the overlap thread starts before init_dock shows the window,
@@ -1664,6 +1686,150 @@ unsafe fn window_overlap_state(hwnd: HWND, cached_scale: f64) -> OverlapState {
     state
 }
 
+/// True when an app window lies under the notch's strip at the top of the
+/// screen. Windows are looked at from the front back to the desktop. Counted
+/// are app windows (the kind the taskbar shows) and the dialogs and pop-ups
+/// they own; not counted are Bloom, tool windows (desktop organizers, floating
+/// palettes), click-through overlays, invisible, minimized and cloaked windows,
+/// and Windows' own surfaces (Start, search, the taskbar).
+unsafe fn notch_strip_covered(my_process_id: u32, scale: f64) -> bool {
+    use windows::Win32::Foundation::{LPARAM, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetAncestor, GetClassNameW, GetLayeredWindowAttributes, GetWindow,
+        GetWindowRect, IsIconic, GA_ROOTOWNER, GW_OWNER, LAYERED_WINDOW_ATTRIBUTES_FLAGS,
+        LWA_ALPHA, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
+    };
+    let Some((win_pos, _)) = MAIN_WINDOW_RECT.lock().ok().and_then(|g| *g) else {
+        return false;
+    };
+    let Some(notch) = NOTCH_RECT.lock().ok().and_then(|g| *g) else {
+        return false;
+    };
+    let strip = RECT {
+        left: win_pos.x + (notch.x as f64 * scale) as i32 + 4,
+        right: win_pos.x + ((notch.x + notch.width) as f64 * scale) as i32 - 4,
+        top: win_pos.y,
+        bottom: win_pos.y + (36.0 * scale) as i32 - 4,
+    };
+    if strip.right <= strip.left {
+        return false;
+    }
+
+    struct Scan {
+        strip: RECT,
+        own: u32,
+        covered: bool,
+    }
+
+    unsafe fn class_of(hwnd: HWND) -> String {
+        let mut class = [0u16; 64];
+        let length = GetClassNameW(hwnd, &mut class) as usize;
+        String::from_utf16_lossy(&class[..length.min(class.len())])
+    }
+
+    unsafe fn is_app_window(hwnd: HWND) -> bool {
+        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        if ex & WS_EX_TOOLWINDOW.0 != 0 {
+            return false;
+        }
+        if ex & WS_EX_APPWINDOW.0 != 0 {
+            return true;
+        }
+        let owned = GetWindow(hwnd, GW_OWNER).is_ok_and(|o| !o.0.is_null());
+        !owned && ex & WS_EX_NOACTIVATE.0 == 0
+    }
+
+    unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> windows::core::BOOL {
+        let scan = &mut *(param.0 as *mut Scan);
+        let class = class_of(hwnd);
+        // Reached the desktop: nothing further back can be over the notch.
+        if class == "Progman" || class == "WorkerW" {
+            return false.into();
+        }
+        if !IsWindowVisible(hwnd).as_bool()
+            || IsIconic(hwnd).as_bool()
+            || matches!(
+                class.as_str(),
+                "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "Windows.UI.Core.CoreWindow"
+            )
+        {
+            return true.into();
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == scan.own {
+            return true.into();
+        }
+        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        if ex & (WS_EX_TRANSPARENT.0 | WS_EX_TOOLWINDOW.0) != 0 {
+            return true.into();
+        }
+        if ex & WS_EX_LAYERED.0 != 0 {
+            let mut alpha = 255u8;
+            let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+            if GetLayeredWindowAttributes(hwnd, None, Some(&mut alpha), Some(&mut flags)).is_ok()
+                && flags.0 & LWA_ALPHA.0 != 0
+                && alpha == 0
+            {
+                return true.into();
+            }
+        }
+        let mut cloaked = 0u32;
+        if DwmGetWindowAttribute(
+            hwnd,
+            windows::Win32::Graphics::Dwm::DWMWA_CLOAKED,
+            &mut cloaked as *mut _ as *mut _,
+            4,
+        )
+        .is_ok()
+            && cloaked != 0
+        {
+            return true.into();
+        }
+        // An app window, or a dialog or pop-up of one.
+        if !is_app_window(hwnd) {
+            let root = GetAncestor(hwnd, GA_ROOTOWNER);
+            if root.is_invalid()
+                || root == hwnd
+                || !IsWindowVisible(root).as_bool()
+                || !is_app_window(root)
+            {
+                return true.into();
+            }
+        }
+        let mut rect = RECT::default();
+        if DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut rect as *mut _ as *mut _,
+            std::mem::size_of::<RECT>() as u32,
+        )
+        .is_err()
+            && GetWindowRect(hwnd, &mut rect).is_err()
+        {
+            return true.into();
+        }
+        let strip = scan.strip;
+        if rect.left < strip.right
+            && rect.right > strip.left
+            && rect.top < strip.bottom
+            && rect.bottom > strip.top
+        {
+            scan.covered = true;
+            return false.into();
+        }
+        true.into()
+    }
+
+    let mut scan = Scan {
+        strip,
+        own: my_process_id,
+        covered: false,
+    };
+    let _ = EnumWindows(Some(visit), LPARAM(&mut scan as *mut Scan as isize));
+    scan.covered
+}
+
 /// A visible app window that can be the one a pop-up belongs to: not Bloom,
 /// not hidden, minimized or cloaked, and not the desktop or the taskbar.
 unsafe fn is_base_candidate(hwnd: HWND, my_process_id: u32) -> bool {
@@ -1868,6 +2034,9 @@ static MH_CACHED_MON_POS: Mutex<Option<(i32, i32)>> = Mutex::new(None);
 static MH_CACHED_MON_SIZE: Mutex<Option<(u32, u32)>> = Mutex::new(None);
 static CAPTURE_UI_ACTIVE: AtomicBool = AtomicBool::new(false);
 static CAPTURE_RECHECK: AtomicBool = AtomicBool::new(true);
+/// Set when a top-level window appeared, moved, changed size, went away or
+/// came to the front, so smart mode looks again at what is under the notch.
+static NOTCH_RECHECK: AtomicBool = AtomicBool::new(true);
 static CAPTURE_LAST_SCAN_MS: AtomicI64 = AtomicI64::new(0);
 
 /// Hover-intent ("pressure") gate for the top edge. Contact with the top band
