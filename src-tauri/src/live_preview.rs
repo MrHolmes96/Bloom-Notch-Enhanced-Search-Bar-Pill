@@ -1,8 +1,9 @@
 //! Live window previews for the dock (Settings > Dock > Preview Style: Live).
 //! Windows' own thumbnails (the ones the taskbar uses) are drawn by the
 //! compositor straight onto the dock window, over the preview cards, so they
-//! move like the real windows. A minimised window keeps its snapshot, since
-//! Windows doesn't draw it.
+//! move like the real windows. A minimised window keeps its snapshot; only
+//! one with no snapshot yet shows what Windows keeps of it, when Windows has
+//! its picture at its size.
 
 use std::sync::Mutex;
 
@@ -53,13 +54,24 @@ pub fn dock_live_previews(app: AppHandle, items: Vec<LivePreview>) {
     for item in items {
         let source = HWND(item.hwnd as *mut _);
         unsafe {
+            use windows::Win32::Graphics::Dwm::DwmQueryThumbnailSourceSize;
             use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindow};
-            if !IsWindow(Some(source)).as_bool() || IsIconic(source).as_bool() {
+            if !IsWindow(Some(source)).as_bool() {
+                continue;
+            }
+            if IsIconic(source).as_bool() && crate::window_capture::cached(source).is_some() {
                 continue;
             }
             let Ok(thumbnail) = DwmRegisterThumbnail(dock, source) else {
                 continue;
             };
+            // Only a minimized title bar (or nothing) to draw: the snapshot.
+            let drawable = DwmQueryThumbnailSourceSize(thumbnail)
+                .is_ok_and(|size| size.cx >= 100 && size.cy >= 100);
+            if !drawable {
+                let _ = DwmUnregisterThumbnail(thumbnail);
+                continue;
+            }
             let properties = DWM_THUMBNAIL_PROPERTIES {
                 dwFlags: DWM_TNP_RECTDESTINATION
                     | DWM_TNP_VISIBLE

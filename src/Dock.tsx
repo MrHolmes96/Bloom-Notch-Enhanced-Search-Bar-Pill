@@ -112,6 +112,17 @@ const ITEM_INITIAL = { opacity: 0, scale: 0 };
 const ITEM_ANIMATE = { opacity: 1, scale: 1 };
 const ITEM_EXIT = { opacity: 0, scale: 0 };
 
+/** A preview card for a window Bloom has no picture of yet: the app's icon. */
+function PreviewPlaceholder({ hwnd, icon }: { hwnd: number; icon?: string }) {
+	return (
+		<div
+			className="preview-placeholder"
+			data-hwnd={hwnd}
+			style={icon ? { backgroundImage: `url("${icon}")` } : undefined}
+		/>
+	);
+}
+
 // One dot per open window, capped at three.
 function WindowDots({ count, background }: { count: number; background?: boolean }) {
 	return (
@@ -654,7 +665,7 @@ const Dock = memo(function Dock() {
 		const timer = window.setTimeout(() => {
 			const dpr = window.devicePixelRatio || 1;
 			const items = Array.from(
-				document.querySelectorAll<HTMLImageElement>(".preview-tooltip img[data-hwnd]")
+				document.querySelectorAll<HTMLElement>(".preview-tooltip [data-hwnd]")
 			).map((img) => {
 				const r = img.getBoundingClientRect();
 				return {
@@ -736,6 +747,25 @@ const Dock = memo(function Dock() {
 		}
 	};
 
+	// The app's dock icon, for a preview card that has no picture of its window.
+	const appIconOf = (app: AppInfo): string | undefined => {
+		const isHost = isBrowserHost(app.path);
+		const cacheKey = isHost
+			? `${app.path}:${app.name.toLowerCase()}`
+			: app.hwnd
+				? `${app.path}-${app.hwnd}`
+				: app.path;
+		const allowPathFallback = !isHost || !app.is_running;
+		return (
+			customIcons[cacheKey] ||
+			(allowPathFallback && customIcons[app.path]) ||
+			iconsRef.current[cacheKey] ||
+			(allowPathFallback && iconsRef.current[app.path]) ||
+			app.icon ||
+			undefined
+		);
+	};
+
 	// The window whose preview close button was just pressed: the press closes
 	// it at once, and the click that follows never focuses it instead (when
 	// the button shrinks under the pointer, the release can land beside it).
@@ -757,7 +787,7 @@ const Dock = memo(function Dock() {
 	});
 	const focusPreview = (hwnd: number) => {
 		if (closingHwndRef.current === hwnd) return;
-		void invoke("focus_window", { hwnd });
+		void invoke("focus_window", { hwnd, fromPreview: true });
 	};
 
 	const handleClosePreview = async (e: React.SyntheticEvent, hwnd: number) => {
@@ -1503,7 +1533,11 @@ const Dock = memo(function Dock() {
 																			className="preview-item"
 																			onClick={() => focusPreview(prev.hwnd)}
 																		>
-																			<img src={prev.image} alt={`Preview ${idx}`} data-hwnd={prev.hwnd} />
+																			{prev.image ? (
+																				<img src={prev.image} alt={`Preview ${idx}`} data-hwnd={prev.hwnd} />
+																			) : (
+																				<PreviewPlaceholder hwnd={prev.hwnd} icon={appIconOf(app)} />
+																			)}
 																			<div className="preview-label">{prev.title || app.name}</div>
 																			<button
 																				className="preview-close-btn"
@@ -1667,7 +1701,11 @@ const Dock = memo(function Dock() {
 																	className="preview-item"
 																	onClick={() => focusPreview(prev.hwnd)}
 																>
-																	<img src={prev.image} alt={`Preview ${idx}`} data-hwnd={prev.hwnd} />
+																	{prev.image ? (
+																		<img src={prev.image} alt={`Preview ${idx}`} data-hwnd={prev.hwnd} />
+																	) : (
+																		<PreviewPlaceholder hwnd={prev.hwnd} icon={appIconOf(app)} />
+																	)}
 																	<div className="preview-label">{prev.title || app.name}</div>
 																	<button
 																		className="preview-close-btn"

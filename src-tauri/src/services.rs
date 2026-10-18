@@ -485,6 +485,7 @@ pub fn setup_thumbnail_capture(_app_handle: AppHandle) {
         );
         Box::leak(Box::new(focus_hook));
     }
+    keep_front_snapshot_current();
 }
 
 unsafe extern "system" fn focus_event_proc(
@@ -530,51 +531,70 @@ unsafe extern "system" fn focus_event_proc(
 
     // Keep the thumbnail cache warm for the focused window so that hovering a
     // later-minimized window uses the cached image instead of restoring it.
+    // A moment after it comes to the front, so an app just restored (a
+    // browser) has drawn itself again by then.
     std::thread::spawn(move || {
-        use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextW, IsIconic, IsWindow};
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        refresh_snapshot(HWND(hwnd_raw as *mut _), 2000);
+    });
+}
 
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        let hwnd = HWND(hwnd_raw as *mut _);
-        unsafe {
-            if !IsWindow(Some(hwnd)).as_bool() || IsIconic(hwnd).as_bool() {
-                return;
-            }
-        }
-
-        // Skip fullscreen windows (games, video players): capturing them can hitch.
-        if crate::utils::is_window_fullscreen(hwnd) {
+/// Takes a new snapshot of an app window in front, unless its snapshot is
+/// younger than `fresh_ms`: not minimized, full-screen (games, video:
+/// capturing them can hitch), untitled or one of Bloom's, and one at a time.
+fn refresh_snapshot(hwnd: HWND, fresh_ms: i64) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, GetWindowTextW, IsIconic, IsWindow, IsWindowVisible, GWL_EXSTYLE,
+        WS_EX_TOOLWINDOW,
+    };
+    unsafe {
+        if hwnd.is_invalid()
+            || !IsWindow(Some(hwnd)).as_bool()
+            || !IsWindowVisible(hwnd).as_bool()
+            || IsIconic(hwnd).as_bool()
+        {
             return;
         }
-
+        if GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0 {
+            return;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == std::process::id() {
+            return;
+        }
         let mut text = [0u16; 2];
-        unsafe {
-            if GetWindowTextW(hwnd, &mut text) == 0 {
-                return;
-            }
-        }
-
-        // Refresh at most once per window every two seconds
-        if let Some(cache) = crate::state::THUMBNAIL_CACHE.get() {
-            if let Ok(guard) = cache.lock() {
-                if let Some((_, ts)) = guard.get(&hwnd_raw) {
-                    if crate::utils::get_now_ms() - ts < 2000 {
-                        return;
-                    }
-                }
-            }
-        }
-
-        if THUMB_CAPTURE_IN_FLIGHT.swap(true, Ordering::Relaxed) {
+        if GetWindowTextW(hwnd, &mut text) == 0 {
             return;
         }
-        let _guard = ThumbnailCaptureGuard;
+    }
+    if crate::utils::is_window_fullscreen(hwnd) {
+        return;
+    }
+    if crate::window_capture::age_ms(hwnd) < fresh_ms {
+        return;
+    }
+    if THUMB_CAPTURE_IN_FLIGHT.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let _guard = ThumbnailCaptureGuard;
+    let _ = crate::window_capture::take(hwnd, 320, 200);
+}
 
-        if let Some(img) = crate::utils::capture_hwnd_to_base64(hwnd, 320, 200) {
-            if let Some(cache) = crate::state::THUMBNAIL_CACHE.get() {
-                if let Ok(mut guard) = cache.lock() {
-                    guard.insert(hwnd_raw, (img, crate::utils::get_now_ms()));
-                }
+/// The window in front gets a new snapshot every few seconds while it stays
+/// there, so when it is minimized its preview is how it last looked, as in
+/// Windows' own previews.
+fn keep_front_snapshot_current() {
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        crate::window_capture::prepare();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if SHUTTING_DOWN.load(Ordering::Relaxed) {
+                return;
             }
+            let front = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+            refresh_snapshot(front, 5000);
         }
     });
 }
@@ -603,67 +623,17 @@ unsafe extern "system" fn thumbnail_capture_proc(
     }
 
     // Only the restore event is useful here. On MINIMIZESTART the window is
-    // mid-animation and PrintWindow can capture a black frame, which would
-    // overwrite a good cached thumbnail; the focus hook keeps the cache warm
-    // before a window is minimized.
+    // already minimized and can't be taken; the window in front keeps its
+    // snapshot current until then (`keep_front_snapshot_current`).
     if event != windows::Win32::UI::WindowsAndMessaging::EVENT_SYSTEM_MINIMIZEEND {
         return;
     }
-
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongW, IsWindow, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
-    };
-
-    if !IsWindow(Some(hwnd)).as_bool() {
-        return;
-    }
-    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-    if (ex_style & WS_EX_TOOLWINDOW.0) != 0 {
-        return;
-    }
-
-    let my_pid = std::process::id();
-    let mut pid = 0u32;
-    windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, Some(&mut pid));
-    if pid == my_pid {
-        return;
-    }
-
-    let mut text = [0u16; 512];
-    let len = windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(hwnd, &mut text);
-    if len == 0 {
-        return;
-    }
-
     let hwnd_raw = hwnd.0 as isize;
-
+    // A moment after being restored, so the app has drawn itself again (a
+    // picture taken before that is see-through and wouldn't be kept anyway).
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(150));
-
-        // Skip if another capture refreshed this window very recently
-        if let Some(cache) = crate::state::THUMBNAIL_CACHE.get() {
-            if let Ok(guard) = cache.lock() {
-                if let Some((_, ts)) = guard.get(&hwnd_raw) {
-                    if crate::utils::get_now_ms() - ts < 300 {
-                        return;
-                    }
-                }
-            }
-        }
-
-        let hwnd = HWND(hwnd_raw as *mut _);
-        if let Some(img) = crate::utils::capture_hwnd_to_base64(hwnd, 320, 200) {
-            if let Some(cache) = crate::state::THUMBNAIL_CACHE.get() {
-                if let Ok(mut guard) = cache.lock() {
-                    guard.insert(hwnd_raw, (img, crate::utils::get_now_ms()));
-                    if guard.len() > 15 {
-                        use windows::Win32::UI::WindowsAndMessaging::IsWindow;
-                        guard
-                            .retain(|&k, _| unsafe { IsWindow(Some(HWND(k as *mut _))).as_bool() });
-                    }
-                }
-            }
-        }
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        refresh_snapshot(HWND(hwnd_raw as *mut _), 300);
     });
 }
 

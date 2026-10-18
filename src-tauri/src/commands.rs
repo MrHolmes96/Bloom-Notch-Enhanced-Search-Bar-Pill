@@ -1094,7 +1094,8 @@ pub async fn get_active_windows() -> Vec<AppInfo> {
 }
 
 #[tauri::command]
-pub async fn focus_window(hwnd: isize) {
+pub async fn focus_window(hwnd: isize, from_preview: Option<bool>) {
+    let from_preview = from_preview.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || unsafe {
         use windows::Win32::UI::WindowsAndMessaging::{
             GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible, ShowWindow,
@@ -1112,6 +1113,10 @@ pub async fn focus_window(hwnd: isize) {
 
             if !fg.is_invalid() && fg == hwnd {
                 should_minimize = true;
+            } else if from_preview {
+                // A window's own preview brings that window forward, even
+                // when another window of the same app (a sign-in pop-up, a
+                // second window) is the one in front.
             } else if !fg.is_invalid() {
                 let mut fg_pid = 0u32;
                 let mut target_pid = 0u32;
@@ -1122,7 +1127,7 @@ pub async fn focus_window(hwnd: isize) {
                 }
             }
 
-            if !should_minimize {
+            if !should_minimize && !from_preview {
                 let now = crate::utils::get_now_ms();
                 should_minimize = if let Some(map) = crate::state::FOCUS_TIMESTAMPS.get() {
                     if let Ok(guard) = map.lock() {
@@ -1139,6 +1144,12 @@ pub async fn focus_window(hwnd: isize) {
             }
 
             if should_minimize {
+                // Its preview while minimized is how it looks right now.
+                if crate::window_capture::age_ms(hwnd) > 1500
+                    && !crate::utils::is_window_fullscreen(hwnd)
+                {
+                    let _ = crate::window_capture::take(hwnd, 320, 200);
+                }
                 let _ = ShowWindow(hwnd, SW_MINIMIZE);
             } else {
                 crate::foreground::switch_to(hwnd);
@@ -3432,37 +3443,27 @@ pub async fn capture_window_thumbnail(
             }
         }
 
+        // A minimized window can't be taken (and is never restored to take
+        // it): its last snapshot, kept warm while it was in front. A window
+        // with no picture at all still gets its card (an empty picture).
         if is_minimized {
-            // Never restore a minimized window to capture it: that briefly
-            // un-minimizes it on screen. Thumbnails are kept warm by the
-            // minimize/focus window hooks, so minimized windows normally have
-            // a cached image already; without one we simply show no preview.
-            let cached_img = if let Some(cache) = crate::state::THUMBNAIL_CACHE.get() {
-                cache
-                    .lock()
-                    .ok()
-                    .and_then(|g| g.get(&hwnd_key).map(|(img, _)| img.clone()))
-            } else {
-                None
-            };
-            return cached_img.map(|img| (img, focus_time));
+            let kept = crate::window_capture::cached(hwnd).map(|(image, _)| image);
+            return Some((kept.unwrap_or_default(), focus_time));
         }
-
-        let result = crate::utils::capture_hwnd_to_base64(hwnd, max_width, max_height);
-
-        if let Some(ref img) = result {
-            if let Some(cache) = crate::state::THUMBNAIL_CACHE.get() {
-                if let Ok(mut guard) = cache.lock() {
-                    guard.insert(hwnd_key, (img.clone(), crate::utils::get_now_ms()));
-                    // Prune dead windows if cache size exceeds 15
-                    // Minimized windows (IsWindow == true) are kept intact
-                    if guard.len() > 15 {
-                        guard.retain(|&k, _| IsWindow(Some(HWND(k as *mut _))).as_bool());
-                    }
-                }
-            }
-        }
-
+        let result = match crate::window_capture::take(hwnd, max_width, max_height) {
+            Some(shot) if shot.usable => Some(shot.image),
+            // Nothing drawn yet (just restored): its last real picture.
+            Some(shot) => Some(
+                crate::window_capture::cached(hwnd)
+                    .map(|(image, _)| image)
+                    .unwrap_or(shot.image),
+            ),
+            None => Some(
+                crate::window_capture::cached(hwnd)
+                    .map(|(image, _)| image)
+                    .unwrap_or_default(),
+            ),
+        };
         result.map(|img| (img, focus_time))
     })
     .await

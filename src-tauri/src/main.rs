@@ -27,6 +27,7 @@ mod types;
 mod updater;
 mod utils;
 mod wifi;
+mod window_capture;
 mod window_memory;
 
 use std::sync::atomic::Ordering;

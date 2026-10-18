@@ -919,6 +919,39 @@ pub fn notifications_status() -> String {
 
 // ---------------------------------------------------------------- clicking
 
+/// Whether another app's window came to the front within `timeout_ms` of a
+/// click (not Bloom's, not Windows' notification or Start windows).
+fn came_forward(before: HWND, timeout_ms: u64) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    let process = |hwnd: HWND| {
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        pid
+    };
+    let started = std::time::Instant::now();
+    let before_process = process(before);
+    loop {
+        let now = unsafe { GetForegroundWindow() };
+        if !now.is_invalid() && now != before {
+            let pid = process(now);
+            let shell = unsafe { crate::commands::process_image_path(pid) }.is_some_and(|path| {
+                let file = path.rsplit('\\').next().unwrap_or_default().to_lowercase();
+                matches!(
+                    file.as_str(),
+                    "shellexperiencehost.exe" | "startmenuexperiencehost.exe" | "searchhost.exe"
+                )
+            });
+            if pid != 0 && pid != std::process::id() && pid != before_process && !shell {
+                return true;
+            }
+        }
+        if started.elapsed() >= std::time::Duration::from_millis(timeout_ms) {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(60));
+    }
+}
+
 /// Letters and digits only, lower case, for comparing texts.
 fn squash(text: &str) -> String {
     text.chars()
@@ -1076,9 +1109,14 @@ pub async fn notification_activate(
     tauri::async_runtime::spawn_blocking(move || {
         use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let before = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+        let opens_an_app = !aumid.is_empty() && !aumid.starts_with("Windows.SystemToast.");
+        // Windows' own pop-up first; it counts once something came forward
+        // (an app that takes its clicks inside, like Discord, opens the chat).
         let clicked_in_windows =
             texts_of(id).is_some_and(|(title, body)| click_windows_popup(&title, &body));
-        let result = if clicked_in_windows {
+        let opened_by_windows = clicked_in_windows && came_forward(before, 1800);
+        let result = if opened_by_windows {
             Ok(())
         } else {
             let content = content_of(id, &aumid, time.unwrap_or_default());
@@ -1090,12 +1128,14 @@ pub async fn notification_activate(
                 }
                 None => crate::toast::open_app(&aumid),
             };
-            // The app didn't take the click (its activator is gone, say):
-            // open the app itself, which is what clicking still means.
             match result {
-                Err(_) if !aumid.is_empty() && !aumid.starts_with("Windows.SystemToast.") => {
+                // The app said yes but nothing opened (an activator that does
+                // nothing for this one), or it didn't take the click at all:
+                // open the app itself, which is what clicking still means.
+                Ok(()) if opens_an_app && content.is_some() && !came_forward(before, 1500) => {
                     crate::toast::open_app(&aumid)
                 }
+                Err(_) if opens_an_app => crate::toast::open_app(&aumid),
                 other => other,
             }
         };

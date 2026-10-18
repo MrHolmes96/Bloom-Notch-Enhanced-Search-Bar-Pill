@@ -185,6 +185,15 @@ body {
 	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
+/* A window with no picture yet: its app's icon on the card. */
+.preview-placeholder {
+	width: 200px;
+	height: 120px;
+	border-radius: 6px;
+	background: rgba(0, 0, 0, 0.5) center / 40px 40px no-repeat;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
 .preview-label {
 	color: rgba(255, 255, 255, 0.9);
 	font-size: 12px;
