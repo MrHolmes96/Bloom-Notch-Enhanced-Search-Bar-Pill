@@ -295,6 +295,18 @@ body {
 	height: 32px;
 }
 
+/* Tray Bin's bin is a tall outline that fills its whole box, so it reads a
+   step bigger than the app icons around it: drawn a step smaller. */
+.dock-icon img.dock-bin-glyph {
+	width: 24px;
+	height: 24px;
+}
+
+.dock-icon-only .dock-icon img.dock-bin-glyph {
+	width: 27px;
+	height: 27px;
+}
+
 .dock-icon-only .fallback-icon {
 	font-size: 16px;
 }

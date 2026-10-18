@@ -80,6 +80,15 @@ the notch go. An app's window opened by a left click never holds the notch.
 The menus are kept in front of the notch, which puts itself back on top
 whenever it changes whether it takes clicks.
 
+An icon is one record however a message names it (by its GUID, or by its
+window and id), so a change sent without the GUID never makes a copy without
+the app's click message. An icon first seen being changed rather than added
+(it was added while Explorer's window was in front) has no click message:
+the app is asked to add its icons again (`TaskbarCreated` sent to it alone),
+and a click before that has arrived uses the message of another of the app's
+icons, waits briefly for the app to add it again, or else clicks the icon in
+Explorer's own tray.
+
 An icon's picture is loaded again at 64 px from the file Windows loaded it from
 when that is known (`GetIconInfoEx`), so it stays sharp at the notch's size;
 otherwise the app's own picture is used. Changes reach the notch as

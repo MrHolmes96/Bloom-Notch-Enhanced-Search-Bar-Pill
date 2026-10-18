@@ -4382,7 +4382,13 @@ pub async fn open_system_action(action: SystemAction) -> Result<(), String> {
 pub async fn double_click_tray_icon(tray_id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         if crate::tray_host::has_icon(&tray_id) {
-            crate::tray_host::click(&tray_id, crate::tray_host::Button::Double)
+            match crate::tray_host::click(&tray_id, crate::tray_host::Button::Double) {
+                // No click message for it: a click in Explorer's tray instead.
+                Err(error) if error == crate::tray_host::NO_CLICK_MESSAGE => {
+                    crate::tray::interact(&tray_id, false)
+                }
+                other => other,
+            }
         } else {
             crate::tray::interact(&tray_id, false)
         }

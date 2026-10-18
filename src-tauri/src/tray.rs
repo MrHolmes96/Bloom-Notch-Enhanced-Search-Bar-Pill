@@ -1081,16 +1081,40 @@ pub fn interact(key: &str, context_menu: bool) -> Result<(), String> {
         } else {
             crate::tray_host::Button::Left
         };
-        return crate::tray_host::click(key, button);
+        match crate::tray_host::click(key, button) {
+            // Bloom has no click message for it: click it in Explorer's tray.
+            Err(error) if error == crate::tray_host::NO_CLICK_MESSAGE => {}
+            other => return other,
+        }
     }
+    interact_in_explorer(key, context_menu)
+}
+
+/// Clicks an icon in Explorer's own tray (through Windows' accessibility
+/// interface), found by its key or, for an icon Bloom's tray knows, by its
+/// window and id or its GUID.
+fn interact_in_explorer(key: &str, context_menu: bool) -> Result<(), String> {
+    let identity = crate::tray_host::identity(key);
     unsafe {
         let _com = ComApartment::new()?;
         let windows = process_windows();
         let icons = live_icons(&windows, true);
+        let same_icon = |icon: &Icon| {
+            icon.key == key
+                || identity.is_some_and(|(hwnd, uid, guid)| {
+                    let id = &icon.identifier;
+                    guid.is_some_and(|guid| id.guidItem == guid)
+                        || (id.hWnd.0 as isize == hwnd && id.uID == uid)
+                })
+        };
         let icon = icons
             .iter()
-            .find(|i| i.key == key)
-            .ok_or("This tray icon is no longer running.")?;
+            .find(|icon| same_icon(icon))
+            .ok_or(if identity.is_some() {
+                crate::tray_host::NO_CLICK_MESSAGE
+            } else {
+                "This tray icon is no longer running."
+            })?;
         let automation: IUIAutomation =
             CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)
                 .map_err(|e| e.to_string())?;

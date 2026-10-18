@@ -348,7 +348,19 @@ unsafe fn record(message: u32, nid: &NotifyIconData32) -> bool {
     let Ok(mut icons) = ICONS.lock() else {
         return false;
     };
-    let index = icons.iter().position(|icon| icon.id == id);
+    // The same icon, however this message names it: by its GUID, or by its
+    // window and id (not every app sends the GUID with every change), so a
+    // change never makes a second copy of an icon without its click message.
+    let index = icons.iter().position(|icon| icon.id == id).or_else(|| {
+        (hwnd != 0).then_some(()).and_then(|_| {
+            icons
+                .iter()
+                .position(|icon| icon.hwnd == hwnd && icon.uid == nid.uid)
+        })
+    });
+    if let (Some(index), Some(_)) = (index, &guid) {
+        icons[index].id = id.clone();
+    }
     match message {
         NIM_DELETE => {
             if let Some(index) = index {
@@ -373,6 +385,12 @@ unsafe fn record(message: u32, nid: &NotifyIconData32) -> bool {
                     GetWindowThreadProcessId(HWND(hwnd as *mut _), Some(&mut pid));
                     if pid == std::process::id() {
                         return false;
+                    }
+                    // First seen being changed rather than added (it was added
+                    // while Explorer's window was in front), so without the
+                    // message its clicks go to: ask the app to add it again.
+                    if message != NIM_ADD && nid.flags & NIF_MESSAGE == 0 {
+                        ask_to_add_again(hwnd);
                     }
                     let path = crate::commands::process_image_path(pid).unwrap_or_default();
                     icons.push(Icon {
@@ -1175,6 +1193,73 @@ pub(crate) fn watch_interaction(
     });
 }
 
+/// An icon Bloom has no click message for even after asking (`tray::interact`
+/// then clicks it in Explorer's own tray instead).
+pub const NO_CLICK_MESSAGE: &str = "This tray icon doesn't respond to clicks.";
+
+/// Asks one program to add its tray icons again, as it does after Explorer
+/// restarts (`TaskbarCreated`), so Bloom gets what it missed.
+unsafe fn ask_to_add_again(hwnd: isize) {
+    let message = TASKBAR_CREATED.load(Ordering::Relaxed);
+    if message != 0 {
+        let _ = PostMessageW(
+            Some(HWND(hwnd as *mut _)),
+            message,
+            WPARAM(0),
+            LPARAM(BLOOM_MARK),
+        );
+    }
+}
+
+/// The message (and version) an icon's clicks go to, for an icon Bloom saw
+/// changed but never added: the one the app gave another of its icons (apps
+/// use one message for all their icons), or else the one it gives when asked
+/// to add its icons again, which it does at once.
+fn recover_callback(id: &str, hwnd: isize, uid: u32) -> Option<(u32, u32)> {
+    let known = || -> Option<(u32, u32)> {
+        let icons = ICONS.lock().ok()?;
+        icons
+            .iter()
+            .filter(|icon| icon.callback != 0)
+            .find(|icon| icon.id == id || (icon.hwnd == hwnd && icon.uid == uid))
+            .or_else(|| {
+                icons
+                    .iter()
+                    .find(|icon| icon.callback != 0 && icon.hwnd == hwnd)
+            })
+            .map(|icon| (icon.callback, icon.version))
+    };
+    if let Some(found) = known() {
+        return Some(found);
+    }
+    unsafe {
+        // In front first, so what the app sends comes to Bloom.
+        let host = HWND(HOST.load(Ordering::Relaxed) as *mut _);
+        if !host.0.is_null() {
+            raise(host);
+        }
+        ask_to_add_again(hwnd);
+    }
+    for _ in 0..16 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if let Some(found) = known() {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// An icon's window, id and GUID, to find it in Explorer's own tray.
+pub fn identity(id: &str) -> Option<(isize, u32, Option<GUID>)> {
+    let icons = ICONS.lock().ok()?;
+    let icon = icons.iter().find(|icon| icon.id == id)?;
+    let guid = icon
+        .id
+        .strip_prefix("g:")
+        .and_then(|text| GUID::try_from(text.trim_matches(|c| c == '{' || c == '}')).ok());
+    Some((icon.hwnd, icon.uid, guid))
+}
+
 /// Clicks an icon the way Explorer's tray does, with the pointer where the
 /// user clicked, so the app opens its menu or window there.
 pub fn click(id: &str, button: Button) -> Result<(), String> {
@@ -1191,8 +1276,13 @@ pub fn click(id: &str, button: Button) -> Result<(), String> {
         prune();
         return Err("This tray icon is no longer running.".into());
     }
+    let (callback, version) = if callback != 0 {
+        (callback, version)
+    } else {
+        recover_callback(id, hwnd, uid).unwrap_or((0, version))
+    };
     if callback == 0 {
-        return Err("This tray icon doesn't respond to clicks.".into());
+        return Err(NO_CLICK_MESSAGE.into());
     }
     let mut cursor = POINT::default();
     unsafe {

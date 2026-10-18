@@ -1196,13 +1196,13 @@ const Dock = memo(function Dock() {
 				{extra.icon && extra.icon_light ? (
 					<>
 						<DockIconImage
-							className="extra-icon-dark-bg"
+							className={`extra-icon-dark-bg${extra.kind === "recycle-bin" ? " dock-bin-glyph" : ""}`}
 							src={extra.icon}
 							alt={extra.name}
 							pixelArt={extra.pixelated}
 						/>
 						<DockIconImage
-							className="extra-icon-light-bg"
+							className={`extra-icon-light-bg${extra.kind === "recycle-bin" ? " dock-bin-glyph" : ""}`}
 							src={extra.icon_light}
 							alt={extra.name}
 							pixelArt={extra.pixelated}
