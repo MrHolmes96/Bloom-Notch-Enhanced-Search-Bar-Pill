@@ -38,6 +38,11 @@ pub async fn set_notch_hovered(app: AppHandle, hovered: bool) {
 }
 
 #[tauri::command]
+pub async fn set_notch_open(open: bool) {
+    NOTCH_IS_OPEN.store(open, Ordering::Relaxed);
+}
+
+#[tauri::command]
 pub async fn set_notch_visible(visible: bool) {
     NOTCH_IS_VISIBLE.store(visible, Ordering::Relaxed);
 }

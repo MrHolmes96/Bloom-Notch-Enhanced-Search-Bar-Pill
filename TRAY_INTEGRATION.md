@@ -68,12 +68,17 @@ A click sends the app the callback messages Explorer sends for a click on its
 icon (mouse move, button down and up, then `NIN_SELECT` or `WM_CONTEXTMENU` for
 version 3 and 4 icons, with the pointer position for version 4), after giving
 the app the right to come to the front. The app opens its menu or window at the
-pointer at once. While a menu or flyout it opened is on screen, the notch stays
-open, however long that is (`tray-interaction-end` tells it when they are
-gone). Menus are Windows' own (`#32768`), the app's caption-less tool or
-top-most pop-ups, and floating pop-ups of another process at the pointer (an
-app drawing its menu in a helper process); another window the click opened
-keeps the notch open for up to two minutes.
+pointer at once. While a menu it opened is on screen, the notch stays open,
+however long that is: from a right click on, and from when a left click turns
+out to open a menu (`tray-menu-open`); `tray-interaction-end` says when it is
+gone. Menus are Windows' own (`#32768`) and the menus apps draw themselves (a
+tool or top-most pop-up of menu width without a caption, opening at the
+pointer, in the app's process or a helper's), not Bloom's own tooltips. A
+window that is shown but can't be seen (faded out, cloaked, off the screen)
+is not an open menu, and a menu the pointer hasn't been on for 8 seconds lets
+the notch go. An app's window opened by a left click never holds the notch.
+The menus are kept in front of the notch, which puts itself back on top
+whenever it changes whether it takes clicks.
 
 An icon's picture is loaded again at 64 px from the file Windows loaded it from
 when that is known (`GetIconInfoEx`), so it stays sharp at the notch's size;

@@ -1132,6 +1132,8 @@ pub fn re_assert_topmost(hwnd: HWND) {
         let new_ex = ex | WS_EX_NOACTIVATE.0 as usize | WS_EX_TOOLWINDOW.0 as usize;
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex as isize);
     }
+    // A tray icon's menu opened from the notch stays in front of it.
+    crate::tray_host::raise_open_menus();
 }
 
 /// Captures an HWND to a base64-encoded PNG thumbnail, scaling it down if it exceeds max_width x max_height.

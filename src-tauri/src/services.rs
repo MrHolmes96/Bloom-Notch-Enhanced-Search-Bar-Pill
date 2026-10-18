@@ -2110,6 +2110,12 @@ static MH_LAST_LEFT_EDGE_HOVER: AtomicI32 = AtomicI32::new(-1);
 static MH_LAST_RIGHT_EDGE_HOVER: AtomicI32 = AtomicI32::new(-1);
 static MH_DOCK_EXPIRY_MS: AtomicI64 = AtomicI64::new(0);
 static MH_TOPBAR_EXPIRY_MS: AtomicI64 = AtomicI64::new(0);
+/// Since when the pointer has been off the open notch (0 = it is on it).
+static MH_NOTCH_OFF_SINCE_MS: AtomicI64 = AtomicI64::new(0);
+/// When Bloom last told the notch the pointer is off it.
+static MH_NOTCH_LEFT_SENT_MS: AtomicI64 = AtomicI64::new(0);
+/// How long the pointer is off the open notch before Bloom closes it.
+const NOTCH_OFF_CLOSE_MS: i64 = 500;
 static MH_LEFT_EXPIRY_MS: AtomicI64 = AtomicI64::new(0);
 static MH_RIGHT_EXPIRY_MS: AtomicI64 = AtomicI64::new(0);
 static MH_LAST_MONITOR_UPDATE_MS: AtomicI64 = AtomicI64::new(0);
@@ -2488,7 +2494,20 @@ fn top_edge_armed_for(
     now: i64,
     scale: f64,
 ) -> bool {
-    if !in_top_edge_band(cursor, scale) {
+    // Only at the notch: the pointer resting on a maximized browser's tabs
+    // elsewhere along the top edge must not bring a hidden notch back.
+    let main_rect = MAIN_WINDOW_RECT.lock().ok().and_then(|g| *g);
+    let notch_rect = NOTCH_RECT.try_lock().ok().and_then(|g| *g);
+    let at_notch = match (main_rect, notch_rect) {
+        (Some((win_pos, _)), Some(r)) => {
+            let margin = (80.0 * scale) as i32;
+            let left = win_pos.x + (r.x as f64 * scale) as i32 - margin;
+            let right = win_pos.x + ((r.x + r.width) as f64 * scale) as i32 + margin;
+            cursor.x >= left && cursor.x <= right
+        }
+        _ => true,
+    };
+    if !at_notch || !in_top_edge_band(cursor, scale) {
         MH_TOP_EDGE_ENTER_MS.store(0, Ordering::Relaxed);
         MH_TOP_EDGE_ARMED.store(false, Ordering::Relaxed);
         return false;
@@ -2631,6 +2650,8 @@ fn update_main_interaction(
     };
 
     let mut is_click_interactive = false;
+    // Whether the pointer is on the notch (None: its place isn't known now).
+    let mut pointer_on_notch: Option<bool> = None;
     let main_rect_val = MAIN_WINDOW_RECT.lock().ok().and_then(|g| *g);
 
     if let Some((win_pos, _)) = main_rect_val {
@@ -2655,6 +2676,7 @@ fn update_main_interaction(
                     && cursor.x <= (rx + rw)
                     && cursor.y >= ry_top
                     && cursor.y <= ry_bottom;
+                pointer_on_notch = Some(in_notch_rect);
 
                 // Approaching along the top edge keeps the window interactive
                 // while near the notch's horizontal span. This must stay
@@ -2682,6 +2704,27 @@ fn update_main_interaction(
                     is_click_interactive = true;
                 }
             }
+        }
+    }
+
+    // The open notch closes once the pointer has been off it for a moment,
+    // whatever the webview saw: it misses the pointer leaving when the window
+    // turns click-through first, or when another window takes the pointer.
+    // Said again each second while the notch stays open, as a view may hold
+    // it open (a tray menu, typing) and let go later; the notch decides.
+    if let Some(on_notch) = pointer_on_notch {
+        if NOTCH_IS_OPEN.load(Ordering::Relaxed) && !on_notch && !drag_held {
+            let since = MH_NOTCH_OFF_SINCE_MS.load(Ordering::Relaxed);
+            if since == 0 {
+                MH_NOTCH_OFF_SINCE_MS.store(now, Ordering::Relaxed);
+            } else if now - since >= NOTCH_OFF_CLOSE_MS
+                && now - MH_NOTCH_LEFT_SENT_MS.load(Ordering::Relaxed) >= 1000
+            {
+                MH_NOTCH_LEFT_SENT_MS.store(now, Ordering::Relaxed);
+                let _ = app_handle.emit_to("main", "notch-pointer-left", ());
+            }
+        } else {
+            MH_NOTCH_OFF_SINCE_MS.store(0, Ordering::Relaxed);
         }
     }
 

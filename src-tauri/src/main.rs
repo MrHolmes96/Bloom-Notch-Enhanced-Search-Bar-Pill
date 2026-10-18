@@ -173,6 +173,7 @@ fn main() {
             update_notch_rect,
             set_dock_hovered,
             set_notch_hovered,
+            set_notch_open,
             set_notch_visible,
             setup_shelf_drop,
             shelf_thumbnail,

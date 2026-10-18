@@ -237,21 +237,36 @@ pub fn ready() -> bool {
         && now_ms() - SYNCED_AT.load(Ordering::Relaxed) > 800
 }
 
-/// Explorer's taskbar window, skipping Bloom's own window of the same class.
+/// Explorer's taskbar window: the one of class `Shell_TrayWnd` that belongs to
+/// the process showing the desktop (Explorer), so neither Bloom's own window
+/// of that class nor one another program makes (a tray tool) is taken for it.
+/// Without a desktop, the first one that isn't Bloom's.
 pub fn explorer_taskbar() -> Option<HWND> {
+    use windows::Win32::UI::WindowsAndMessaging::GetShellWindow;
     unsafe {
         let own = std::process::id();
+        let mut shell = 0u32;
+        let desktop = GetShellWindow();
+        if !desktop.0.is_null() {
+            GetWindowThreadProcessId(desktop, Some(&mut shell));
+        }
+        let mut first_other: Option<HWND> = None;
         let mut after: Option<HWND> = None;
         for _ in 0..16 {
-            let hwnd = FindWindowExW(None, after, w!("Shell_TrayWnd"), PCWSTR::null()).ok()?;
+            let Ok(hwnd) = FindWindowExW(None, after, w!("Shell_TrayWnd"), PCWSTR::null()) else {
+                break;
+            };
             let mut pid = 0u32;
             GetWindowThreadProcessId(hwnd, Some(&mut pid));
             if pid != own {
-                return Some(hwnd);
+                if shell == 0 || pid == shell {
+                    return Some(hwnd);
+                }
+                first_other.get_or_insert(hwnd);
             }
             after = Some(hwnd);
         }
-        None
+        first_other
     }
 }
 
@@ -888,6 +903,56 @@ pub(crate) fn bloom_processes() -> Vec<u32> {
     found
 }
 
+/// Whether a window can actually be seen: shown, not cloaked, not faded out
+/// to nothing, and on a screen. Some apps keep a closed menu's window shown
+/// but invisible (faded out, or moved off the screen), and that must not
+/// count as an open menu.
+fn really_shown(hwnd: HWND) -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows::Win32::Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONULL};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetLayeredWindowAttributes, GetWindowLongW, GetWindowRect, IsWindowVisible, GWL_EXSTYLE,
+        LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, WS_EX_LAYERED,
+    };
+    unsafe {
+        if !IsWindowVisible(hwnd).as_bool() {
+            return false;
+        }
+        let mut cloaked = 0u32;
+        if DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            &mut cloaked as *mut u32 as *mut _,
+            std::mem::size_of::<u32>() as u32,
+        )
+        .is_ok()
+            && cloaked != 0
+        {
+            return false;
+        }
+        if GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_LAYERED.0 != 0 {
+            let mut alpha = 255u8;
+            let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+            if GetLayeredWindowAttributes(hwnd, None, Some(&mut alpha), Some(&mut flags)).is_ok()
+                && flags.0 & LWA_ALPHA.0 != 0
+                && alpha == 0
+            {
+                return false;
+            }
+        }
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err()
+            || rect.right <= rect.left
+            || rect.bottom <= rect.top
+            || MonitorFromRect(&rect, MONITOR_DEFAULTTONULL).is_invalid()
+        {
+            return false;
+        }
+        true
+    }
+}
+
 /// The menus on screen that a tray click at `point` may have opened, by
 /// handle: Windows' own menus (`#32768`), and the menus apps draw themselves
 /// (a tool or top-most pop-up without a caption, of menu width, that takes
@@ -898,8 +963,8 @@ pub(crate) fn open_menus(point: POINT, excluded: &[u32]) -> Vec<isize> {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetWindowLongW, GetWindowRect, IsWindowVisible, GWL_EXSTYLE,
-        GWL_STYLE, WS_CAPTION, WS_EX_TRANSPARENT,
+        EnumWindows, GetClassNameW, GetWindowLongW, GetWindowRect, GWL_EXSTYLE, GWL_STYLE,
+        WS_CAPTION, WS_EX_TRANSPARENT,
     };
     struct Search<'a> {
         point: POINT,
@@ -908,7 +973,7 @@ pub(crate) fn open_menus(point: POINT, excluded: &[u32]) -> Vec<isize> {
     }
     unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> windows::core::BOOL {
         let search = &mut *(param.0 as *mut Search);
-        if !IsWindowVisible(hwnd).as_bool() {
+        if !really_shown(hwnd) {
             return true.into();
         }
         let mut class = [0u16; 16];
@@ -962,6 +1027,80 @@ pub(crate) fn open_menus(point: POINT, excluded: &[u32]) -> Vec<isize> {
     search.found
 }
 
+/// The tray menus open right now, per click being watched, so Bloom keeps
+/// them in front of the notch: the notch puts itself back on top whenever it
+/// changes whether it takes clicks, which happens as the pointer moves from
+/// the icon into the menu.
+static OPEN_MENUS: Mutex<Vec<(u64, Vec<isize>)>> = Mutex::new(Vec::new());
+static WATCH_SERIAL: AtomicU64 = AtomicU64::new(1);
+
+fn raise_menu(hwnd: isize) {
+    use windows::Win32::UI::WindowsAndMessaging::SWP_NOOWNERZORDER;
+    let window = HWND(hwnd as *mut _);
+    unsafe {
+        if IsWindow(Some(window)).as_bool() {
+            let _ = SetWindowPos(
+                window,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+            );
+        }
+    }
+}
+
+/// Puts the open tray menus back in front of Bloom's windows. Called whenever
+/// Bloom raises one of its windows.
+pub fn raise_open_menus() {
+    let menus: Vec<isize> = match OPEN_MENUS.lock() {
+        Ok(open) if !open.is_empty() => open.iter().flat_map(|(_, m)| m.clone()).collect(),
+        _ => return,
+    };
+    for hwnd in menus {
+        raise_menu(hwnd);
+    }
+}
+
+/// Whether the pointer is on one of `menus` (or within a few pixels of it).
+fn pointer_on_any(menus: &[isize]) -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
+    let mut cursor = POINT::default();
+    if unsafe { GetCursorPos(&mut cursor) }.is_err() {
+        return true;
+    }
+    menus.iter().any(|&menu| {
+        let mut rect = RECT::default();
+        unsafe { GetWindowRect(HWND(menu as *mut _), &mut rect) }.is_ok()
+            && cursor.x >= rect.left - 12
+            && cursor.x <= rect.right + 12
+            && cursor.y >= rect.top - 12
+            && cursor.y <= rect.bottom + 12
+    })
+}
+
+/// Whether one of Bloom's windows is in front of `menu`.
+fn bloom_in_front_of(menu: isize) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindow, IsWindowVisible, GW_HWNDPREV};
+    let own = std::process::id();
+    let mut above = HWND(menu as *mut _);
+    for _ in 0..64 {
+        above = match unsafe { GetWindow(above, GW_HWNDPREV) } {
+            Ok(hwnd) if !hwnd.0.is_null() => hwnd,
+            _ => return false,
+        };
+        let mut owner = 0u32;
+        unsafe { GetWindowThreadProcessId(above, Some(&mut owner)) };
+        if owner == own && unsafe { IsWindowVisible(above) }.as_bool() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Watches what a tray click opened. While a menu it opened is on screen the
 /// notch stays open, however long that is. A right click holds the notch open
 /// at once (`pinned`), as a menu is coming; a left click only once a menu
@@ -976,14 +1115,39 @@ pub(crate) fn watch_interaction(
     pinned: bool,
 ) {
     std::thread::spawn(move || {
+        let serial = WATCH_SERIAL.fetch_add(1, Ordering::Relaxed);
         let started = std::time::Instant::now();
         let mut seen = false;
         let mut announced = false;
+        // When the pointer was last on one of the menus. A menu nobody has
+        // pointed at for a while lets the notch go: it may be one an app keeps
+        // around after closing it in a way that can't be told from open.
+        let mut last_on_menu = std::time::Instant::now();
         loop {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            let open = open_menus(point, &excluded)
-                .iter()
-                .any(|hwnd| !before.contains(hwnd));
+            let opened: Vec<isize> = open_menus(point, &excluded)
+                .into_iter()
+                .filter(|hwnd| !before.contains(hwnd))
+                .collect();
+            let open = !opened.is_empty();
+            if open && pointer_on_any(&opened) {
+                last_on_menu = std::time::Instant::now();
+            }
+            if open && last_on_menu.elapsed().as_secs() >= 8 {
+                break;
+            }
+            // In front of the notch, from the moment it appears.
+            for &menu in &opened {
+                if !seen || bloom_in_front_of(menu) {
+                    raise_menu(menu);
+                }
+            }
+            if let Ok(mut menus) = OPEN_MENUS.lock() {
+                menus.retain(|(watch, _)| *watch != serial);
+                if open {
+                    menus.push((serial, opened));
+                }
+            }
             if open && !seen && !pinned {
                 if let Some(app) = APP.get() {
                     let _ = app.emit_to("main", "tray-menu-open", id.clone());
@@ -999,6 +1163,9 @@ pub(crate) fn watch_interaction(
             if elapsed.as_secs() > 600 {
                 break;
             }
+        }
+        if let Ok(mut menus) = OPEN_MENUS.lock() {
+            menus.retain(|(watch, _)| *watch != serial);
         }
         if pinned || announced {
             if let Some(app) = APP.get() {

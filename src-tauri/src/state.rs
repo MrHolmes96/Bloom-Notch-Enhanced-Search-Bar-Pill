@@ -25,6 +25,9 @@ pub static DOCK_RECT: Mutex<Option<IntRect>> = Mutex::new(None);
 pub static NOTCH_RECT: Mutex<Option<IntRect>> = Mutex::new(None);
 pub static DOCK_IS_HOVERED: AtomicBool = AtomicBool::new(false);
 pub static NOTCH_IS_HOVERED: AtomicBool = AtomicBool::new(false);
+/// Frontend-reported whether the notch is open or expanded, so the backend can
+/// close it once the pointer has left, even if the webview missed the leave.
+pub static NOTCH_IS_OPEN: AtomicBool = AtomicBool::new(false);
 /// Frontend-reported whether the notch is actually on screen. While false in
 /// smart/peek mode the notch must stay click-through even over its footprint.
 pub static NOTCH_IS_VISIBLE: AtomicBool = AtomicBool::new(true);

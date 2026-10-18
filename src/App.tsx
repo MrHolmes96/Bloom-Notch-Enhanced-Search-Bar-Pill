@@ -776,6 +776,14 @@ function App() {
 		}
 	}, [isNotchHovered, windowLabel]);
 
+	// Bloom watches the pointer itself and closes the open notch once it has
+	// been off it for a moment, even if the page missed it leaving.
+	useEffect(() => {
+		if (windowLabel === "main") {
+			invoke("set_notch_open", { open: isOpen || isHovered }).catch(() => {});
+		}
+	}, [isOpen, isHovered, windowLabel]);
+
 	// Tell the backend whether the notch is actually on screen so a hidden
 	// notch (smart/peek mode) stays click-through instead of swallowing clicks
 	// in its footprint.
