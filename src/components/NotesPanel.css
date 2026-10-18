@@ -79,6 +79,8 @@
 
 .notes-list {
 	overflow-y: auto;
+	/* Scrolling past the end stays in the list. */
+	overscroll-behavior: contain;
 	scrollbar-width: thin;
 	scrollbar-color: var(--bloom-scrollbar-thumb, rgba(255, 255, 255, 0.15)) transparent;
 }

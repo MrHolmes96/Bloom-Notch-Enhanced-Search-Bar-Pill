@@ -96,27 +96,41 @@ unsafe fn resource_bytes(module: HMODULE, name: PCWSTR, kind: PCWSTR) -> Option<
 
 /// The biggest picture in an icon group (`GRPICONDIR`): its id and size.
 /// Among equal sizes the one with the most colours wins.
-fn best_entry(group: &[u8]) -> Option<(u16, u32)> {
+/// The picture to use from an icon group for drawing at `want` px: the
+/// smallest one at least that big, as Windows itself picks (programs often
+/// draw their small pictures differently from their big one, brighter and
+/// simpler, and that is what the taskbar shows), or the biggest when none is
+/// that big; `want` 0 asks for the biggest. More colours win at the same
+/// size. Returns its id, its size and the group's biggest size.
+fn pick_entry(group: &[u8], want: u32) -> Option<(u16, u32, u32)> {
     if group.len() < 6 {
         return None;
     }
     let count = u16::from_le_bytes([group[4], group[5]]) as usize;
-    let mut best: Option<(u16, u32, u16)> = None;
+    let mut entries: Vec<(u16, u32, u16)> = Vec::with_capacity(count);
     for index in 0..count {
         let at = 6 + index * 14;
         let entry = group.get(at..at + 14)?;
         let width = if entry[0] == 0 { 256 } else { entry[0] as u32 };
         let height = if entry[1] == 0 { 256 } else { entry[1] as u32 };
-        let size = width.max(height);
         let bits = u16::from_le_bytes([entry[6], entry[7]]);
         let id = u16::from_le_bytes([entry[12], entry[13]]);
-        if best.is_none_or(|(_, best_size, best_bits)| {
-            size > best_size || (size == best_size && bits > best_bits)
-        }) {
-            best = Some((id, size, bits));
-        }
+        entries.push((id, width.max(height), bits));
     }
-    best.map(|(id, size, _)| (id, size))
+    let largest = entries.iter().map(|&(_, size, _)| size).max()?;
+    let fits = |&&(_, size, _): &&(u16, u32, u16)| want > 0 && size >= want;
+    let chosen = if entries.iter().any(|e| fits(&e)) {
+        // The smallest that is big enough; the most colours at that size.
+        entries
+            .iter()
+            .filter(|e| fits(e))
+            .min_by(|a, b| a.1.cmp(&b.1).then(b.2.cmp(&a.2)))?
+    } else {
+        entries
+            .iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then(a.2.cmp(&b.2)))?
+    };
+    Some((chosen.0, chosen.1, largest))
 }
 
 fn png_data_uri(png: &[u8]) -> String {
@@ -178,10 +192,11 @@ fn bitmap_pixels(bits: &[u8]) -> Option<image::RgbaImage> {
     image::RgbaImage::from_raw(width as u32, height as u32, rgba)
 }
 
-/// The largest picture of a program's or library's icon as a PNG data URI,
-/// when that picture is at least `min_size` px. `index` is the icon's index
-/// as shortcuts and the shell give it (0 for a program's own icon).
-pub fn resource_icon(file: &str, index: i32, min_size: u32) -> Option<String> {
+/// A program's or library's icon as a PNG data URI, its picture for drawing
+/// at `want` px (0: its biggest), when its biggest picture is at least
+/// `min_size` px. `index` is the icon's index as shortcuts and the shell give
+/// it (0 for a program's own icon).
+pub fn resource_icon(file: &str, index: i32, min_size: u32, want: u32) -> Option<String> {
     let path = wide(file);
     unsafe {
         let module = LoadLibraryExW(
@@ -193,8 +208,8 @@ pub fn resource_icon(file: &str, index: i32, min_size: u32) -> Option<String> {
         let result = (|| {
             let group = group_name(module, index)?;
             let entries = resource_bytes(module, group.as_pcwstr(), RT_GROUP_ICON)?;
-            let (id, size) = best_entry(entries)?;
-            if size < min_size {
+            let (id, size, largest) = pick_entry(entries, want)?;
+            if largest < min_size {
                 return None;
             }
             let bits = resource_bytes(module, PCWSTR(id as usize as *const u16), RT_ICON)?;
@@ -339,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn picks_the_biggest_picture() {
+    fn picks_the_picture_for_the_size() {
         // RuneLite's icon: up to 128 px.
         let runelite = group(&[
             (16, 32, 1),
@@ -348,13 +363,21 @@ mod tests {
             (48, 32, 4),
             (128, 32, 5),
         ]);
-        assert_eq!(best_entry(&runelite), Some((5, 128)));
+        // The dock at 42 px uses the 48 px picture, as the taskbar would.
+        assert_eq!(pick_entry(&runelite, 42), Some((4, 48, 128)));
+        assert_eq!(pick_entry(&runelite, 48), Some((4, 48, 128)));
+        assert_eq!(pick_entry(&runelite, 49), Some((5, 128, 128)));
+        // Bigger than any: the biggest. 0 asks for the biggest.
+        assert_eq!(pick_entry(&runelite, 300), Some((5, 128, 128)));
+        assert_eq!(pick_entry(&runelite, 0), Some((5, 128, 128)));
         // 0 means 256; more colours win at the same size.
         let modern = group(&[(48, 8, 1), (48, 32, 2), (0, 32, 3)]);
-        assert_eq!(best_entry(&modern), Some((3, 256)));
+        assert_eq!(pick_entry(&modern, 0), Some((3, 256, 256)));
+        assert_eq!(pick_entry(&modern, 40), Some((2, 48, 256)));
         let small = group(&[(32, 4, 7), (32, 32, 8)]);
-        assert_eq!(best_entry(&small), Some((8, 32)));
-        assert_eq!(best_entry(&[0, 0, 1]), None);
+        assert_eq!(pick_entry(&small, 0), Some((8, 32, 32)));
+        assert_eq!(pick_entry(&small, 64), Some((8, 32, 32)));
+        assert_eq!(pick_entry(&[0, 0, 1], 0), None);
     }
 
     #[test]

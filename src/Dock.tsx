@@ -572,7 +572,10 @@ const Dock = memo(function Dock() {
 			const icon = await invoke<string | null>("get_app_icon", {
 				path,
 				name: name || null,
-				hwnd: hwnd || null
+				hwnd: hwnd || null,
+				// The size the icon is drawn at, in screen pixels, so the program's
+				// own picture for that size is used, as on the taskbar.
+				size: Math.ceil((dockIconOnly ? 32 : 28) * scale * (window.devicePixelRatio || 1))
 			});
 			if (icon) {
 				iconsRef.current[cacheKey] = icon;

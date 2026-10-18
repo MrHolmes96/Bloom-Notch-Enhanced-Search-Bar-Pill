@@ -1824,14 +1824,18 @@ function App() {
 		) {
 			return;
 		}
-		// Over the notes list the wheel scrolls the list first, then moves on.
+		// A notes list long enough to scroll keeps the wheel to itself: it
+		// scrolls, and reaching its top or bottom doesn't turn the page. The
+		// rest of the notes page (the "Add a to-do" row, the header) still
+		// turns pages, as do the arrows. A list that fits turns pages too.
 		const notesList = target.closest(".notes-list") as HTMLElement | null;
-		if (notesList) {
-			const max = notesList.scrollHeight - notesList.clientHeight;
-			const step = e.deltaY;
-			if (max > 0 && ((step > 0 && notesList.scrollTop < max - 1) || (step < 0 && notesList.scrollTop > 1))) {
-				return;
-			}
+		if (notesList && notesList.scrollHeight - notesList.clientHeight > 1) {
+			// The rest of this gesture (a trackpad's momentum carrying on as
+			// the pointer leaves the list) doesn't turn the page either; a
+			// new one, after a pause, does.
+			wheelGestureRef.current.last = performance.now();
+			wheelGestureRef.current.turned = true;
+			return;
 		}
 		// Over the shelf the wheel scrolls its row first; once the row is at its
 		// end (or fits), it moves on through the scroll menu like any panel.

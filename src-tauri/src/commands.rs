@@ -1735,14 +1735,23 @@ pub async fn get_app_icon(
     path: String,
     name: Option<String>,
     hwnd: Option<isize>,
+    size: Option<u32>,
 ) -> Result<Option<String>, String> {
     let cache_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let cache_path = cache_dir.join(ICON_CACHE_FILE);
-    let cache_key = get_cache_key(&path, name.as_deref());
+    let base_key = get_cache_key(&path, name.as_deref());
+    // The size it is drawn at (the dock asks), so a program's picture for
+    // that size is used, as Windows does; otherwise its biggest.
+    let want = size.unwrap_or(0).min(256);
+    let cache_key = if want > 0 {
+        format!("{base_key}@{want}")
+    } else {
+        base_key.clone()
+    };
 
     // Strategy 0: Check for custom icon first
     let custom_icons_dir = cache_dir.join("custom_icons");
-    let custom_file = custom_icons_dir.join(format!("{}.png", sanitize_filename(&cache_key)));
+    let custom_file = custom_icons_dir.join(format!("{}.png", sanitize_filename(&base_key)));
     if custom_file.exists() {
         if let Ok(data) = std::fs::read(&custom_file) {
             use base64::Engine;
@@ -1867,7 +1876,7 @@ pub async fn get_app_icon(
                 }
                 let icon = bundled_java_launcher(&path_owned)
                     .and_then(|launcher| {
-                        crate::app_icon::resource_icon(&launcher, 0, 48)
+                        crate::app_icon::resource_icon(&launcher, 0, 48, want)
                             .or_else(|| shell_item_icon(&launcher))
                     })
                     .or_else(|| window_own_icon(h_hwnd).and_then(|i| icon_to_base64(i)));
@@ -1881,7 +1890,7 @@ pub async fn get_app_icon(
             // than its window's (usually 32 px). Programs that host other
             // apps' windows keep the window's icon.
             if !crate::app_icon::hosts_other_apps(&path_owned) && path_owned.contains('\\') {
-                if let Some(icon) = crate::app_icon::resource_icon(&path_owned, 0, 48) {
+                if let Some(icon) = crate::app_icon::resource_icon(&path_owned, 0, 48, want) {
                     CoUninitialize();
                     return Some(icon);
                 }
@@ -1960,10 +1969,11 @@ pub async fn get_app_icon(
             // (RuneLite) into a small or blurry picture. For a shortcut that
             // is the program or library its icon setting names.
             let mut icon_data = if is_lnk {
-                crate::app_icon::shortcut_resource(&path_clone)
-                    .and_then(|(file, index)| crate::app_icon::resource_icon(&file, index, 48))
+                crate::app_icon::shortcut_resource(&path_clone).and_then(|(file, index)| {
+                    crate::app_icon::resource_icon(&file, index, 48, want)
+                })
             } else if path_clone.to_lowercase().ends_with(".exe") {
-                crate::app_icon::resource_icon(&path_clone, 0, 48)
+                crate::app_icon::resource_icon(&path_clone, 0, 48, want)
             } else {
                 None
             };
