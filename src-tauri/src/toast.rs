@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use windows::core::{GUID, HSTRING, PCWSTR};
 
 fn wide(text: &str) -> Vec<u16> {
@@ -36,7 +36,7 @@ pub struct ToastButton {
 }
 
 /// A text box on a notification (quick reply).
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToastInput {
     pub id: String,
     pub placeholder: String,
@@ -48,6 +48,64 @@ pub struct ToastContent {
     activation: String,
     pub buttons: Vec<ToastButton>,
     pub inputs: Vec<ToastInput>,
+}
+
+/// A notification's content as Bloom keeps it with its notification history,
+/// so clicking it still works after Windows has let go of it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SavedContent {
+    launch: String,
+    activation: String,
+    buttons: Vec<SavedButton>,
+    inputs: Vec<ToastInput>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SavedButton {
+    label: String,
+    input: Option<String>,
+    arguments: String,
+    activation: String,
+}
+
+impl From<&ToastContent> for SavedContent {
+    fn from(content: &ToastContent) -> Self {
+        SavedContent {
+            launch: content.launch.clone(),
+            activation: content.activation.clone(),
+            buttons: content
+                .buttons
+                .iter()
+                .map(|b| SavedButton {
+                    label: b.label.clone(),
+                    input: b.input.clone(),
+                    arguments: b.arguments.clone(),
+                    activation: b.activation.clone(),
+                })
+                .collect(),
+            inputs: content.inputs.clone(),
+        }
+    }
+}
+
+impl From<&SavedContent> for ToastContent {
+    fn from(saved: &SavedContent) -> Self {
+        ToastContent {
+            launch: saved.launch.clone(),
+            activation: saved.activation.clone(),
+            buttons: saved
+                .buttons
+                .iter()
+                .map(|b| ToastButton {
+                    label: b.label.clone(),
+                    input: b.input.clone(),
+                    arguments: b.arguments.clone(),
+                    activation: b.activation.clone(),
+                })
+                .collect(),
+            inputs: saved.inputs.clone(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------- reading the database

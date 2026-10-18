@@ -13,7 +13,8 @@ import "./NotificationCenter.css";
 /**
  * Bloom's notification center (Settings > Notifications > Notification
  * Center: Bloom): the same notifications as Windows' sidebar, in Bloom's look,
- * with their buttons and reply boxes. It hangs from the top of the screen and
+ * with their buttons and reply boxes, plus every notification Bloom showed as
+ * a card until it is clicked or cleared. It hangs from the top of the screen and
  * is only as tall as its notifications; past about six the list scrolls.
  * Opened by the notch's bell button; closes when it loses focus or on Escape.
  */
@@ -83,8 +84,14 @@ export default function NotificationCenter() {
 
 	useEffect(() => {
 		void refresh();
-		const timer = window.setInterval(() => void refresh(), 3000);
+		// Read when opened, and while open when a notification arrives, is
+		// clicked or is cleared; nothing runs while the center is closed.
 		const opened = listen("notification-center-open", () => void refresh());
+		const changed = listen("notification-center-changed", () => {
+			void appWindow.isVisible().then((visible) => {
+				if (visible) void refresh();
+			});
+		});
 		const blur = appWindow.onFocusChanged(({ payload: focused }) => {
 			if (!focused) void invoke("notification_center_hide");
 		});
@@ -93,8 +100,8 @@ export default function NotificationCenter() {
 		};
 		window.addEventListener("keydown", onKey);
 		return () => {
-			window.clearInterval(timer);
 			void opened.then((f) => f());
+			void changed.then((f) => f());
 			void blur.then((f) => f());
 			window.removeEventListener("keydown", onKey);
 		};

@@ -4,16 +4,24 @@
 //! corner. Bloom style shows them as Bloom cards (Bloom's colours and opacity,
 //! adjustable rounding) in a window of their own and hides Windows' pop-up.
 //!
-//! Bloom reads the notifications with Windows' notification listener, polling
-//! it because its change event needs a packaged app. Windows' pop-up is only
-//! hidden once that listener works, and it is put back whenever Bloom style is
-//! turned off, Bloom exits, or Bloom starts again.
+//! Bloom reads the notifications with Windows' notification listener. Its
+//! change event needs a packaged app, so Bloom reads it the moment Windows'
+//! own pop-up appears or changes (which is exactly when a pop-up is due), and
+//! otherwise only every few seconds. Windows' pop-up is only hidden once that
+//! listener works, and it is put back whenever Bloom style is turned off,
+//! Bloom exits, or Bloom starts again.
+//!
+//! Every notification Bloom shows as a card is also kept in Bloom's own
+//! history (with what clicking it does), so it stays in Bloom's notification
+//! center until it is clicked or cleared, even when Windows lets go of it
+//! sooner (an app that keeps nothing in Windows' center, a Windows update), and
+//! clicking it still works then.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, OnceLock};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
@@ -381,6 +389,8 @@ unsafe extern "system" fn on_win_event(
         return;
     }
     apply_to_toast(hwnd);
+    // Windows is showing (or changing) a pop-up: a notification is due now.
+    wake_listener();
 }
 
 /// Watches for Windows' pop-up appearing or being moved, on a thread of its own.
@@ -436,10 +446,10 @@ pub struct BloomNotification {
 }
 
 /// Adds each notification's buttons and reply boxes, read from Windows'
-/// notification database in one go.
-fn attach_content(items: &mut [BloomNotification]) {
+/// notification database in one go, and returns the content found.
+fn attach_content(items: &mut [BloomNotification]) -> HashMap<u32, crate::toast::ToastContent> {
     if items.is_empty() {
-        return;
+        return HashMap::new();
     }
     let wanted: Vec<crate::toast::Wanted> = items
         .iter()
@@ -449,13 +459,14 @@ fn attach_content(items: &mut [BloomNotification]) {
             time: item.time,
         })
         .collect();
-    let mut content = crate::toast::content_for(&wanted);
+    let content = crate::toast::content_for(&wanted);
     for item in items.iter_mut() {
-        if let Some(found) = content.remove(&item.id) {
-            item.buttons = found.buttons;
-            item.inputs = found.inputs;
+        if let Some(found) = content.get(&item.id) {
+            item.buttons = found.buttons.clone();
+            item.inputs = found.inputs.clone();
         }
     }
+    content
 }
 
 fn hstring(value: windows::core::Result<windows::core::HSTRING>) -> String {
@@ -575,6 +586,173 @@ fn windows_would_show(item: &BloomNotification) -> bool {
     true
 }
 
+// ---------------------------------------------------------------- Bloom's history
+
+/// A notification Bloom showed, as kept in Bloom's notification center.
+#[derive(Clone, Serialize, Deserialize)]
+struct Saved {
+    id: u32,
+    app: String,
+    aumid: String,
+    title: String,
+    body: String,
+    time: i64,
+    content: Option<crate::toast::SavedContent>,
+}
+
+/// Kept at most this many, for at most this long.
+const HISTORY_MAX: usize = 200;
+const HISTORY_DAYS: i64 = 14;
+
+static HISTORY: Mutex<Option<Vec<Saved>>> = Mutex::new(None);
+
+fn history_path() -> Option<std::path::PathBuf> {
+    Some(
+        APP.get()?
+            .path()
+            .app_config_dir()
+            .ok()?
+            .join("notification-history.json"),
+    )
+}
+
+/// Runs `change` on the history (read from disk the first time), then saves
+/// it when `change` says it changed anything.
+fn with_history<T>(change: impl FnOnce(&mut Vec<Saved>) -> (T, bool)) -> T {
+    let mut guard = HISTORY.lock().unwrap_or_else(|e| e.into_inner());
+    let list = guard.get_or_insert_with(|| {
+        history_path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|text| serde_json::from_str::<Vec<Saved>>(&text).ok())
+            .unwrap_or_default()
+    });
+    let (result, changed) = change(list);
+    let oldest = crate::utils::get_now_ms() - HISTORY_DAYS * 24 * 60 * 60 * 1000;
+    let before = list.len();
+    list.retain(|item| item.time >= oldest);
+    list.sort_by_key(|item| std::cmp::Reverse(item.time));
+    list.truncate(HISTORY_MAX);
+    if changed || list.len() != before {
+        if let (Some(path), Ok(text)) = (history_path(), serde_json::to_string(&*list)) {
+            let _ = std::fs::write(path, text);
+        }
+    }
+    result
+}
+
+fn center_changed() {
+    if let Some(app) = APP.get() {
+        let _ = app.emit_to("notification-center", "notification-center-changed", ());
+    }
+}
+
+/// Keeps the notifications just shown as cards, with what clicking them does.
+fn remember(items: &[BloomNotification], contents: &HashMap<u32, crate::toast::ToastContent>) {
+    if items.is_empty() {
+        return;
+    }
+    with_history(|list| {
+        for item in items {
+            list.retain(|saved| saved.id != item.id);
+            list.push(Saved {
+                id: item.id,
+                app: item.app.clone(),
+                aumid: item.aumid.clone(),
+                title: item.title.clone(),
+                body: item.body.clone(),
+                time: item.time,
+                content: contents.get(&item.id).map(crate::toast::SavedContent::from),
+            });
+        }
+        ((), true)
+    });
+    center_changed();
+}
+
+fn forget(id: u32) {
+    let removed = with_history(|list| {
+        let before = list.len();
+        list.retain(|saved| saved.id != id);
+        let removed = list.len() != before;
+        (removed, removed)
+    });
+    if removed {
+        center_changed();
+    }
+}
+
+fn forget_all() {
+    with_history(|list| {
+        let had = !list.is_empty();
+        list.clear();
+        ((), had)
+    });
+    center_changed();
+}
+
+/// What clicking a notification does: from Windows' database while Windows
+/// still has it, else from Bloom's history.
+fn content_of(id: u32, aumid: &str, time: i64) -> Option<crate::toast::ToastContent> {
+    if let Some(found) =
+        crate::toast::content_for(&[crate::toast::Wanted { id, aumid, time }]).remove(&id)
+    {
+        return Some(found);
+    }
+    with_history(|list| {
+        let saved = list
+            .iter()
+            .find(|saved| saved.id == id)
+            .and_then(|saved| saved.content.as_ref())
+            .map(crate::toast::ToastContent::from);
+        (saved, false)
+    })
+}
+
+fn saved_to_card(saved: &Saved) -> BloomNotification {
+    let content = saved.content.as_ref().map(crate::toast::ToastContent::from);
+    BloomNotification {
+        id: saved.id,
+        icon: app_icon(&saved.aumid),
+        app: saved.app.clone(),
+        aumid: saved.aumid.clone(),
+        title: saved.title.clone(),
+        body: saved.body.clone(),
+        time: saved.time,
+        buttons: content
+            .as_ref()
+            .map(|c| c.buttons.clone())
+            .unwrap_or_default(),
+        inputs: content.map(|c| c.inputs).unwrap_or_default(),
+    }
+}
+
+// ---------------------------------------------------------------- listening
+
+/// Set when Windows shows or changes its pop-up, so the listener reads now.
+static WAKE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+/// How long the listener waits when nothing happens.
+const IDLE_POLL_MS: u64 = 4000;
+
+fn wake_listener() {
+    if let Ok(mut woken) = WAKE.0.lock() {
+        *woken = true;
+        WAKE.1.notify_one();
+    }
+}
+
+/// Waits until woken or `timeout` passes; true when woken.
+fn wait_for_wake(timeout: std::time::Duration) -> bool {
+    let Ok(guard) = WAKE.0.lock() else {
+        std::thread::sleep(timeout);
+        return false;
+    };
+    let (mut woken, _) = WAKE
+        .1
+        .wait_timeout_while(guard, timeout, |woken| !*woken)
+        .unwrap_or_else(|e| e.into_inner());
+    std::mem::replace(&mut *woken, false)
+}
+
 enum PollError {
     Denied,
     Unavailable,
@@ -620,7 +798,8 @@ fn poll(seen: &mut HashSet<u32>, primed: &mut bool, app: &AppHandle) -> Result<(
             }
         }
     }
-    attach_content(&mut fresh);
+    let contents = attach_content(&mut fresh);
+    remember(&fresh, &contents);
     for item in fresh {
         let _ = app.emit_to("notifications", "bloom-notification", item);
     }
@@ -635,8 +814,22 @@ fn start_listener(app: AppHandle) {
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         let mut seen = HashSet::new();
         let mut primed = false;
+        // Reads still to do soon after a wake: the listener can lag Windows'
+        // pop-up by a moment, and a burst of notifications arrives together.
+        // The first read happens straight away, so Windows' pop-up is
+        // replaced from the start.
+        let mut follow_ups: Vec<u64> = vec![0];
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(700));
+            let woken = match follow_ups.pop() {
+                Some(delay) => {
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                    false
+                }
+                None => wait_for_wake(std::time::Duration::from_millis(IDLE_POLL_MS)),
+            };
+            if woken {
+                follow_ups = vec![1200, 500, 200];
+            }
             if style(&app) != "bloom" {
                 if LISTENER_OK.swap(false, Ordering::SeqCst) {
                     apply_now();
@@ -657,6 +850,7 @@ fn start_listener(app: AppHandle) {
                         apply_now();
                     }
                     primed = false;
+                    follow_ups.clear();
                     set_status(match error {
                         PollError::Denied => "denied",
                         PollError::Unavailable => "unavailable",
@@ -701,12 +895,7 @@ pub async fn notification_activate(
     tauri::async_runtime::spawn_blocking(move || {
         use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        let content = crate::toast::content_for(&[crate::toast::Wanted {
-            id,
-            aumid: &aumid,
-            time: time.unwrap_or_default(),
-        }])
-        .remove(&id);
+        let content = content_of(id, &aumid, time.unwrap_or_default());
         let result = match &content {
             Some(content) => crate::toast::activate(&aumid, content),
             None if aumid.is_empty() => {
@@ -715,11 +904,20 @@ pub async fn notification_activate(
             }
             None => crate::toast::open_app(&aumid),
         };
+        // The app didn't take the click (its activator is gone, say): open
+        // the app itself, which is what clicking still means.
+        let result = match result {
+            Err(_) if !aumid.is_empty() && !aumid.starts_with("Windows.SystemToast.") => {
+                crate::toast::open_app(&aumid)
+            }
+            other => other,
+        };
         if let Ok(listener) =
             windows::UI::Notifications::Management::UserNotificationListener::Current()
         {
             let _ = listener.RemoveNotification(id);
         }
+        forget(id);
         result
     })
     .await
@@ -738,19 +936,15 @@ pub async fn notification_action(
     tauri::async_runtime::spawn_blocking(move || {
         use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        let content = crate::toast::content_for(&[crate::toast::Wanted {
-            id,
-            aumid: &aumid,
-            time: time.unwrap_or_default(),
-        }])
-        .remove(&id)
-        .ok_or("This notification is gone")?;
+        let content =
+            content_of(id, &aumid, time.unwrap_or_default()).ok_or("This notification is gone")?;
         let result = crate::toast::press(&aumid, &content, button, &typed);
         if let Ok(listener) =
             windows::UI::Notifications::Management::UserNotificationListener::Current()
         {
             let _ = listener.RemoveNotification(id);
         }
+        forget(id);
         result.map(|_| ())
     })
     .await
@@ -925,11 +1119,12 @@ fn with_listener<T>(
     f(&listener)
 }
 
-/// Everything in Windows' notification center, newest first.
+/// Everything in Windows' notification center, plus every notification
+/// Bloom showed as a card that hasn't been clicked or cleared, newest first.
 #[tauri::command]
 pub async fn notification_center_list() -> Result<Vec<BloomNotification>, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        with_listener(|listener| {
+        let windows_items = with_listener(|listener| {
             use windows::UI::Notifications::NotificationKinds;
             let list = listener
                 .GetNotificationsAsync(NotificationKinds::Toast)
@@ -939,10 +1134,37 @@ pub async fn notification_center_list() -> Result<Vec<BloomNotification>, String
                 .into_iter()
                 .filter_map(|n| read_notification(&n))
                 .collect();
-            items.sort_by_key(|item| std::cmp::Reverse(item.time));
-            attach_content(&mut items);
+            let contents = attach_content(&mut items);
+            // Fill in what clicking does for cards saved before Windows had
+            // written it down.
+            with_history(|saved| {
+                let mut changed = false;
+                for entry in saved.iter_mut().filter(|e| e.content.is_none()) {
+                    if let Some(found) = contents.get(&entry.id) {
+                        entry.content = Some(crate::toast::SavedContent::from(found));
+                        changed = true;
+                    }
+                }
+                ((), changed)
+            });
             Ok(items)
-        })
+        });
+        let saved: Vec<BloomNotification> =
+            with_history(|list| (list.iter().map(saved_to_card).collect(), false));
+        let mut items = match windows_items {
+            Ok(items) => items,
+            // Windows' list can't be read (its privacy setting): Bloom's own
+            // history still is, unless there is none to show.
+            Err(error) if saved.is_empty() => return Err(error),
+            Err(_) => Vec::new(),
+        };
+        for card in saved {
+            if !items.iter().any(|item| item.id == card.id) {
+                items.push(card);
+            }
+        }
+        items.sort_by_key(|item| std::cmp::Reverse(item.time));
+        Ok(items)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -951,7 +1173,11 @@ pub async fn notification_center_list() -> Result<Vec<BloomNotification>, String
 #[tauri::command]
 pub async fn notification_remove(id: u32) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        with_listener(|listener| listener.RemoveNotification(id).map_err(|e| e.to_string()))
+        forget(id);
+        // Gone from Windows already is fine: it was only in Bloom's history.
+        let _ =
+            with_listener(|listener| listener.RemoveNotification(id).map_err(|e| e.to_string()));
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -960,6 +1186,7 @@ pub async fn notification_remove(id: u32) -> Result<(), String> {
 #[tauri::command]
 pub async fn notification_clear_all() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| {
+        forget_all();
         with_listener(|listener| listener.ClearNotifications().map_err(|e| e.to_string()))
     })
     .await
