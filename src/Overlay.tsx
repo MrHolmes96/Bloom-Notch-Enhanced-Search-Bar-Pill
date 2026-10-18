@@ -1,4 +1,5 @@
 import { StrictMode, useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
+import { readScale, scaleSyncHandlers } from "./uiScale";
 import { createRoot } from "react-dom/client";
 import { motion, AnimatePresence } from "framer-motion";
 import { listen, emit } from "@tauri-apps/api/event";
@@ -621,9 +622,8 @@ function OverlayApp() {
 	);
 
 	// Shared state
-	const [scale, setScale] = useState(() =>
-		parseFloat(localStorage.getItem("bloom-scale") || "1.0")
-	);
+	// The volume and brightness pop-ups follow the notch's size.
+	const [scale, setScale] = useState(() => readScale("notch"));
 	const timeoutRef = useRef<any>(null);
 	const hideWindowTimeoutRef = useRef<any>(null);
 	const splashActiveRef = useRef(false);
@@ -644,9 +644,7 @@ function OverlayApp() {
 		invoke("load_settings")
 			.then(async (settings: any) => {
 				if (await reloadIfMirrorWasStale(settings)) return;
-				if (settings && settings["bloom-scale"] !== undefined) {
-					setScale(parseFloat(settings["bloom-scale"]));
-				}
+				if (settings) setScale(readScale("notch", (key) => settings[key]));
 				if (settings && settings["bloom-brightness-overlay-enabled"] !== undefined) {
 					setBrightnessOverlayEnabled(settings["bloom-brightness-overlay-enabled"] === "true");
 				}
@@ -804,7 +802,7 @@ function OverlayApp() {
 		"bloom-volume-edge-enabled": setVolumeEdgeEnabled,
 		"bloom-brightness-overlay-enabled": setBrightnessOverlayEnabled,
 		"bloom-brightness-edge-enabled": setBrightnessEdgeEnabled,
-		"bloom-scale": setScale
+		...scaleSyncHandlers("notch", setScale)
 	});
 
 	// Side effects: reset overlay mode to idle when overlay is disabled

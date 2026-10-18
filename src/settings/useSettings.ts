@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { readScale, scaleSyncHandlers, SCALE_KEYS } from "../uiScale";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, emit } from "@tauri-apps/api/event";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
@@ -135,9 +136,10 @@ export function useSettings() {
 	const [autoUpdate, setAutoUpdate] = useState(
 		() => localStorage.getItem("bloom-auto-update") === "true"
 	);
-	const [scale, setScale] = useState(() =>
-		parseFloat(localStorage.getItem("bloom-scale") || "1.0")
-	);
+	// The notch (with the volume and brightness pop-ups) and the dock each
+	// have their own size.
+	const [notchScale, setNotchScale] = useState(() => readScale("notch"));
+	const [dockScale, setDockScale] = useState(() => readScale("dock"));
 	const [themeMode, setThemeMode] = useState(
 		() => localStorage.getItem("bloom-theme-mode") || "dark"
 	);
@@ -217,7 +219,8 @@ export function useSettings() {
 			apply(getVal("bloom-dock-extras-custom-folders"), setDockExtrasCustomFolders, (v) => v);
 
 			apply(getVal("bloom-temp-unit"), setTempUnitFahrenheit, (v) => v === "fahrenheit");
-			apply(getVal("bloom-scale"), setScale, parseFloat);
+			setNotchScale(readScale("notch", getVal));
+			setDockScale(readScale("dock", getVal));
 			apply(getVal("bloom-low-battery-threshold"), setLowBatteryThreshold, parseInt);
 
 			apply(getVal("bloom-notch-mode"), setNotchMode, (v) => (v === "auto-hide" ? "smart" : v));
@@ -297,7 +300,8 @@ export function useSettings() {
 		"bloom-show-update-indicator": setShowUpdateIndicator,
 		"bloom-time-format-24h": setTimeFormat24h,
 		"bloom-low-battery-threshold": setLowBatteryThreshold,
-		"bloom-scale": setScale,
+		...scaleSyncHandlers("notch", setNotchScale),
+		...scaleSyncHandlers("dock", setDockScale),
 		"bloom-temp-unit": (v) => setTempUnitFahrenheit(v === "fahrenheit"),
 		"bloom-auto-update": setAutoUpdate,
 		"bloom-volume-overlay-enabled": setVolumeOverlayEnabled,
@@ -672,9 +676,14 @@ export function useSettings() {
 		saveSetting("bloom-low-battery-threshold", val.toString());
 	};
 
-	const handleScaleChange = (val: number) => {
-		setScale(val);
-		saveSetting("bloom-scale", val.toString());
+	const handleNotchScaleChange = (val: number) => {
+		setNotchScale(val);
+		saveSetting(SCALE_KEYS.notch, val.toString());
+	};
+
+	const handleDockScaleChange = (val: number) => {
+		setDockScale(val);
+		saveSetting(SCALE_KEYS.dock, val.toString());
 	};
 
 	const handleWidgetsChange = (config: WidgetConfig) => {
@@ -866,8 +875,10 @@ export function useSettings() {
 		toggleTimeFormat24h,
 		showUpdateIndicator,
 		toggleUpdateIndicator,
-		scale,
-		handleScaleChange,
+		notchScale,
+		handleNotchScaleChange,
+		dockScale,
+		handleDockScaleChange,
 		cornersEnabled,
 		toggleCorners,
 

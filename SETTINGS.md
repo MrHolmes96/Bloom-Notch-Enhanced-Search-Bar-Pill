@@ -175,7 +175,9 @@ Example:
 
 | Key                            | Type                 | Default   | Description                                                                                          |
 | ------------------------------ | -------------------- | --------- | ---------------------------------------------------------------------------------------------------- |
-| `bloom-scale`                  | float string         | `"1.0"`   | UI scale factor (0.8 to 1.3). Changing this re-registers AppBars to resize the reserved screen area. |
+| `bloom-notch-scale` | number `"0.8"`–`"1.3"` | `bloom-scale`, else `"1.0"` | Size of the notch and its text, the volume and brightness pop-ups and the settings window (Settings > Appearance > Notch Size). |
+| `bloom-dock-scale` | number `"0.8"`–`"1.3"` | `bloom-scale`, else `"1.0"` | Size of the dock, its icons and its menus (Settings > Appearance > Dock Size). |
+| `bloom-scale`                  | float string         | `"1.0"`   | The one size for everything in older versions. A part without its own size (`bloom-notch-scale`, `bloom-dock-scale`) still uses it; Settings no longer changes it. |
 | `bloom-low-battery-threshold`  | integer string       | `"20"`    | Battery percentage that triggers the low-battery alert pulse (5 to 50, step 5).                      |
 | `bloom-auto-update`            | `"true"` / `"false"` | `"false"` | Check for and download updates automatically on startup.                                             |
 | `bloom-show-update-indicator`  | `"true"` / `"false"` | `"true"`  | Show a green dot on the notch when an update is available.                                           |
@@ -249,6 +251,6 @@ with open(path, 'w') as f: json.dump(settings, f)
 - All boolean values are strings (`"true"` / `"false"`) for consistency with `localStorage`.
 - The `useSettingsSync` hook auto-converts `"true"` / `"false"` strings to booleans.
 - `auto-hide` mode values in `bloom-dock-mode` and `bloom-notch-mode` are legacy aliases for `smart` — they are mapped automatically.
-- Changing `bloom-scale` triggers AppBar re-registration to adjust reserved screen space.
+- Changing `bloom-notch-scale`, `bloom-dock-scale` or `bloom-scale` triggers AppBar re-registration to adjust reserved screen space.
 - Settings → General → Reset to Defaults removes every `bloom-` key from `settings.json` and `localStorage` (except the `bloom-first-run` / `bloom-app-version` lifecycle sentinels), then restarts Bloom. Pinned apps (`pinned_apps.json`) and uploaded icons (`custom_icons/`) are preserved.
 - Theme changes (`bloom-theme-*`) are applied by reading all theme values from `localStorage` and calling `applyTheme()` — the theme system depends on all five theme keys being in sync.

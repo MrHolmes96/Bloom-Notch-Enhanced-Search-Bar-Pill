@@ -1,4 +1,5 @@
 import { motion, AnimatePresence, useAnimation } from "framer-motion";
+import { readScale, scaleSyncHandlers } from "./uiScale";
 import { useEffect, useLayoutEffect, useState, useCallback, useRef, memo } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -562,7 +563,7 @@ function App() {
 	isOpenRef.current = isOpen;
 	const [isReady, setIsReady] = useState(false);
 	const [scale, setScale] = useState(() =>
-		parseFloat(localStorage.getItem("bloom-scale") || "1.0")
+		readScale("notch")
 	);
 	const [timeFormat24h, setTimeFormat24h] = useState(
 		() => localStorage.getItem("bloom-time-format-24h") === "true"
@@ -1133,8 +1134,7 @@ function App() {
 					}
 				}
 
-				const scaleVal = getVal("bloom-scale");
-				if (scaleVal !== null) setScale(parseFloat(scaleVal));
+				setScale(readScale("notch", getVal));
 
 				const widgetsVal = getVal("bloom-status-widgets");
 				if (widgetsVal) {
@@ -1208,7 +1208,7 @@ function App() {
 			"bloom-media-compact-glow-enabled": setSettingsCompactGlowEnabled,
 			"bloom-media-layout": setMediaLayout,
 			"bloom-corners-enabled": setSettingsCornersEnabled,
-			"bloom-scale": setScale,
+			...scaleSyncHandlers("notch", setScale),
 			"bloom-low-battery-threshold": setLowBatteryThreshold,
 			"bloom-dock-enabled": setDockEnabled,
 			"bloom-dock-mode": setDockMode,

@@ -479,7 +479,7 @@ pub async fn change_notch_mode(app: AppHandle, mode: String) {
             let m_pos = monitor.position();
             let m_size = monitor.size();
             let scale = monitor.scale_factor();
-            let bloom_scale = crate::utils::get_bloom_scale(&app);
+            let bloom_scale = crate::utils::get_notch_scale(&app);
             let target_height = (420.0 * bloom_scale * scale) as u32;
             let _ = main_win.set_position(tauri::PhysicalPosition::new(m_pos.x, m_pos.y));
             let _ = main_win.set_size(tauri::PhysicalSize::new(m_size.width, target_height));
@@ -3237,7 +3237,7 @@ pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Re
         serde_json::json!({ "key": &key, "value": &settings[&key] }),
     );
 
-    if key == "bloom-scale" {
+    if crate::utils::is_scale_key(&key) {
         re_register_appbars(&app, &settings);
     }
     if key.starts_with("bloom-launcher-") {
@@ -3873,7 +3873,7 @@ pub fn import_settings(app: AppHandle, settings: String) -> Result<(), String> {
         );
     }
 
-    if imported.get("bloom-scale").is_some() {
+    if imported.keys().any(|key| crate::utils::is_scale_key(key)) {
         re_register_appbars(&app, &imported);
     }
 

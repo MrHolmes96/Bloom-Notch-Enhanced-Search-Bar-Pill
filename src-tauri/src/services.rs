@@ -2777,7 +2777,7 @@ fn process_mouse_position(app_handle: &AppHandle, cursor: windows::Win32::Founda
                     .ok()
                     .flatten()
                     .is_some_and(|m| {
-                        let bloom_scale = crate::utils::get_bloom_scale(app_handle);
+                        let bloom_scale = crate::utils::get_notch_scale(app_handle);
                         let ms = m.size();
                         let mp = m.position();
                         let sc = m.scale_factor() * bloom_scale;
@@ -2848,7 +2848,7 @@ fn process_mouse_position(app_handle: &AppHandle, cursor: windows::Win32::Founda
             } else {
                 // The overlay applies `bloom-scale` as CSS zoom, so the cards
                 // are larger than 42x196 CSS px for non-default scales.
-                let bloom_scale = crate::utils::get_bloom_scale(app_handle);
+                let bloom_scale = crate::utils::get_notch_scale(app_handle);
                 let over_left = in_mixer
                     || if let Ok(Some(m)) = ov_win.primary_monitor() {
                         let ms = m.size();
@@ -3220,7 +3220,7 @@ pub fn register_appbar(window: tauri::WebviewWindow) {
         let m_pos = monitor.position();
         let hwnd = window.hwnd().unwrap();
         let scale = monitor.scale_factor();
-        let bloom_scale = crate::utils::get_bloom_scale(window.app_handle());
+        let bloom_scale = crate::utils::get_notch_scale(window.app_handle());
         let ph = ((420.0 * bloom_scale) * scale) as i32;
         let pr = ((40.0 * bloom_scale) * scale) as i32; // Scale the reserved top screen space
 
@@ -3404,7 +3404,7 @@ fn register_dock_appbar_inner(window: tauri::WebviewWindow, attempt: i32) {
             return;
         };
         let scale = monitor.scale_factor();
-        let bloom_scale = crate::utils::get_bloom_scale(window.app_handle());
+        let bloom_scale = crate::utils::get_dock_scale(window.app_handle());
 
         // ph = full physical window height. outer_size() can return 0 before the
         // window has rendered. Never guess a value — bail and let the retry wrapper handle it.

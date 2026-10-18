@@ -971,10 +971,28 @@ pub fn replace_settings_cache(new_settings: std::collections::HashMap<String, se
     }
 }
 
-pub fn get_bloom_scale(_app: &tauri::AppHandle) -> f64 {
-    get_setting_str(_app, "bloom-scale")
+fn read_scale(app: &tauri::AppHandle, key: &str) -> f64 {
+    get_setting_str(app, key)
+        .or_else(|| get_setting_str(app, "bloom-scale"))
         .and_then(|s| s.parse::<f64>().ok())
+        .filter(|scale| scale.is_finite() && *scale > 0.0)
         .unwrap_or(1.0)
+}
+
+/// The notch's size (Settings > Appearance > Notch Size), which the volume and
+/// brightness pop-ups follow. Falls back to the shared size older versions had.
+pub fn get_notch_scale(app: &tauri::AppHandle) -> f64 {
+    read_scale(app, "bloom-notch-scale")
+}
+
+/// The dock's size (Settings > Appearance > Dock Size).
+pub fn get_dock_scale(app: &tauri::AppHandle) -> f64 {
+    read_scale(app, "bloom-dock-scale")
+}
+
+/// True for a setting that changes the notch's or the dock's size.
+pub fn is_scale_key(key: &str) -> bool {
+    matches!(key, "bloom-scale" | "bloom-notch-scale" | "bloom-dock-scale")
 }
 
 /// Read any string value from the settings cache. Returns None if the key is absent.

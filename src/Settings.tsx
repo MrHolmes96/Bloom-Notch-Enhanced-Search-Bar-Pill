@@ -94,12 +94,13 @@ function SettingsApp() {
 		};
 	}, []);
 
+	// The settings window follows the notch's size.
 	useEffect(() => {
 		invoke("resize_settings_window", {
-			width: 620 * settings.scale,
-			height: 480 * settings.scale
+			width: 620 * settings.notchScale,
+			height: 480 * settings.notchScale
 		}).catch(console.error);
-	}, [settings.scale]);
+	}, [settings.notchScale]);
 
 	const handleClose = async (e: React.MouseEvent) => {
 		e.preventDefault();
@@ -110,7 +111,7 @@ function SettingsApp() {
 	};
 
 	return (
-		<div className="settings-container" style={{ zoom: settings.scale }}>
+		<div className="settings-container" style={{ zoom: settings.notchScale }}>
 			<div className="title-bar" data-tauri-drag-region>
 				<span className="title-text" data-tauri-drag-region>
 					Settings
@@ -201,8 +202,10 @@ function SettingsApp() {
 							handleBrightnessChange={settings.handleBrightnessChange}
 							cornersEnabled={settings.cornersEnabled}
 							toggleCorners={settings.toggleCorners}
-							scale={settings.scale}
-							handleScaleChange={settings.handleScaleChange}
+							notchScale={settings.notchScale}
+							handleNotchScaleChange={settings.handleNotchScaleChange}
+							dockScale={settings.dockScale}
+							handleDockScaleChange={settings.handleDockScaleChange}
 						/>
 					)}
 					{activeTab === "notch" && (

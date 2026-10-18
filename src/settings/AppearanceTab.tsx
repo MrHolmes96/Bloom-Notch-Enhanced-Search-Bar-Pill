@@ -1,4 +1,4 @@
-import { Palette, Droplet, Contrast, Droplets, Sun, Square, Maximize2 } from "lucide-react";
+import { Palette, Droplet, Contrast, Droplets, Sun, Square, Maximize2, PanelBottom } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 
 interface AppearanceTabProps {
@@ -14,8 +14,38 @@ interface AppearanceTabProps {
 	handleBrightnessChange: (val: number) => void;
 	cornersEnabled: boolean;
 	toggleCorners: () => void;
-	scale: number;
-	handleScaleChange: (val: number) => void;
+	notchScale: number;
+	handleNotchScaleChange: (val: number) => void;
+	dockScale: number;
+	handleDockScaleChange: (val: number) => void;
+}
+
+const MIN_SCALE = 0.8;
+const MAX_SCALE = 1.3;
+
+/** The − 100 % + control for one size. */
+function ScaleControl({ value, onChange, what }: { value: number; onChange: (val: number) => void; what: string }) {
+	return (
+		<div className="scale-button-container">
+			<button
+				onClick={() => onChange(Math.max(MIN_SCALE, parseFloat((value - 0.1).toFixed(1))))}
+				disabled={value <= MIN_SCALE}
+				className="scale-adjust-btn"
+				title={`Make the ${what} smaller`}
+			>
+				—
+			</button>
+			<span className="scale-display-value">{Math.round(value * 100)}%</span>
+			<button
+				onClick={() => onChange(Math.min(MAX_SCALE, parseFloat((value + 0.1).toFixed(1))))}
+				disabled={value >= MAX_SCALE}
+				className="scale-adjust-btn"
+				title={`Make the ${what} larger`}
+			>
+				+
+			</button>
+		</div>
+	);
 }
 
 export function AppearanceTab({
@@ -31,8 +61,10 @@ export function AppearanceTab({
 	handleBrightnessChange,
 	cornersEnabled,
 	toggleCorners,
-	scale,
-	handleScaleChange
+	notchScale,
+	handleNotchScaleChange,
+	dockScale,
+	handleDockScaleChange
 }: AppearanceTabProps) {
 	const showCustomColor = themeMode === "custom";
 	const showAdvancedSliders = themeMode === "custom" || themeMode === "adaptive";
@@ -129,38 +161,30 @@ export function AppearanceTab({
 
 			<div className="setting-group-label">Display</div>
 			<div className="setting-group">
-				<SettingRow icon={Square} label="Screen Corners" desc="Rounded top edges">
+				<SettingRow icon={Square} label="Screen Corners" desc="Rounded top edges" divider={false}>
 					<label className="toggle-switch">
 						<input type="checkbox" checked={cornersEnabled} onChange={toggleCorners} />
 						<span className="slider"></span>
 					</label>
 				</SettingRow>
+			</div>
 
+			<div className="setting-group-label">UI Size</div>
+			<div className="setting-group">
 				<SettingRow
 					icon={Maximize2}
-					label="UI & Font Scale"
-					desc={`Adjust desktop size (${Math.round(scale * 100)}%)`}
+					label="Notch Size"
+					desc="The notch with its text, the volume and brightness pop-ups, and this window"
+				>
+					<ScaleControl value={notchScale} onChange={handleNotchScaleChange} what="notch" />
+				</SettingRow>
+				<SettingRow
+					icon={PanelBottom}
+					label="Dock Size"
+					desc="The dock, its icons and its menus"
 					divider={false}
 				>
-					<div className="scale-button-container">
-						<button
-							onClick={() => handleScaleChange(Math.max(0.8, parseFloat((scale - 0.1).toFixed(1))))}
-							disabled={scale <= 0.8}
-							className="scale-adjust-btn"
-							title="Decrease Scale"
-						>
-							—
-						</button>
-						<span className="scale-display-value">{Math.round(scale * 100)}%</span>
-						<button
-							onClick={() => handleScaleChange(Math.min(1.3, parseFloat((scale + 0.1).toFixed(1))))}
-							disabled={scale >= 1.3}
-							className="scale-adjust-btn"
-							title="Increase Scale"
-						>
-							+
-						</button>
-					</div>
+					<ScaleControl value={dockScale} onChange={handleDockScaleChange} what="dock" />
 				</SettingRow>
 			</div>
 		</>
