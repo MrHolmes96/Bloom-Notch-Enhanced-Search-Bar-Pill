@@ -463,6 +463,7 @@ fn run(
 
 fn shell_open(file: &str, parameters: Option<&str>) -> Result<(), String> {
     use windows::Win32::UI::Shell::ShellExecuteW;
+    crate::foreground::grant();
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     let verb = wide("open");
     let file = wide(file);
@@ -517,12 +518,11 @@ unsafe fn com_activate(
     use windows::Win32::UI::Notifications::{
         INotificationActivationCallback, NOTIFICATION_USER_INPUT_DATA,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
     let callback: INotificationActivationCallback =
         CoCreateInstance(clsid, None, CLSCTX_LOCAL_SERVER)
             .map_err(|_| "The app didn't answer".to_string())?;
     // The app may bring its window forward, as it can from Windows' pop-up.
-    let _ = AllowSetForegroundWindow(ASFW_ANY);
+    crate::foreground::grant();
     let _ = CoAllowSetForegroundWindow(&callback, None);
     let keys: Vec<Vec<u16>> = inputs.iter().map(|(k, _)| wide(k)).collect();
     let values: Vec<Vec<u16>> = inputs.iter().map(|(_, v)| wide(v)).collect();
@@ -546,11 +546,10 @@ unsafe fn activate_package(aumid: &str, arguments: &str) -> Result<(), String> {
     use windows::Win32::UI::Shell::{
         ApplicationActivationManager, IApplicationActivationManager, AO_NONE,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
     let manager: IApplicationActivationManager =
         CoCreateInstance(&ApplicationActivationManager, None, CLSCTX_LOCAL_SERVER)
             .map_err(|e| e.to_string())?;
-    let _ = AllowSetForegroundWindow(ASFW_ANY);
+    crate::foreground::grant();
     let aumid_w = wide(aumid);
     let arguments = wide(arguments);
     match manager.ActivateApplication(

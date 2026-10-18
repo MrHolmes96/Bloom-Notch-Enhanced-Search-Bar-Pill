@@ -4,6 +4,7 @@ mod bluetooth;
 mod brightness;
 mod commands;
 mod dock_extras;
+mod foreground;
 mod integrations;
 mod jumplist;
 mod launcher;

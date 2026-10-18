@@ -740,6 +740,7 @@ pub async fn open_jump_item(id: u64) {
     };
     let _ = tauri::async_runtime::spawn_blocking(move || unsafe {
         let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        crate::foreground::grant();
         match &target {
             Target::Item {
                 parsing_name,

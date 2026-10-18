@@ -715,6 +715,9 @@ fn is_pwa_shortcut_for(app: &AppInfo, name: &str, host_exe: &str) -> bool {
 
 /// Opens a file path, shortcut, or shell application id through the shell.
 pub(crate) fn launch_path(path: &str) {
+    // The app opens in front, as from the taskbar, not behind the window
+    // that had the foreground.
+    crate::foreground::grant();
     unsafe {
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -1071,19 +1074,14 @@ pub async fn get_active_windows() -> Vec<AppInfo> {
 pub async fn focus_window(hwnd: isize) {
     tauri::async_runtime::spawn_blocking(move || unsafe {
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-            SetForegroundWindow, ShowWindow, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+            GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible, ShowWindow,
+            SW_MINIMIZE,
         };
         let hwnd = HWND(hwnd as *mut _);
         let my_pid = std::process::id();
 
-        if !IsWindowVisible(hwnd).as_bool() {
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = ShowWindow(hwnd, SW_RESTORE);
-            let _ = SetForegroundWindow(hwnd);
-        } else if IsIconic(hwnd).as_bool() {
-            let _ = ShowWindow(hwnd, SW_RESTORE);
-            let _ = SetForegroundWindow(hwnd);
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            crate::foreground::bring_to_front(hwnd);
         } else {
             // Minimize if: window is foreground, OR same process as foreground (not Bloom), OR recently focused
             let fg = GetForegroundWindow();
@@ -1120,7 +1118,7 @@ pub async fn focus_window(hwnd: isize) {
             if should_minimize {
                 let _ = ShowWindow(hwnd, SW_MINIMIZE);
             } else {
-                let _ = SetForegroundWindow(hwnd);
+                crate::foreground::bring_to_front(hwnd);
             }
         }
     })
@@ -1136,10 +1134,7 @@ pub async fn focus_window(hwnd: isize) {
 #[tauri::command]
 pub async fn focus_app_windows(hwnds: Vec<isize>) {
     tauri::async_runtime::spawn_blocking(move || unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetForegroundWindow, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow,
-            SW_RESTORE, SW_SHOW,
-        };
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
         let Some(&most_recent) = hwnds.first() else {
             return;
         };
@@ -1151,14 +1146,7 @@ pub async fn focus_app_windows(hwnds: Vec<isize>) {
             None => most_recent,
         };
 
-        let hwnd = HWND(target as *mut _);
-        if !IsWindowVisible(hwnd).as_bool() {
-            let _ = ShowWindow(hwnd, SW_SHOW);
-        }
-        if IsIconic(hwnd).as_bool() {
-            let _ = ShowWindow(hwnd, SW_RESTORE);
-        }
-        let _ = SetForegroundWindow(hwnd);
+        crate::foreground::bring_to_front(HWND(target as *mut _));
     })
     .await
     .unwrap_or_default();
@@ -2285,14 +2273,7 @@ pub fn open_settings_window(app: AppHandle) {
         let _ = win.unminimize();
         let _ = win.set_focus();
         if let Ok(hwnd) = win.hwnd() {
-            unsafe {
-                use windows::Win32::UI::WindowsAndMessaging::{
-                    SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
-                };
-                let _ = ShowWindow(hwnd, SW_SHOW);
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-                let _ = SetForegroundWindow(hwnd);
-            }
+            crate::foreground::bring_to_front(HWND(hwnd.0));
         }
     }
 }
@@ -2661,8 +2642,7 @@ pub fn open_media_source_app() {
         use windows::Win32::Foundation::{HWND, LPARAM};
         use windows::Win32::System::Threading::OpenProcess;
         use windows::Win32::UI::WindowsAndMessaging::{
-            EnumWindows, FindWindowW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-            SetForegroundWindow, ShowWindow, SW_RESTORE,
+            EnumWindows, FindWindowW, GetWindowThreadProcessId, IsWindowVisible,
         };
 
         let mgr = match GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
@@ -2687,10 +2667,7 @@ pub fn open_media_source_app() {
         let h_app_id = windows::core::HSTRING::from(&app_id);
         if let Ok(hwnd) = FindWindowW(None, windows::core::PCWSTR(h_app_id.as_ptr())) {
             if !hwnd.is_invalid() {
-                if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
-                    let _ = ShowWindow(hwnd, SW_RESTORE);
-                }
-                let _ = SetForegroundWindow(hwnd);
+                crate::foreground::bring_to_front(hwnd);
                 return;
             }
         }
@@ -2754,10 +2731,7 @@ pub fn open_media_source_app() {
         let _ = EnumWindows(Some(callback), LPARAM(&mut data as *mut EnumData as isize));
 
         if let Some(hwnd) = data.found_hwnd {
-            if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-            }
-            let _ = SetForegroundWindow(hwnd);
+            crate::foreground::bring_to_front(hwnd);
         }
     }
 }

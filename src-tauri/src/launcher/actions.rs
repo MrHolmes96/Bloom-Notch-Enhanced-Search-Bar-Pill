@@ -76,6 +76,8 @@ pub fn shell_execute(
     if verb == Some("openas") {
         info.fMask &= !SEE_MASK_FLAG_NO_UI;
     }
+    // What opens comes to the front even though the search bar just hid.
+    crate::foreground::grant();
     unsafe { ShellExecuteExW(&mut info) }.map_err(|e| e.message())
 }
 
