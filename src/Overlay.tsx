@@ -12,6 +12,7 @@ import { MixerIcon, SpeakerIcon } from "./icons";
 import "./Overlay.css";
 import { EdgeSurface } from "./components/EdgeSurface";
 import { initTheme } from "./theme";
+import "./noSelect";
 
 // ─── App Volume Mixer ───────────────────────────────────────────────────────
 

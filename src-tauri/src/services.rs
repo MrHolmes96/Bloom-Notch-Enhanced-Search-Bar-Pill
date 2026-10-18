@@ -2388,7 +2388,11 @@ fn update_main_interaction(
         MH_LAST_TOP_EDGE_HOVER.store(new_val, Ordering::Relaxed);
     }
 
-    let final_ignore = !is_click_interactive && !MENU_IS_OPEN.load(Ordering::Relaxed);
+    // MENU_IS_OPEN is the dock's context menu, which lives in the dock window.
+    // Letting it hold the notch window interactive made the whole strip
+    // across the top of the screen swallow clicks while a dock menu was open
+    // (or if one closed without saying so), so apps there stopped responding.
+    let final_ignore = !is_click_interactive;
     let prev_ignore = MH_LAST_MAIN_IGNORE.load(Ordering::Relaxed);
     let new_ignore = if final_ignore { 1 } else { 0 };
     if prev_ignore != new_ignore {

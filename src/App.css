@@ -6,6 +6,17 @@ body {
 	padding: 0;
 	background: transparent;
 	overflow: hidden;
+	/* The notch is controls, not a page: click-dragging never selects its
+	   text. Text boxes select as usual (below). */
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+	user-select: text;
+	-webkit-user-select: text;
 }
 
 /* Never start native image drags from the notch/player UI */
