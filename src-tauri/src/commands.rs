@@ -1098,8 +1098,7 @@ pub async fn focus_window(hwnd: isize, from_preview: Option<bool>) {
     let from_preview = from_preview.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || unsafe {
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible, ShowWindow,
-            SW_MINIMIZE,
+            GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
         };
         let hwnd = HWND(hwnd as *mut _);
         let my_pid = std::process::id();
@@ -1150,7 +1149,7 @@ pub async fn focus_window(hwnd: isize, from_preview: Option<bool>) {
                 {
                     let _ = crate::window_capture::take(hwnd, 320, 200);
                 }
-                let _ = ShowWindow(hwnd, SW_MINIMIZE);
+                crate::foreground::minimize(hwnd);
             } else {
                 crate::foreground::switch_to(hwnd);
             }

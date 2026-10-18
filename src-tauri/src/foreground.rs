@@ -47,9 +47,94 @@ pub fn grant_to(pid: u32) {
     }
 }
 
+/// Restores a minimized window the way its taskbar button does: through
+/// the window menu's Restore (`WM_SYSCOMMAND` `SC_RESTORE`), which the app
+/// handles itself, as for a click on its own restore button. That works for
+/// every kind of app: ones that draw their own frame (browsers, Electron,
+/// Java, games), ones that keep their own window state, and ones running as
+/// administrator, which Bloom can't restore directly. An app that is hung
+/// (or doesn't restore) is restored by Windows itself.
+pub fn restore(hwnd: HWND) {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, ShowWindowAsync, SC_RESTORE, SMTO_ABORTIFHUNG, SMTO_NORMAL,
+        WM_SYSCOMMAND,
+    };
+    unsafe {
+        // It activates itself as it restores.
+        grant_to(process_of(hwnd));
+        let mut answer = 0usize;
+        let _ = SendMessageTimeoutW(
+            hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_RESTORE as usize),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG | SMTO_NORMAL,
+            400,
+            Some(&mut answer),
+        );
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindowAsync(hwnd, SW_RESTORE);
+        }
+    }
+}
+
+/// Minimizes a window the way its taskbar button does: the window menu's
+/// Minimize, which the app handles itself (an app that goes to the tray
+/// when minimized still does). Windows minimizes one that is hung.
+pub fn minimize(hwnd: HWND) {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, ShowWindowAsync, SC_MINIMIZE, SMTO_ABORTIFHUNG, SMTO_NORMAL,
+        SW_MINIMIZE, WM_SYSCOMMAND,
+    };
+    unsafe {
+        // Windows hands the foreground to the window below it.
+        let _ = AllowSetForegroundWindow(process_of(hwnd));
+        let mut answer = 0usize;
+        let sent = SendMessageTimeoutW(
+            hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_MINIMIZE as usize),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG | SMTO_NORMAL,
+            400,
+            Some(&mut answer),
+        );
+        if sent.0 == 0 && !IsIconic(hwnd).as_bool() {
+            let _ = ShowWindowAsync(hwnd, SW_MINIMIZE);
+        }
+    }
+}
+
+/// The part of a window to activate: its open dialog when it has one (a
+/// "Save changes?" box), as the taskbar does, else the window itself.
+unsafe fn active_part(hwnd: HWND) -> HWND {
+    use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    use windows::Win32::UI::WindowsAndMessaging::GetLastActivePopup;
+    let popup = GetLastActivePopup(hwnd);
+    if !popup.is_invalid()
+        && popup != hwnd
+        && IsWindowVisible(popup).as_bool()
+        && IsWindowEnabled(popup).as_bool()
+    {
+        popup
+    } else {
+        hwnd
+    }
+}
+
+/// Whether the window (or another window of its app, such as its dialog) is
+/// the one in front.
+unsafe fn in_front(hwnd: HWND) -> bool {
+    let foreground = GetForegroundWindow();
+    !foreground.is_invalid() && (foreground == hwnd || process_of(foreground) == process_of(hwnd))
+}
+
 /// Shows, restores and activates a window, like clicking its taskbar button.
 pub fn bring_to_front(hwnd: HWND) -> bool {
     use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::UI::WindowsAndMessaging::SwitchToThisWindow;
     unsafe {
         if hwnd.is_invalid() {
             return false;
@@ -58,10 +143,16 @@ pub fn bring_to_front(hwnd: HWND) -> bool {
             let _ = ShowWindow(hwnd, SW_SHOW);
         }
         if IsIconic(hwnd).as_bool() {
-            let _ = ShowWindow(hwnd, SW_RESTORE);
+            restore(hwnd);
         }
-        grant();
-        if SetForegroundWindow(hwnd).as_bool() && GetForegroundWindow() == hwnd {
+        let target = active_part(hwnd);
+        grant_to(process_of(target));
+        if SetForegroundWindow(target).as_bool() && in_front(target) {
+            return true;
+        }
+        // What Alt+Tab uses to switch.
+        SwitchToThisWindow(target, true);
+        if in_front(target) {
             return true;
         }
         // Windows still refused (a full-screen app holding the foreground):
@@ -72,12 +163,12 @@ pub fn bring_to_front(hwnd: HWND) -> bool {
         let attached = foreground_thread != 0
             && foreground_thread != own_thread
             && AttachThreadInput(own_thread, foreground_thread, true).as_bool();
-        let _ = BringWindowToTop(hwnd);
-        let done = SetForegroundWindow(hwnd).as_bool();
+        let _ = BringWindowToTop(target);
+        let done = SetForegroundWindow(target).as_bool();
         if attached {
             let _ = AttachThreadInput(own_thread, foreground_thread, false);
         }
-        done
+        done || in_front(target)
     }
 }
 
@@ -150,8 +241,8 @@ unsafe fn step_aside(covering: HWND, target: HWND) {
         GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongW, GetWindowRect, GWL_EXSTYLE, SW_MINIMIZE, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-        WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+        GetWindowLongW, GetWindowRect, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        WS_EX_TRANSPARENT,
     };
     if covering.is_invalid() || covering == target {
         return;
@@ -188,7 +279,7 @@ unsafe fn step_aside(covering: HWND, target: HWND) {
         && rect.right >= screen.right
         && rect.bottom >= screen.bottom;
     if fills {
-        let _ = ShowWindow(covering, SW_MINIMIZE);
+        minimize(covering);
     }
 }
 
