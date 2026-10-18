@@ -49,6 +49,14 @@ stays complete, so nothing changes for Windows or after Bloom quits. AppBar
 messages, icon positions and commands sent to that class are passed straight
 on as well. This is how RetroBar and Cairo show the tray alongside Explorer.
 
+The AppBar messages that carry a screen area (`ABM_QUERYPOS`, `ABM_SETPOS`,
+`ABM_GETTASKBARPOS`) keep it in shared memory made for the window they reach
+first, which Explorer can't open when the message is passed on as it is. So
+that memory is made again for Explorer, the message sent on with it, and
+Explorer's answer copied back (as Cairo's `AppBarManager` does). Without this,
+bars such as Bloom's fixed dock and notch register but never reserve their
+strip, and maximized windows go underneath them.
+
 At start Bloom broadcasts `TaskbarCreated` (what Explorer sends after a
 restart), so running apps add their icons again and Bloom sees them all. Every
 two seconds it checks that it is still the first window of that class (Explorer
@@ -61,7 +69,11 @@ icon (mouse move, button down and up, then `NIN_SELECT` or `WM_CONTEXTMENU` for
 version 3 and 4 icons, with the pointer position for version 4), after giving
 the app the right to come to the front. The app opens its menu or window at the
 pointer at once. While a menu or flyout it opened is on screen, the notch stays
-open (`tray-interaction-end` tells it when they are gone).
+open, however long that is (`tray-interaction-end` tells it when they are
+gone). Menus are Windows' own (`#32768`), the app's caption-less tool or
+top-most pop-ups, and floating pop-ups of another process at the pointer (an
+app drawing its menu in a helper process); another window the click opened
+keeps the notch open for up to two minutes.
 
 An icon's picture is loaded again at 64 px from the file Windows loaded it from
 when that is known (`GetIconInfoEx`), so it stays sharp at the notch's size;

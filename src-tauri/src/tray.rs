@@ -1107,6 +1107,20 @@ pub fn interact(key: &str, context_menu: bool) -> Result<(), String> {
         };
         Shell_NotifyIconGetRect(&icon.identifier)
             .map_err(|_| "This tray icon is no longer running.")?;
+        // The notch stays open while what this opens (its menu) is open.
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(icon.identifier.hWnd, Some(&mut pid));
+        let mut clicked_at = POINT::default();
+        let _ = GetCursorPos(&mut clicked_at);
+        let popups_before = crate::tray_host::open_popups(pid, clicked_at);
+        let watch = || {
+            crate::tray_host::watch_interaction(
+                key.to_string(),
+                pid,
+                clicked_at,
+                popups_before.clone(),
+            )
+        };
         if context_menu {
             // The pointer is on the dock icon that was right-clicked.
             let mut cursor = POINT::default();
@@ -1116,6 +1130,7 @@ pub fn interact(key: &str, context_menu: bool) -> Result<(), String> {
                 .ShowContextMenu()
                 .map_err(|_| "Windows could not open this app's native tray menu.".to_string())?;
             move_new_menu_to(&icon.path, &before, cursor);
+            watch();
             Ok(())
         } else {
             let element: IUIAutomationElement = element.cast().map_err(|e| e.to_string())?;
@@ -1124,7 +1139,9 @@ pub fn interact(key: &str, context_menu: bool) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             pattern
                 .Invoke()
-                .map_err(|_| "Windows could not activate this tray icon.".to_string())
+                .map_err(|_| "Windows could not activate this tray icon.".to_string())?;
+            watch();
+            Ok(())
         }
     }
 }

@@ -38,7 +38,8 @@ pub struct DockExtra {
     pub path: String,
     pub icon: Option<String>,
     pub removable: bool,
-    /// Icon for a light dock, when it differs (the Tray Bin icon sets).
+    /// Icon for a light dock, when it differs (the Recycle Bin's white and
+    /// black sets).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_light: Option<String>,
     /// Second tooltip line, e.g. the Recycle Bin's size.
@@ -311,27 +312,18 @@ fn parse_enabled_folders(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// The bin with its fill-level icon (Bloom's own five bars, Tray Bin's
-/// icons, or the Windows icon when chosen or when Tray Bin's are missing) and
-/// its size for the tooltip.
+/// The bin with its fill-level icon (Tray Bin's bin with up to five bars, or
+/// the Windows icon when chosen) and its size for the tooltip.
 fn recycle_bin_extra(app: &AppHandle) -> DockExtra {
     let state = crate::recycle_bin::query();
     let level = crate::recycle_bin::level(state, crate::recycle_bin::only_empty_full(app));
-    let style = crate::recycle_bin::icon_style(app);
-    let filled = match style.as_str() {
-        "bloom" => Some((
-            crate::recycle_bin::bloom_icon(level, true),
-            crate::recycle_bin::bloom_icon(level, false),
-            false,
-        )),
-        "traybin" => {
-            crate::recycle_bin::traybin_icons(app, level).map(|(dark, light)| (dark, light, true))
-        }
-        _ => None,
-    };
-    let (icon, icon_light, pixelated) = match filled {
-        Some((dark, light, pixelated)) => (Some(dark), Some(light), pixelated),
-        None => (recycle_bin_icon(state.items > 0), None, false),
+    let (icon, icon_light) = if crate::recycle_bin::icon_style(app) == "windows" {
+        (recycle_bin_icon(state.items > 0), None)
+    } else {
+        (
+            Some(crate::recycle_bin::traybin_icon(level, true)),
+            Some(crate::recycle_bin::traybin_icon(level, false)),
+        )
     };
     DockExtra {
         id: "recycle-bin".into(),
@@ -342,7 +334,7 @@ fn recycle_bin_extra(app: &AppHandle) -> DockExtra {
         removable: false,
         icon_light,
         detail: Some(crate::recycle_bin::detail(state)),
-        pixelated,
+        pixelated: false,
     }
 }
 

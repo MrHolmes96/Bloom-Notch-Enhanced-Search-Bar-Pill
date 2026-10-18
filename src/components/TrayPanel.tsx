@@ -77,7 +77,8 @@ function TrayTile({
 	editing: boolean;
 	onChange: (visibility: Visibility) => void;
 	onError: (text: string) => void;
-	onInteract: (id: string) => void;
+	/** Holds the notch open for this click; call the result if it failed. */
+	onInteract: (id: string) => () => void;
 }) {
 	const [programIcon, setProgramIcon] = useState<string | null>(
 		() => iconCache.get(icon.path) ?? null
@@ -110,20 +111,24 @@ function TrayTile({
 						if (e.detail <= 1) onChange(visibility === "hidden" ? "shown" : "hidden");
 						return;
 					}
-					onInteract(icon.id);
+					const failed = onInteract(icon.id);
 					// The second click of a double click is the icon's double
 					// click, as on the taskbar.
 					const command = e.detail >= 2 ? "double_click_tray_icon" : "activate_tray_icon";
-					invoke(command, { trayId: icon.id }).catch((err) => onError(String(err)));
+					invoke(command, { trayId: icon.id }).catch((err) => {
+						failed();
+						onError(String(err));
+					});
 				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
 					if (editing) return;
-					onInteract(icon.id);
-					invoke("show_tray_context_menu", { trayId: icon.id }).catch((err) =>
-						onError(String(err))
-					);
+					const failed = onInteract(icon.id);
+					invoke("show_tray_context_menu", { trayId: icon.id }).catch((err) => {
+						failed();
+						onError(String(err));
+					});
 				}}
 			>
 				{image ? (
@@ -210,29 +215,48 @@ export function TrayPanel({
 		return () => window.clearTimeout(timer);
 	}, [error]);
 
-	// While an icon's menu or flyout is open the notch stays open, so it is
-	// still there when the menu closes. Bloom says when that happens; if it
-	// can't tell (an older way of clicking), the pin lets go after a while.
-	const pinTimerRef = useRef<number | null>(null);
+	// While an icon's menu or flyout is open the notch stays open, however
+	// long that is, so it is still there when the menu closes. Bloom says when
+	// what each click opened is gone again; a click that failed lets go at
+	// once. Only if Bloom never answers does the notch let go, after 10 min.
+	const openRef = useRef(new Map<string, number>());
+	const backstopRef = useRef<number | null>(null);
 	const pinChangeRef = useRef(onPinChange);
 	pinChangeRef.current = onPinChange;
-	const releasePin = () => {
-		if (pinTimerRef.current !== null) {
-			window.clearTimeout(pinTimerRef.current);
-			pinTimerRef.current = null;
+	const releaseAll = () => {
+		if (backstopRef.current !== null) window.clearTimeout(backstopRef.current);
+		backstopRef.current = null;
+		if (openRef.current.size > 0) {
+			openRef.current.clear();
 			pinChangeRef.current?.(false);
 		}
 	};
-	const pin = () => {
-		if (pinTimerRef.current !== null) window.clearTimeout(pinTimerRef.current);
-		else pinChangeRef.current?.(true);
-		pinTimerRef.current = window.setTimeout(releasePin, 10000);
+	const release = (id: string) => {
+		const open = openRef.current;
+		const count = open.get(id) ?? 0;
+		if (count <= 0) return;
+		if (count > 1) open.set(id, count - 1);
+		else open.delete(id);
+		if (open.size === 0) releaseAll();
+	};
+	const pin = (id: string) => {
+		const open = openRef.current;
+		if (open.size === 0) pinChangeRef.current?.(true);
+		open.set(id, (open.get(id) ?? 0) + 1);
+		if (backstopRef.current !== null) window.clearTimeout(backstopRef.current);
+		backstopRef.current = window.setTimeout(releaseAll, 10 * 60 * 1000);
+		let done = false;
+		return () => {
+			if (done) return;
+			done = true;
+			release(id);
+		};
 	};
 	useEffect(() => {
-		const ended = listen<string>("tray-interaction-end", () => releasePin());
+		const ended = listen<string>("tray-interaction-end", (event) => release(event.payload));
 		return () => {
 			void ended.then((f) => f());
-			releasePin();
+			releaseAll();
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);

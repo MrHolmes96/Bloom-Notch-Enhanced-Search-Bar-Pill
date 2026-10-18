@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
 	Bell,
@@ -45,10 +45,9 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (next: bool
 
 export function RecycleBinSettings() {
 	const [position, setPosition] = useState(() => localStorage.getItem(KEYS.position) ?? "end");
-	const [icons, setIcons] = useState(() => {
-		const stored = localStorage.getItem(KEYS.icons);
-		return stored === "traybin" || stored === "windows" ? stored : "bloom";
-	});
+	const [icons, setIcons] = useState(() =>
+		localStorage.getItem(KEYS.icons) === "windows" ? "windows" : "traybin"
+	);
 	const [onlyEmptyFull, setOnlyEmptyFull] = useState(() => readFlag(KEYS.onlyEmptyFull, false));
 	const [doubleClick, setDoubleClick] = useState(
 		() => localStorage.getItem(KEYS.doubleClick) ?? "open"
@@ -56,24 +55,16 @@ export function RecycleBinSettings() {
 	const [confirm, setConfirm] = useState(() => readFlag(KEYS.confirm, true));
 	const [sound, setSound] = useState(() => readFlag(KEYS.sound, true));
 	const [progress, setProgress] = useState(() => readFlag(KEYS.progress, true));
-	const [trayBinFound, setTrayBinFound] = useState<boolean | null>(null);
 
 	useSettingsSync({
 		[KEYS.position]: (v) => setPosition(String(v)),
-		[KEYS.icons]: (v) => setIcons(String(v) === "traybin" || String(v) === "windows" ? String(v) : "bloom"),
+		[KEYS.icons]: (v) => setIcons(String(v) === "windows" ? "windows" : "traybin"),
 		[KEYS.onlyEmptyFull]: (v) => setOnlyEmptyFull(v !== false),
 		[KEYS.doubleClick]: (v) => setDoubleClick(String(v)),
 		[KEYS.confirm]: (v) => setConfirm(v !== false),
 		[KEYS.sound]: (v) => setSound(v !== false),
 		[KEYS.progress]: (v) => setProgress(v !== false)
 	});
-
-	useEffect(() => {
-		if (icons !== "traybin") return;
-		void invoke<boolean>("recycle_bin_icons_available")
-			.then(setTrayBinFound)
-			.catch(() => setTrayBinFound(false));
-	}, [icons]);
 
 	const flag = (key: string, set: (v: boolean) => void) => (next: boolean) => {
 		set(next);
@@ -107,13 +98,9 @@ export function RecycleBinSettings() {
 				icon={Image}
 				label="Bin Icons"
 				desc={
-					icons === "traybin" && trayBinFound === false
-						? "Tray Bin isn't installed, so the Windows icons are used"
-						: icons === "traybin"
-							? "Tray Bin's icons, filling up as the bin grows"
-							: icons === "windows"
-								? "The standard Windows Recycle Bin icons"
-								: "Up to five bars: under 100 MB, 100 MB, 500 MB, 1 GB, 5 GB and up"
+					icons === "windows"
+						? "The standard Windows Recycle Bin icons"
+						: "Tray Bin's bin with up to five bars: under 100 MB, 100 MB, 500 MB, 1 GB, 5 GB and up"
 				}
 			>
 				<select
@@ -124,7 +111,6 @@ export function RecycleBinSettings() {
 						save(KEYS.icons, e.target.value);
 					}}
 				>
-					<option value="bloom">Bloom</option>
 					<option value="traybin">Tray Bin</option>
 					<option value="windows">Windows</option>
 				</select>

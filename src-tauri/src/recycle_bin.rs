@@ -3,22 +3,19 @@
 //! double click does, and the shell's confirm / sound / progress options when
 //! emptying.
 //!
-//! Bloom draws its own bin by default: five bars, one more for each size step
-//! (under 100 MB, 100-500 MB, 500 MB-1 GB, 1-5 GB, 5 GB and up), sharp at any
-//! dock size. Tray Bin's icons (MiniBin's artwork, four steps) can be used
-//! instead: they are not shipped with Bloom but copied once out of an
-//! installed Tray Bin (`TrayBin.exe` keeps them as RCDATA resources 10-14 and
-//! 20-24) into Bloom's config folder, so they stay after Tray Bin is
-//! uninstalled. The Windows bin icons are the third choice.
+//! The icon is Tray Bin's bin, drawn by Bloom on Tray Bin's own 16 px grid so
+//! it stays sharp at the dock's size. Where Tray Bin has four bars, this one
+//! has five, one more for each size step: under 100 MB 1, 100-500 MB 2,
+//! 500 MB-1 GB 3, 1-5 GB 4, 5 GB and up 5 (full). The Windows bin icons are
+//! the other choice.
 //!
 //! The icon updates the moment the bin changes: Bloom watches each drive's
 //! `$Recycle.Bin` folder for this user with Windows' change notifications, so
 //! nothing polls.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 use base64::Engine;
 use tauri::{AppHandle, Emitter, Manager};
@@ -39,13 +36,6 @@ const MB: i64 = 1024 * 1024;
 const LEVEL_STEPS: [i64; 4] = [100 * MB, 500 * MB, 1024 * MB, 5 * 1024 * MB];
 /// The fullest level: 5 bars.
 pub const FULL: usize = 5;
-const LEVEL_NAMES: [&str; 5] = ["0", "25", "50", "75", "100"];
-/// Which of Tray Bin's five icons (empty, 25, 50, 75, 100 %) shows each of
-/// Bloom's six levels: 5 GB and up is its full icon.
-const TRAYBIN_ICON_FOR_LEVEL: [usize; 6] = [0, 1, 2, 3, 3, 4];
-/// Tray Bin's resource ids: white set (dark backgrounds) and black set.
-const WHITE_BASE: u16 = 10;
-const BLACK_BASE: u16 = 20;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct BinState {
@@ -137,13 +127,12 @@ fn setting_on(app: &AppHandle, key: &str, default: bool) -> bool {
     get_setting_str(app, key).map_or(default, |v| v != "false")
 }
 
-/// Which icons the bin uses: Bloom's own ("bloom", the default), Tray Bin's
-/// ("traybin") or Windows' ("windows").
+/// Which icons the bin uses: Tray Bin's ("traybin", the default) or Windows'
+/// ("windows").
 pub fn icon_style(app: &AppHandle) -> String {
     match get_setting_str(app, "bloom-dock-bin-icons").as_deref() {
-        Some("traybin") => "traybin".into(),
         Some("windows") => "windows".into(),
-        _ => "bloom".into(),
+        _ => "traybin".into(),
     }
 }
 
@@ -153,233 +142,32 @@ pub fn only_empty_full(app: &AppHandle) -> bool {
 
 // ---------------------------------------------------------------- icons
 
-fn icon_dir(app: &AppHandle) -> Option<PathBuf> {
-    Some(app.path().app_config_dir().ok()?.join("recycle-bin-icons"))
-}
-
-fn icon_file(dir: &Path, dark_background: bool, level: usize) -> PathBuf {
-    let set = if dark_background { "white" } else { "black" };
-    dir.join(format!("{}_{}.ico", set, LEVEL_NAMES[level]))
-}
-
-/// Tray Bin's program: where its installer registered it (the folder can be
-/// changed while installing), else its default folder.
-fn traybin_exe() -> Option<PathBuf> {
-    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
-    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
-    let key = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\TrayBin");
-    let value = wide("DisplayIcon");
-    let mut buffer = [0u16; 1024];
-    let mut size = (buffer.len() * 2) as u32;
-    let registered = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            PCWSTR(key.as_ptr()),
-            PCWSTR(value.as_ptr()),
-            RRF_RT_REG_SZ,
-            None,
-            Some(buffer.as_mut_ptr() as *mut _),
-            Some(&mut size),
-        )
-        .is_ok()
-    }
-    .then(|| {
-        let length = (size as usize / 2).min(buffer.len());
-        let text = String::from_utf16_lossy(&buffer[..length]);
-        // "C:\...\TrayBin.exe" or "C:\...\TrayBin.exe,0".
-        let path = text
-            .trim_end_matches('\0')
-            .split(',')
-            .next()
-            .unwrap_or_default();
-        PathBuf::from(path.trim().trim_matches('"'))
-    })
-    .filter(|p| p.is_file());
-    registered.or_else(|| {
-        let local = std::env::var_os("LOCALAPPDATA")?;
-        let exe = PathBuf::from(local)
-            .join("Programs")
-            .join("TrayBin")
-            .join("TrayBin.exe");
-        exe.is_file().then_some(exe)
-    })
-}
-
-fn looks_like_ico(bytes: &[u8]) -> bool {
-    bytes.len() > 22 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 1 && bytes[3] == 0
-}
-
-/// Reads one RCDATA resource (a whole .ico file) from a module loaded as data.
-unsafe fn read_rcdata(module: windows::Win32::Foundation::HMODULE, id: u16) -> Option<Vec<u8>> {
-    use windows::Win32::System::LibraryLoader::{
-        FindResourceW, LoadResource, LockResource, SizeofResource,
-    };
-    // MAKEINTRESOURCE(id) and RT_RCDATA (10).
-    let resource = FindResourceW(
-        Some(module),
-        PCWSTR(id as usize as *const u16),
-        PCWSTR(10usize as *const u16),
-    );
-    if resource.is_invalid() {
-        return None;
-    }
-    let size = SizeofResource(Some(module), resource) as usize;
-    let handle = LoadResource(Some(module), resource).ok()?;
-    let data = LockResource(handle) as *const u8;
-    if data.is_null() || size == 0 {
-        return None;
-    }
-    Some(std::slice::from_raw_parts(data, size).to_vec())
-}
-
-/// Copies Tray Bin's ten icons into `dir`. All or nothing.
-fn import_traybin_icons(dir: &Path) -> bool {
-    use windows::Win32::Foundation::FreeLibrary;
-    use windows::Win32::System::LibraryLoader::{
-        LoadLibraryExW, LOAD_LIBRARY_AS_DATAFILE, LOAD_LIBRARY_AS_IMAGE_RESOURCE,
-    };
-    let Some(exe) = traybin_exe() else {
-        return false;
-    };
-    let wide: Vec<u16> = exe
-        .to_string_lossy()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut files: Vec<(PathBuf, Vec<u8>)> = Vec::new();
-    unsafe {
-        let Ok(module) = LoadLibraryExW(
-            PCWSTR(wide.as_ptr()),
-            None,
-            LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE,
-        ) else {
-            return false;
-        };
-        for (base, dark) in [(WHITE_BASE, true), (BLACK_BASE, false)] {
-            for level in 0..5 {
-                match read_rcdata(module, base + level as u16) {
-                    Some(bytes) if looks_like_ico(&bytes) => {
-                        files.push((icon_file(dir, dark, level), bytes))
-                    }
-                    _ => {
-                        let _ = FreeLibrary(module);
-                        return false;
-                    }
-                }
-            }
-        }
-        let _ = FreeLibrary(module);
-    }
-    if std::fs::create_dir_all(dir).is_err() {
-        return false;
-    }
-    files
-        .into_iter()
-        .all(|(path, bytes)| std::fs::write(path, bytes).is_ok())
-}
-
-/// The icon as a PNG data URI at its own size (16 px); the dock scales it up
-/// with nearest-neighbour so the pixel art stays crisp.
-fn ico_to_data_uri(bytes: &[u8]) -> Option<String> {
-    let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Ico).ok()?;
-    let mut png = Vec::new();
-    image
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .ok()?;
-    Some(format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(png)
-    ))
-}
-
-static ICONS: OnceLock<Mutex<HashMap<(bool, usize), String>>> = OnceLock::new();
-static IMPORT_TRIED: AtomicBool = AtomicBool::new(false);
-
-fn have_all_icons(dir: &Path) -> bool {
-    (0..5).all(|level| {
-        icon_file(dir, true, level).is_file() && icon_file(dir, false, level).is_file()
-    })
-}
-
-/// Bloom's own bin at a fill level (0-5) as an SVG data URI, in the dock's
-/// text colour for a dark or a light dock: a bin with its lid and handle and
-/// five bar slots, filled from the bottom up.
-pub fn bloom_icon(level: usize, dark_background: bool) -> String {
+/// Tray Bin's bin at a fill level (0-5) as an SVG data URI: white for a dark
+/// dock, black for a light one, as Tray Bin's two sets are. Its 16 px grid:
+/// the handle, the lid, the walls and the foot, and the bars stacked up from
+/// the bottom with a line between each (Tray Bin's four, and a fifth above).
+pub fn traybin_icon(level: usize, dark_background: bool) -> String {
     let ink = if dark_background {
         "#ffffff"
     } else {
-        "#1d1d1f"
+        "#000000"
     };
-    let mut bars = String::new();
-    if level > 0 {
-        // Five bars from the bottom of the body up; the body narrows towards
-        // its foot, and so do the bars.
-        for index in 0..FULL {
-            let bottom = 52.0 - index as f64 * 6.0;
-            let top = bottom - 4.0;
-            let middle = (top + bottom) / 2.0;
-            let edge = 17.0 + 2.6 * ((middle - 20.0) / 34.4) + 4.6;
-            let filled = index < level;
-            bars.push_str(&format!(
-                r#"<rect x="{x:.2}" y="{top:.2}" width="{w:.2}" height="4" rx="1.6" fill="{ink}" opacity="{o}"/>"#,
-                x = edge,
-                w = 64.0 - 2.0 * edge,
-                o = if filled { "1" } else { "0.22" },
-            ));
-        }
+    let mut shapes = String::from(
+        r#"<rect x="5" y="1" width="6" height="1"/><rect x="2" y="2" width="12" height="1"/><rect x="3" y="3" width="1" height="11"/><rect x="12" y="3" width="1" height="11"/><rect x="4" y="14" width="8" height="1"/>"#,
+    );
+    for bar in 0..level.min(FULL) {
+        shapes.push_str(&format!(
+            r#"<rect x="5" y="{}" width="6" height="1"/>"#,
+            12 - 2 * bar
+        ));
     }
     let svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><g fill="none" stroke="{ink}" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round"><path d="M26 12V9.6a2.2 2.2 0 0 1 2.2-2.2h7.6A2.2 2.2 0 0 1 38 9.6V12"/><path d="M17 20h30l-2.6 34.4a4 4 0 0 1-4 3.6H23.6a4 4 0 0 1-4-3.6Z"/></g><rect x="12" y="12.4" width="40" height="4.4" rx="2.2" fill="{ink}"/>{bars}</svg>"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges"><g fill="{ink}">{shapes}</g></svg>"#
     );
     format!(
         "data:image/svg+xml;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(svg)
     )
-}
-
-/// (for a dark background, for a light background) at one of Bloom's levels
-/// (0-5), or None when Tray Bin's icons are neither copied yet nor installed.
-pub fn traybin_icons(app: &AppHandle, level: usize) -> Option<(String, String)> {
-    let level = TRAYBIN_ICON_FOR_LEVEL[level.min(FULL)];
-    let cache = ICONS.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(guard) = cache.lock() {
-        if let (Some(dark), Some(light)) = (guard.get(&(true, level)), guard.get(&(false, level))) {
-            return Some((dark.clone(), light.clone()));
-        }
-    }
-    let dir = icon_dir(app)?;
-    if !have_all_icons(&dir) {
-        // Looked for once per run; installing Tray Bin later is picked up by
-        // `refresh_traybin_icons` from the settings page.
-        if IMPORT_TRIED.swap(true, Ordering::Relaxed) || !import_traybin_icons(&dir) {
-            return None;
-        }
-    }
-    let dark = ico_to_data_uri(&std::fs::read(icon_file(&dir, true, level)).ok()?)?;
-    let light = ico_to_data_uri(&std::fs::read(icon_file(&dir, false, level)).ok()?)?;
-    if let Ok(mut guard) = cache.lock() {
-        guard.insert((true, level), dark.clone());
-        guard.insert((false, level), light.clone());
-    }
-    Some((dark, light))
-}
-
-/// Whether Tray Bin's icons can be used, copying them in again if Tray Bin has
-/// been installed since. Used by the settings page.
-#[tauri::command]
-pub async fn recycle_bin_icons_available(app: AppHandle) -> bool {
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(dir) = icon_dir(&app) else {
-            return false;
-        };
-        if have_all_icons(&dir) {
-            return true;
-        }
-        IMPORT_TRIED.store(true, Ordering::Relaxed);
-        import_traybin_icons(&dir)
-    })
-    .await
-    .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------- emptying
@@ -691,14 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn tray_bin_icons_cover_every_level() {
-        assert_eq!(TRAYBIN_ICON_FOR_LEVEL[0], 0);
-        assert_eq!(TRAYBIN_ICON_FOR_LEVEL[FULL], 4);
-        assert!(TRAYBIN_ICON_FOR_LEVEL.windows(2).all(|w| w[0] <= w[1]));
-    }
-
-    #[test]
-    fn bloom_icon_fills_one_bar_per_level() {
+    fn tray_bin_icon_stacks_one_bar_per_level() {
         use base64::Engine;
         let decode = |uri: String| {
             let data = uri.split_once(',').unwrap().1.to_string();
@@ -709,12 +490,17 @@ mod tests {
             )
             .unwrap()
         };
-        assert_eq!(decode(bloom_icon(0, true)).matches("<rect").count(), 1);
+        // Handle, lid, two walls and the foot.
+        assert_eq!(decode(traybin_icon(0, true)).matches("<rect").count(), 5);
         for level in 1..=FULL {
-            let svg = decode(bloom_icon(level, true));
-            assert_eq!(svg.matches(r#"opacity="1""#).count(), level);
-            assert_eq!(svg.matches(r#"opacity="0.22""#).count(), FULL - level);
+            let svg = decode(traybin_icon(level, true));
+            assert_eq!(svg.matches("<rect").count(), 5 + level);
+            assert!(svg.contains(&format!(r#"y="{}""#, 12 - 2 * (level - 1))));
         }
-        assert!(decode(bloom_icon(3, false)).contains("#1d1d1f"));
+        // Never more than five bars, the top one just under the lid.
+        assert_eq!(decode(traybin_icon(9, true)).matches("<rect").count(), 10);
+        assert!(decode(traybin_icon(5, true)).contains(r#"y="4" width="6""#));
+        assert!(decode(traybin_icon(3, false)).contains("#000000"));
+        assert!(decode(traybin_icon(3, true)).contains("#ffffff"));
     }
 }

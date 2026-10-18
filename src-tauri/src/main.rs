@@ -298,7 +298,6 @@ fn main() {
             notifications::notification_remove,
             notifications::notification_clear_all,
             notifications::notification_center_hide,
-            recycle_bin::recycle_bin_icons_available,
             wifi::wifi_list_networks,
             wifi::wifi_scan,
             wifi::wifi_connect,

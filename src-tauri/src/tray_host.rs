@@ -17,6 +17,12 @@
 //!
 //! The taskbar's other traffic sent to that class (AppBar messages, icon
 //! positions, commands) is passed straight on to Explorer and answered by it.
+//! AppBar messages that carry a screen area (asking for or setting the strip a
+//! bar reserves, as Bloom's dock and notch do) keep it in shared memory made
+//! for the window they reach first, which Explorer can't open; that memory is
+//! made again for Explorer, and Explorer's answer copied back, as Cairo does.
+//! Without this the bars register but never reserve their strip, and
+//! maximized windows go underneath them.
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -41,6 +47,37 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const SIGNATURE: u32 = 0x3475_3423;
 /// `COPYDATASTRUCT.dwData` of a tray icon message.
 const COPYDATA_TRAY: usize = 1;
+/// `COPYDATASTRUCT.dwData` of an AppBar message (`SHAppBarMessage`).
+const COPYDATA_APPBAR: usize = 0;
+
+/// `APPBARDATA` as `SHAppBarMessage` sends it to the taskbar (32- and 64-bit
+/// programs share this layout).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct AppBarData3264 {
+    size: u32,
+    hwnd: u32,
+    callback_message: u32,
+    edge: u32,
+    rect: windows::Win32::Foundation::RECT,
+    lparam: i64,
+}
+
+/// The whole AppBar message: the bar's data, which message, and the shared
+/// memory the answer goes back in (none for most messages).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct AppBarMessage3264 {
+    data: AppBarData3264,
+    message: u32,
+    _padding1: u32,
+    shared_memory: i64,
+    source_process: u32,
+    _padding2: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<AppBarData3264>() == 40);
+const _: () = assert!(std::mem::size_of::<AppBarMessage3264>() == 64);
 
 const NIM_ADD: u32 = 0;
 const NIM_MODIFY: u32 = 1;
@@ -404,6 +441,70 @@ unsafe fn forward(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     }
 }
 
+/// Passes an AppBar message that carries shared memory on to Explorer, with
+/// that memory made again for Explorer and its answer (the strip it allows a
+/// bar, or where the taskbar is) copied back for the program that asked.
+/// `None` when the message has no shared memory, so it is passed on as it is.
+unsafe fn forward_appbar(wparam: WPARAM, data: &COPYDATASTRUCT) -> Option<LRESULT> {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::UI::Shell::{SHAllocShared, SHFreeShared, SHLockShared, SHUnlockShared};
+
+    if data.cbData as usize != std::mem::size_of::<AppBarMessage3264>() || data.lpData.is_null() {
+        return None;
+    }
+    let mut message = std::ptr::read_unaligned(data.lpData as *const AppBarMessage3264);
+    if message.shared_memory == 0 {
+        return None;
+    }
+    let Some(target) = explorer_target() else {
+        // Explorer isn't there (restarting): nothing can answer.
+        return Some(LRESULT(0));
+    };
+    let mut explorer = 0u32;
+    GetWindowThreadProcessId(target, Some(&mut explorer));
+    if explorer == 0 {
+        return None;
+    }
+
+    let size = std::mem::size_of::<AppBarData3264>();
+    let asked = HANDLE(message.shared_memory as isize as *mut core::ffi::c_void);
+    let original = SHLockShared(asked, message.source_process);
+    if original.is_null() {
+        return None;
+    }
+    let copy = SHAllocShared(Some(original as *const _), size as u32, explorer);
+    if copy.is_invalid() {
+        let _ = SHUnlockShared(original);
+        return None;
+    }
+    message.shared_memory = copy.0 as isize as i64;
+    message.source_process = explorer;
+    let mut onward = COPYDATASTRUCT {
+        dwData: COPYDATA_APPBAR,
+        cbData: std::mem::size_of::<AppBarMessage3264>() as u32,
+        lpData: &mut message as *mut AppBarMessage3264 as *mut _,
+    };
+    let mut result = 0usize;
+    let sent = SendMessageTimeoutW(
+        target,
+        WM_COPYDATA,
+        wparam,
+        LPARAM(&mut onward as *mut COPYDATASTRUCT as isize),
+        SMTO_ABORTIFHUNG | SMTO_NORMAL,
+        4000,
+        Some(&mut result),
+    );
+    // Explorer writes its answer into the copy.
+    let answer = SHLockShared(copy, explorer);
+    if !answer.is_null() {
+        std::ptr::copy_nonoverlapping(answer as *const u8, original as *mut u8, size);
+        let _ = SHUnlockShared(answer);
+    }
+    let _ = SHUnlockShared(original);
+    let _ = SHFreeShared(copy, explorer);
+    Some(LRESULT(if sent.0 != 0 { result as isize } else { 0 }))
+}
+
 unsafe fn announce_change(hwnd: HWND) {
     // One announcement per burst (an animated icon changes many times a second).
     SetTimer(Some(hwnd), TIMER_CHANGED, CHANGED_DELAY_MS, None);
@@ -466,6 +567,11 @@ unsafe extern "system" fn window_proc(
         }
         if recorded {
             announce_change(hwnd);
+        }
+        if data.dwData == COPYDATA_APPBAR {
+            if let Some(result) = forward_appbar(wparam, data) {
+                return result;
+            }
         }
         return match forward(msg, wparam, lparam) {
             Some(result) => result,
@@ -544,10 +650,11 @@ unsafe extern "system" fn window_proc(
 /// Starts the host on a thread of its own. Does nothing when it is turned off
 /// in settings ("bloom-tray-live" = "false").
 pub fn start(app: AppHandle) {
+    // Also needed by the older way of clicking, when the host is off.
+    let _ = APP.set(app.clone());
     if crate::utils::get_setting_str(&app, "bloom-tray-live").as_deref() == Some("false") {
         return;
     }
-    let _ = APP.set(app);
     std::thread::Builder::new()
         .name("bloom-tray-host".into())
         .spawn(|| unsafe {
@@ -748,13 +855,26 @@ pub enum Button {
 
 /// Menus and flyouts on screen: Windows' own menus, and pop-up windows (no
 /// title bar) of the icon's program.
-fn open_popups(pid: u32) -> Vec<isize> {
+/// A window a tray click may have opened: its handle, and whether it is a
+/// menu (Windows' own menus, and the pop-up menus and flyouts apps draw
+/// themselves, which are tool or top-most pop-ups) rather than, say, an app's
+/// borderless main window.
+pub(crate) type Popup = (isize, bool);
+
+/// The visible menus; the caption-less pop-ups of process `pid`; and the
+/// floating pop-ups of other processes at `point` (where the click was), as
+/// some apps draw their tray menu in a helper process (Steam's web helper).
+pub(crate) fn open_popups(pid: u32, point: POINT) -> Vec<Popup> {
+    use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetWindowLongW, IsWindowVisible, GWL_STYLE, WS_CAPTION,
+        EnumWindows, GetClassNameW, GetWindowLongW, GetWindowRect, IsWindowVisible, GWL_EXSTYLE,
+        GWL_STYLE, WS_CAPTION,
     };
     struct Search {
         pid: u32,
-        found: Vec<isize>,
+        point: POINT,
+        own: u32,
+        found: Vec<Popup>,
     }
     unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> windows::core::BOOL {
         let search = &mut *(param.0 as *mut Search);
@@ -763,20 +883,41 @@ fn open_popups(pid: u32) -> Vec<isize> {
         }
         let mut class = [0u16; 16];
         let length = GetClassNameW(hwnd, &mut class) as usize;
-        let menu = &class[..length.min(class.len())]
+        let system_menu = &class[..length.min(class.len())]
             == "#32768".encode_utf16().collect::<Vec<_>>().as_slice();
+        if system_menu {
+            search.found.push((hwnd.0 as isize, true));
+            return true.into();
+        }
+        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+        if style & WS_POPUP.0 == 0 || style & WS_CAPTION.0 == WS_CAPTION.0 {
+            return true.into();
+        }
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        let floating = ex_style & (WS_EX_TOOLWINDOW.0 | WS_EX_TOPMOST.0) != 0;
         let mut owner = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut owner));
-        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-        let popup =
-            owner == search.pid && style & WS_POPUP.0 != 0 && style & WS_CAPTION.0 != WS_CAPTION.0;
-        if menu || popup {
-            search.found.push(hwnd.0 as isize);
+        if owner == search.pid {
+            search.found.push((hwnd.0 as isize, floating));
+        } else if floating && owner != search.own {
+            let mut rect = RECT::default();
+            let near = GetWindowRect(hwnd, &mut rect).is_ok()
+                && rect.right - rect.left > 8
+                && rect.bottom - rect.top > 8
+                && search.point.x >= rect.left - 48
+                && search.point.x <= rect.right + 48
+                && search.point.y >= rect.top - 48
+                && search.point.y <= rect.bottom + 48;
+            if near {
+                search.found.push((hwnd.0 as isize, true));
+            }
         }
         true.into()
     }
     let mut search = Search {
         pid,
+        point,
+        own: std::process::id(),
         found: Vec::new(),
     };
     unsafe {
@@ -785,24 +926,32 @@ fn open_popups(pid: u32) -> Vec<isize> {
     search.found
 }
 
-/// Tells the notch when what a click opened (the app's menu or flyout) is
-/// gone again, so the notch stays open until then. `before` is what was on
-/// screen before the click.
-fn watch_interaction(id: String, pid: u32, before: Vec<isize>) {
+/// Tells the notch when what a click opened is gone again, so the notch stays
+/// open until then: for as long as a menu or flyout is open, however long
+/// that is, and up to two minutes for another window the click opened.
+/// `before` is what was on screen before the click.
+pub(crate) fn watch_interaction(id: String, pid: u32, point: POINT, before: Vec<Popup>) {
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
         let mut seen = false;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(120));
-            let open = open_popups(pid).iter().any(|hwnd| !before.contains(hwnd));
-            seen |= open;
+            let opened: Vec<Popup> = open_popups(pid, point)
+                .into_iter()
+                .filter(|(hwnd, _)| !before.iter().any(|(old, _)| old == hwnd))
+                .collect();
+            let menu = opened.iter().any(|(_, menu)| *menu);
+            let other = !opened.is_empty() && !menu;
+            seen |= !opened.is_empty();
             let elapsed = started.elapsed().as_millis();
-            if (!open && (seen || elapsed > 1500)) || elapsed > 120_000 {
+            let open = menu || (other && elapsed <= 120_000);
+            // Nothing opened at all: the click did something else.
+            if !open && (seen || elapsed > 1500) {
                 break;
             }
         }
         if let Some(app) = APP.get() {
-            let _ = app.emit("tray-interaction-end", id);
+            let _ = app.emit_to("main", "tray-interaction-end", id);
         }
     });
 }
@@ -830,7 +979,7 @@ pub fn click(id: &str, button: Button) -> Result<(), String> {
     unsafe {
         let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut cursor);
     }
-    let before = open_popups(pid);
+    let before = open_popups(pid, cursor);
     // The app may bring its menu or window to the front.
     crate::foreground::grant_to(pid);
     let anchor = ((cursor.y as u32 & 0xFFFF) << 16) | (cursor.x as u32 & 0xFFFF);
@@ -867,6 +1016,6 @@ pub fn click(id: &str, button: Button) -> Result<(), String> {
             }
         }
     }
-    watch_interaction(id.to_string(), pid, before);
+    watch_interaction(id.to_string(), pid, cursor, before);
     Ok(())
 }
