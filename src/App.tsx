@@ -2343,29 +2343,40 @@ function App() {
 		return () => clearInterval(interval);
 	}, [bloomMode, refreshWifiStatus]);
 
-	// Poll system metrics for status widgets
+	// Poll system metrics for status widgets: only the ones placed in the
+	// notch, and none when no metric widget is placed.
+	const metricWidgets = [...statusWidgets.left, ...statusWidgets.right]
+		.filter((id) => id === "cpu" || id === "ram" || id === "disk" || id === "net")
+		.sort()
+		.join(",");
 	useEffect(() => {
+		if (!metricWidgets) return;
+		const shown = new Set(metricWidgets.split(","));
 		const fetchMetrics = () => {
-			invoke<number>("get_cpu_usage")
-				.then(setCpuUsage)
-				.catch((e) => console.warn("CPU:", e));
-			invoke<number>("get_ram_usage")
-				.then(setRamUsage)
-				.catch((e) => console.warn("RAM:", e));
-			invoke<number>("get_disk_space")
-				.then(setDiskSpace)
-				.catch((e) => console.warn("Disk:", e));
-			invoke<[number, number]>("get_network_speed")
-				.then(([up, down]) => {
-					setNetUpSpeed(up);
-					setNetDownSpeed(down);
-				})
-				.catch(() => {});
+			if (shown.has("cpu"))
+				invoke<number>("get_cpu_usage")
+					.then(setCpuUsage)
+					.catch((e) => console.warn("CPU:", e));
+			if (shown.has("ram"))
+				invoke<number>("get_ram_usage")
+					.then(setRamUsage)
+					.catch((e) => console.warn("RAM:", e));
+			if (shown.has("disk"))
+				invoke<number>("get_disk_space")
+					.then(setDiskSpace)
+					.catch((e) => console.warn("Disk:", e));
+			if (shown.has("net"))
+				invoke<[number, number]>("get_network_speed")
+					.then(([up, down]) => {
+						setNetUpSpeed(up);
+						setNetDownSpeed(down);
+					})
+					.catch(() => {});
 		};
 		fetchMetrics();
 		const interval = setInterval(fetchMetrics, 3000);
 		return () => clearInterval(interval);
-	}, []);
+	}, [metricWidgets]);
 
 	// Listen for brightness changes
 	useEffect(() => {

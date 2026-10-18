@@ -275,26 +275,25 @@ const Dock = memo(function Dock() {
 			return false;
 		};
 
-		// Keep polling until visible — no time cap, since the dock can be
-		// enabled at runtime from settings after any delay.
-		const interval = setInterval(async () => {
+		// Keep checking until visible — no time cap, since the dock can be
+		// enabled at runtime from settings after any delay. Quickly at first
+		// (start-up), then once a second while the dock stays turned off.
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let tries = 0;
+		const check = async () => {
 			if (cleared) return;
 			if (await checkVisibility()) {
-				clearInterval(interval);
 				cleared = true;
+				return;
 			}
-		}, 200);
-
-		// Also attempt immediately
-		checkVisibility().then((ok) => {
-			if (ok) {
-				clearInterval(interval);
-				cleared = true;
-			}
-		});
+			if (cleared) return;
+			tries += 1;
+			timer = setTimeout(check, tries < 50 ? 200 : 1000);
+		};
+		void check();
 
 		return () => {
-			clearInterval(interval);
+			if (timer) clearTimeout(timer);
 			cleared = true;
 		};
 	}, []);

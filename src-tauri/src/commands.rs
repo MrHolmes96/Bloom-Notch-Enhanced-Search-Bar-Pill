@@ -3584,7 +3584,7 @@ pub fn open_battery_saver_settings() {
 // --- System metrics for status widgets ---
 
 #[tauri::command]
-pub fn get_cpu_usage() -> Result<u32, String> {
+pub async fn get_cpu_usage() -> Result<u32, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static LAST_IDLE: AtomicU64 = AtomicU64::new(0);
     static LAST_KERNEL: AtomicU64 = AtomicU64::new(0);
@@ -3623,7 +3623,7 @@ pub fn get_cpu_usage() -> Result<u32, String> {
 }
 
 #[tauri::command]
-pub fn get_ram_usage() -> Result<f32, String> {
+pub async fn get_ram_usage() -> Result<f32, String> {
     unsafe {
         let mut mem = windows::Win32::System::SystemInformation::MEMORYSTATUSEX::default();
         mem.dwLength =
@@ -3635,7 +3635,7 @@ pub fn get_ram_usage() -> Result<f32, String> {
 }
 
 #[tauri::command]
-pub fn get_disk_space() -> Result<u64, String> {
+pub async fn get_disk_space() -> Result<u64, String> {
     unsafe {
         let mut free_bytes = 0u64;
         let mut total_bytes = 0u64;
@@ -3652,7 +3652,7 @@ pub fn get_disk_space() -> Result<u64, String> {
 }
 
 #[tauri::command]
-pub fn get_network_speed() -> Result<(u64, u64), String> {
+pub async fn get_network_speed() -> Result<(u64, u64), String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static LAST_BYTES_SENT: AtomicU64 = AtomicU64::new(0);
     static LAST_BYTES_RECV: AtomicU64 = AtomicU64::new(0);

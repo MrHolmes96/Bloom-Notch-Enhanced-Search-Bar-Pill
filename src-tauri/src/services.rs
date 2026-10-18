@@ -258,6 +258,7 @@ pub fn setup_taskbar_hook() {
 
 static WINDOW_CHANGE_APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 static LAST_WINDOW_CHANGE_MS: AtomicI64 = AtomicI64::new(0);
+static WINDOW_CHANGE_PENDING: AtomicBool = AtomicBool::new(false);
 
 pub fn setup_window_change_hook(app_handle: AppHandle) {
     unsafe {
@@ -366,10 +367,17 @@ unsafe extern "system" fn window_change_event_proc(
     }
 
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongW, GetWindowThreadProcessId, IsWindow, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+        GetAncestor, GetWindowLongW, GetWindowThreadProcessId, IsWindow, GA_ROOT, GWL_EXSTYLE,
+        WS_EX_TOOLWINDOW,
     };
 
-    if !IsWindow(Some(hwnd)).as_bool() {
+    // Only whole windows matter to the dock: carets, cursors, menus' items and
+    // the child controls inside apps (a browser makes hundreds) fire these
+    // events too, and each one used to make the dock re-list every window.
+    if id_object != 0 || id_child != 0 {
+        return;
+    }
+    if !IsWindow(Some(hwnd)).as_bool() || GetAncestor(hwnd, GA_ROOT) != hwnd {
         return;
     }
 
@@ -392,16 +400,28 @@ unsafe extern "system" fn window_change_event_proc(
     // timestamp and schedules an emit; only the newest one actually fires, so
     // the final state of a burst is always reported. Dropping the trailing
     // events would leave closed apps visible in the dock.
+    // One waiting task covers a whole burst, instead of a task per event.
     let now = crate::utils::get_now_ms();
     LAST_WINDOW_CHANGE_MS.store(now, Ordering::Relaxed);
-
+    if WINDOW_CHANGE_PENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
     if let Some(app_handle) = WINDOW_CHANGE_APP_HANDLE.get().cloned() {
         tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-            if LAST_WINDOW_CHANGE_MS.load(Ordering::Relaxed) == now {
-                let _ = app_handle.emit("windows-changed", ());
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                let quiet_for =
+                    crate::utils::get_now_ms() - LAST_WINDOW_CHANGE_MS.load(Ordering::Relaxed);
+                if quiet_for >= 190 {
+                    break;
+                }
             }
+            // Cleared before emitting: an event arriving now starts a new wait.
+            WINDOW_CHANGE_PENDING.store(false, Ordering::Release);
+            let _ = app_handle.emit_to("dock", "windows-changed", ());
         });
+    } else {
+        WINDOW_CHANGE_PENDING.store(false, Ordering::Release);
     }
 }
 
@@ -791,6 +811,10 @@ pub fn setup_audio_visualization(app_handle: AppHandle) {
                         }
 
                         let mut device_invalidated = false;
+                        // A window of audio is ready ~94 times a second; the
+                        // notch (the only window showing it) gets the newest
+                        // one once per pass, ~30 a second, and eases between.
+                        let mut latest_bands: Option<[f32; NUM_BANDS]> = None;
                         loop {
                             let packet_length = match capture_client.GetNextPacketSize() {
                                 Ok(len) => len,
@@ -896,12 +920,7 @@ pub fn setup_audio_visualization(app_handle: AppHandle) {
                                             output[band_idx] = output[band_idx].clamp(0.18, 1.0);
                                             prev_values[band_idx] = output[band_idx];
                                         }
-                                        let _ = app_handle.emit(
-                                            "audio-visualization",
-                                            AudioVisualizationData {
-                                                frequencies: output.to_vec(),
-                                            },
-                                        );
+                                        latest_bands = Some(output);
                                         buffer_pos = 0;
                                     }
                                 }
@@ -909,6 +928,15 @@ pub fn setup_audio_visualization(app_handle: AppHandle) {
                             }
                         }
 
+                        if let Some(bands) = latest_bands {
+                            let _ = app_handle.emit_to(
+                                "main",
+                                "audio-visualization",
+                                AudioVisualizationData {
+                                    frequencies: bands.to_vec(),
+                                },
+                            );
+                        }
                         if device_invalidated {
                             return Err("Device invalidated".into());
                         }
@@ -981,6 +1009,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
             )> = None;
             let mut last_volume: f32 = -1.0;
             let mut last_muted: bool = false;
+            let mut waiting: Option<SystemCommand> = None;
 
             // Only hide the native flyout when Bloom's matching overlay replaces it.
             let hide_osd = |overlay_key: &str| {
@@ -1025,7 +1054,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         .and_then(|op| op.get())
                         .ok();
                 }
-                while let Ok(cmd) = rx.try_recv() {
+                while let Some(cmd) = waiting.take().or_else(|| rx.try_recv().ok()) {
                     // Only the volume commands need the audio endpoint. Media, brightness and
                     // visibility commands must keep working when there is no output device.
                     match (cmd, audio_endpoint_volume.as_ref()) {
@@ -1275,7 +1304,15 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         last_emitted_info = Some((current.title, current.artist, current.is_playing, current.has_media, art_str, current.position_ms, current.duration_ms));
                     }
                 }
-                std::thread::sleep(std::time::Duration::from_millis(64));
+                // Woken at once by a command (play/pause, volume), else after
+                // 64 ms for the volume and media checks.
+                match rx.recv_timeout(std::time::Duration::from_millis(64)) {
+                    Ok(cmd) => waiting = Some(cmd),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        std::thread::sleep(std::time::Duration::from_millis(64))
+                    }
+                }
             }
         }
     });
