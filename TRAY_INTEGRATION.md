@@ -64,6 +64,12 @@ raises its taskbar when it is shown); if not, it gets back in front and asks
 for the icons again, at most every 30 seconds. After an Explorer restart it does
 the same. Icons whose window is gone are dropped.
 
+An icon Bloom first sees being changed rather than added (it was added while
+Explorer's window was in front) has no click message yet; Bloom then asks that
+one program to add its icons again (`TaskbarCreated`, sent to its window only),
+and a click on it waits a moment for that. If Bloom still has no click message,
+the click goes through Explorer's own tray instead.
+
 A click sends the app the callback messages Explorer sends for a click on its
 icon (mouse move, button down and up, then `NIN_SELECT` or `WM_CONTEXTMENU` for
 version 3 and 4 icons, with the pointer position for version 4), after giving

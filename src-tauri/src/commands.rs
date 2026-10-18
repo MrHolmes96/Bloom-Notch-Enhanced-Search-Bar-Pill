@@ -37,6 +37,12 @@ pub async fn set_notch_hovered(app: AppHandle, hovered: bool) {
     crate::services::refresh_main_interaction(&app);
 }
 
+/// The dock's page is ready to be shown (called once by the dock).
+#[tauri::command]
+pub async fn dock_page_ready() {
+    DOCK_PAGE_READY.store(true, Ordering::Relaxed);
+}
+
 #[tauri::command]
 pub async fn set_notch_open(open: bool) {
     NOTCH_IS_OPEN.store(open, Ordering::Relaxed);
@@ -171,6 +177,16 @@ pub async fn init_dock(app: AppHandle, mode: String) {
     if !dock_enabled() {
         disable_dock(&app);
         return;
+    }
+
+    // At start the dock's page loads alongside the notch's: wait for it to be
+    // ready (1.5 s at most) before it replaces Windows' taskbar, so there is
+    // never a moment with neither on screen.
+    let waiting = std::time::Instant::now();
+    while !DOCK_PAGE_READY.load(Ordering::Relaxed)
+        && waiting.elapsed() < std::time::Duration::from_millis(1500)
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 
     if let Some(dock_win) = app.get_webview_window("dock") {
@@ -2314,14 +2330,15 @@ pub fn open_settings_tab(app: AppHandle, tab: String) {
 
 #[tauri::command]
 pub fn open_settings_window(app: AppHandle) {
-    if let Some(win) = app.get_webview_window("settings") {
+    // Made now if it isn't yet (it is made a moment after start).
+    crate::later_windows::with_window(&app, "settings", |win| {
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
         if let Ok(hwnd) = win.hwnd() {
             crate::foreground::bring_to_front(HWND(hwnd.0));
         }
-    }
+    });
 }
 
 #[tauri::command]
@@ -4382,7 +4399,12 @@ pub async fn open_system_action(action: SystemAction) -> Result<(), String> {
 pub async fn double_click_tray_icon(tray_id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         if crate::tray_host::has_icon(&tray_id) {
-            crate::tray_host::click(&tray_id, crate::tray_host::Button::Double)
+            match crate::tray_host::click(&tray_id, crate::tray_host::Button::Double) {
+                Err(error) if error == crate::tray_host::NO_CLICK_MESSAGE => {
+                    crate::tray::interact_in_explorer(&tray_id, false)
+                }
+                other => other,
+            }
         } else {
             crate::tray::interact(&tray_id, false)
         }

@@ -280,6 +280,13 @@ fn position_window(app: &AppHandle, window: &tauri::WebviewWindow) {
 /// shows it with that query.
 pub fn toggle_launcher(app: &AppHandle, query: Option<String>) {
     let Some(window) = app.get_webview_window("launcher") else {
+        // Pressed in the moment after start, before the bar is made.
+        let app = app.clone();
+        std::thread::spawn(move || {
+            if crate::later_windows::ensure(&app, "launcher").is_some() {
+                toggle_launcher(&app, query);
+            }
+        });
         return;
     };
     if window.is_visible().unwrap_or(false) && query.is_none() {

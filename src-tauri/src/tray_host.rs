@@ -374,6 +374,11 @@ unsafe fn record(message: u32, nid: &NotifyIconData32) -> bool {
                     if pid == std::process::id() {
                         return false;
                     }
+                    // First seen changed rather than added, so without the
+                    // message its clicks go to: ask the app to add it again.
+                    if message != NIM_ADD && nid.flags & NIF_MESSAGE == 0 {
+                        ask_to_add_again(hwnd);
+                    }
                     let path = crate::commands::process_image_path(pid).unwrap_or_default();
                     icons.push(Icon {
                         id,
@@ -854,6 +859,36 @@ pub fn snapshot() -> Vec<HostedIcon> {
         .collect()
 }
 
+/// Error for an icon Bloom has no click message for (see `tray::interact`,
+/// which then clicks it through Explorer's tray instead).
+pub const NO_CLICK_MESSAGE: &str = "This tray icon doesn't respond to clicks.";
+
+/// Asks one program to add its tray icons again, as it does after Explorer
+/// restarts (`TaskbarCreated`), so Bloom gets what it missed: an icon first
+/// seen being changed rather than added has no click message.
+unsafe fn ask_to_add_again(hwnd: isize) {
+    let message = TASKBAR_CREATED.load(Ordering::Relaxed);
+    if message != 0 {
+        let _ = PostMessageW(
+            Some(HWND(hwnd as *mut _)),
+            message,
+            WPARAM(0),
+            LPARAM(BLOOM_MARK),
+        );
+    }
+}
+
+/// An icon's window, id and GUID, to find it in Explorer's tray.
+pub fn identity(id: &str) -> Option<(isize, u32, Option<GUID>)> {
+    let icons = ICONS.lock().ok()?;
+    let icon = icons.iter().find(|icon| icon.id == id)?;
+    let guid = icon
+        .id
+        .strip_prefix("g:")
+        .and_then(|text| GUID::try_from(text.trim_matches(|c| c == '{' || c == '}')).ok());
+    Some((icon.hwnd, icon.uid, guid))
+}
+
 pub fn has_icon(id: &str) -> bool {
     ICONS
         .lock()
@@ -1191,8 +1226,36 @@ pub fn click(id: &str, button: Button) -> Result<(), String> {
         prune();
         return Err("This tray icon is no longer running.".into());
     }
+    // No click message known yet: the app is asked to add its icon again,
+    // which it does at once, and the click goes ahead with what it sends.
+    let mut callback = callback;
+    let mut version = version;
     if callback == 0 {
-        return Err("This tray icon doesn't respond to clicks.".into());
+        unsafe {
+            // In front, so the app's icons come to Bloom first.
+            let host = HWND(HOST.load(Ordering::Relaxed) as *mut _);
+            if !host.0.is_null() {
+                raise(host);
+            }
+            ask_to_add_again(hwnd);
+        }
+        for _ in 0..12 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let known = ICONS.lock().ok().and_then(|icons| {
+                icons
+                    .iter()
+                    .find(|icon| icon.id == id && icon.callback != 0)
+                    .map(|icon| (icon.callback, icon.version))
+            });
+            if let Some((known_callback, known_version)) = known {
+                callback = known_callback;
+                version = known_version;
+                break;
+            }
+        }
+        if callback == 0 {
+            return Err(NO_CLICK_MESSAGE.into());
+        }
     }
     let mut cursor = POINT::default();
     unsafe {

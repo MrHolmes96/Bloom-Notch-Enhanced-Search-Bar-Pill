@@ -860,11 +860,21 @@ function App() {
 				return false;
 			};
 
-			const interval = setInterval(async () => {
-				if (await checkVisibility()) clearInterval(interval);
-			}, 100);
+			let done = false;
+			const check = async () => {
+				if (done) return;
+				if (await checkVisibility()) {
+					done = true;
+					clearInterval(interval);
+					window.removeEventListener("bloom-notch-shown", check);
+				}
+			};
+			const interval = setInterval(check, 100);
+			// Shown by this page itself (see syncWindows): no need to wait for
+			// the next check.
+			window.addEventListener("bloom-notch-shown", check);
 
-			checkVisibility();
+			void check();
 			return interval;
 		};
 
@@ -876,6 +886,9 @@ function App() {
 		const storedVersion = localStorage.getItem("bloom-app-version");
 
 		const waitForSplash = () => {
+			// The splash plays in the overlay, which is otherwise made a moment
+			// after start: have it made now.
+			invoke("ensure_window", { label: "overlay" }).catch(() => {});
 			// Splash is definitely coming — register listener now (2800ms animation gives us plenty of time)
 			let started = false;
 			let interval: any;
@@ -1102,13 +1115,16 @@ function App() {
 							await invoke("toggle_dock", { enable: false });
 						}
 						await invoke("change_notch_mode", { mode: nMode });
+						// The notch is on screen now: start its entrance at once.
+						window.dispatchEvent(new Event("bloom-notch-shown"));
 						await invoke("sync_appbar");
 					};
 
 					const dockEnabled = getVal("bloom-dock-enabled", "true") === "true";
 					const runDockInit = () => {
-						// 1. Snappy initial sync
-						setTimeout(syncWindows, 400);
+						// 1. Show the notch and dock straight away, as Windows shows
+						// its taskbar.
+						void syncWindows();
 						// 2. Safety-net dock retry
 						if (dockEnabled) {
 							setTimeout(() => invoke("init_dock", { mode: dockMode }).catch(() => {}), 1500);

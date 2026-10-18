@@ -6,6 +6,7 @@ mod brightness;
 mod commands;
 mod dock_extras;
 mod foreground;
+mod later_windows;
 mod integrations;
 mod jumplist;
 mod launcher;
@@ -174,6 +175,8 @@ fn main() {
             set_dock_hovered,
             set_notch_hovered,
             set_notch_open,
+            dock_page_ready,
+            later_windows::ensure_window,
             set_notch_visible,
             setup_shelf_drop,
             shelf_thumbnail,
@@ -328,10 +331,12 @@ fn main() {
 
             // Update check on startup (non-blocking). Always runs so the UI can
             // show an update badge; auto-install only happens when the user
-            // enabled it and the release has aged past the rollout gate.
+            // enabled it and the release has aged past the rollout gate. Waits
+            // until the notch and dock are up, so it doesn't slow their start.
             {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(8)).await;
                     updater::run_startup_check(app_handle).await;
                 });
             }
@@ -417,22 +422,11 @@ fn main() {
 
             sync_overlays(app.handle());
 
-            // Initialize the overlay window — on Windows, set_position doesn't
-            // take effect on a window that has never been shown. Show it once
-            // to register it with the compositor, then hide immediately.
-            if let Some(ov_win) = app.get_webview_window("overlay") {
-                let _ = ov_win.show();
-                let _ = ov_win.hide();
-                let overlay_handle = app.handle().clone();
-                ov_win.on_window_event(move |e| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = e {
-                        api.prevent_close();
-                        restore_taskbar_and_exit(&overlay_handle);
-                    }
-                });
-            }
-
+            // The overlay, notifications, notification center, search bar and
+            // Settings are made once the notch is on screen (later_windows),
+            // which sets each one up as it is made.
             watch_webview_processes(app.handle());
+            later_windows::start(app.handle().clone());
             setup_mouse_hook(app.handle().clone());
             setup_display_change_monitor(app.handle().clone());
             setup_window_change_hook(app.handle().clone());
@@ -445,7 +439,11 @@ fn main() {
                 let _ = crate::state::INSTALLED_APPS_CACHE.set(std::sync::Mutex::new(Vec::new()));
             }
             setup_thumbnail_capture(app.handle().clone());
-            trigger_app_scan();
+            // The installed-apps list (for the search bar) after the start.
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_secs(4));
+                trigger_app_scan();
+            });
             let tx = setup_system_worker(app.handle().clone());
             let _ = COMMAND_SENDER.set(tx.clone());
             services::setup_keyboard_hook(app.handle().clone());
@@ -479,19 +477,6 @@ fn main() {
                 }
             }
 
-            if let Some(settings_win) = app.get_webview_window("settings") {
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = window_vibrancy::apply_mica(&settings_win, None);
-                }
-                let win_clone = settings_win.clone();
-                settings_win.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = win_clone.hide();
-                    }
-                });
-            }
             {
                 use tauri::menu::{Menu, MenuItem};
                 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};

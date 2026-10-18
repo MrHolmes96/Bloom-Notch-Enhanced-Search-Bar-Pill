@@ -256,6 +256,12 @@ const Dock = memo(function Dock() {
 	// Pre-transform: visual = width * scale, so width = (viewport - 48*scale) / scale.
 	const adaptiveWidth = (viewportWidth - 48 * scale) / scale;
 
+	// Tell Bloom the dock's page is ready to be shown, so it can take over
+	// from Windows' taskbar. (Not on the next frame: a hidden window has none.)
+	useEffect(() => {
+		invoke("dock_page_ready").catch(() => {});
+	}, []);
+
 	useEffect(() => {
 		let cleared = false;
 
@@ -288,7 +294,9 @@ const Dock = memo(function Dock() {
 			}
 			if (cleared) return;
 			tries += 1;
-			timer = setTimeout(check, tries < 50 ? 200 : 1000);
+			// Every 50 ms for the first seconds (start-up), so the dock comes
+			// in the moment it is shown.
+			timer = setTimeout(check, tries < 100 ? 50 : 1000);
 		};
 		void check();
 

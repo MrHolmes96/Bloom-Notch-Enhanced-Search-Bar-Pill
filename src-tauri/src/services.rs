@@ -4399,6 +4399,13 @@ static RECOVERING_FROM_WEBVIEW_FAILURE: AtomicBool = AtomicBool::new(false);
 pub fn watch_webview_processes(app: &AppHandle) {
     let _ = WEBVIEWS_WATCHED_AT.set(Instant::now());
     for (_, window) in app.webview_windows() {
+        watch_webview_process(app, &window);
+    }
+}
+
+/// Watches one window's web view (also the ones made after start).
+pub fn watch_webview_process(app: &AppHandle, window: &tauri::WebviewWindow) {
+    {
         let handle = app.clone();
         let _ = window.with_webview(move |webview| unsafe {
             use webview2_com::Microsoft::Web::WebView2::Win32::{
