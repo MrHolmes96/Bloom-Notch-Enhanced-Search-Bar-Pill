@@ -243,7 +243,12 @@ body {
 	flex: none;
 	margin: 0 2px;
 	border-radius: 1px;
-	background: color-mix(in srgb, var(--bloom-text, white) 24%, transparent);
+	/* Settings > Dock > Divider Opacity. */
+	background: color-mix(
+		in srgb,
+		var(--bloom-text, white) var(--dock-divider-strength, 24%),
+		transparent
+	);
 	pointer-events: none;
 }
 

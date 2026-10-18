@@ -176,7 +176,9 @@ export function TraySettings() {
 											? "Shown in the tray"
 											: icon.manager_hidden && placements[icon.key] === undefined
 												? "Hidden by Tray Icon Manager"
-												: "Hidden"}
+												: icon.hidden_in_windows && placements[icon.key] === undefined
+													? "Hidden in Windows' tray"
+													: "Hidden"}
 									</span>
 								</div>
 								<label className="toggle-switch">

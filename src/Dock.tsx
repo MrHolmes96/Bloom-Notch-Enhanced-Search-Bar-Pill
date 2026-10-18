@@ -83,6 +83,14 @@ const fileOf = (p: string) =>
 // running in the same browser must never be matched by their shared exe name.
 const isIdentifier = (p: string) => !p.includes("/") && !p.includes("\\");
 
+/** The dividers' strength in percent (Settings > Dock > Divider Opacity). */
+const DEFAULT_DIVIDER_OPACITY = 24;
+function readDividerOpacity(value: string | null | undefined): number {
+	const parsed = Number.parseFloat(value ?? "");
+	if (!Number.isFinite(parsed)) return DEFAULT_DIVIDER_OPACITY;
+	return Math.min(100, Math.max(0, Math.round(parsed)));
+}
+
 // Resolve the configured start-button icon to a public asset, or to the data
 // URI of a user-uploaded icon (stored with a "custom:" prefix).
 function resolveStartIcon(startIcon: string): string {
@@ -141,6 +149,10 @@ const Dock = memo(function Dock() {
 	);
 	const [dockSeparatorEnabled, setDockSeparatorEnabled] = useState(
 		() => localStorage.getItem("bloom-dock-separator-enabled") !== "false"
+	);
+	// How visible the dock's dividers are, in percent (Settings > Dock).
+	const [dividerOpacity, setDividerOpacity] = useState(() =>
+		readDividerOpacity(localStorage.getItem("bloom-dock-divider-opacity"))
 	);
 	const [dockAdaptive, setDockAdaptive] = useState(
 		() => localStorage.getItem("bloom-dock-adaptive") === "true"
@@ -202,6 +214,8 @@ const Dock = memo(function Dock() {
 	const iconPickerTargetRef = useRef<string | null>(null);
 	const toastTimerRef = useRef<any>(null);
 	const dockRef = useRef<HTMLDivElement>(null);
+	// Reports the dock's click area again (once a preview has drawn).
+	const reportDockRect = useRef<() => void>(() => {});
 	const [popupBottom, setPopupBottom] = useState(56);
 	const pinnedItemsRef = useRef<AppInfo[]>([]);
 	const handleAppClickRef = useRef<(app: AppInfo) => void>(() => {});
@@ -307,20 +321,43 @@ const Dock = memo(function Dock() {
 	}, []);
 
 	useEffect(() => {
+		// The area that takes clicks: the dock, and while a window preview is
+		// up, the preview itself (its close buttons sit at its top corners), as
+		// big as it really is at any dock size. Until the preview is drawn, a
+		// generous area around the dock.
 		const updateRect = () => {
 			if (dockRef.current) {
 				const rect = dockRef.current.getBoundingClientRect();
-				const hasPreview = !!previewData;
+				let left = rect.left;
+				let top = rect.top;
+				let right = rect.right;
+				let bottom = rect.bottom;
+				if (previewData) {
+					const previews = Array.from(document.querySelectorAll(".preview-tooltip"));
+					if (previews.length === 0) {
+						left -= 500;
+						right += 500;
+						top -= 320;
+					}
+					for (const preview of previews) {
+						const box = preview.getBoundingClientRect();
+						left = Math.min(left, box.left - 16);
+						right = Math.max(right, box.right + 16);
+						top = Math.min(top, box.top - 16);
+						bottom = Math.max(bottom, box.bottom);
+					}
+				}
 				invoke("update_dock_rect", {
 					rect: {
-						x: Math.round(rect.x) - (hasPreview ? 500 : 0),
-						y: Math.round(rect.y) - (hasPreview ? 320 : 0),
-						width: Math.round(rect.width) + (hasPreview ? 1000 : 0),
-						height: Math.round(rect.height) + (hasPreview ? 320 : 0)
+						x: Math.round(left),
+						y: Math.round(top),
+						width: Math.round(right - left),
+						height: Math.round(bottom - top)
 					}
 				}).catch(() => {});
 			}
 		};
+		reportDockRect.current = updateRect;
 
 		updateRect();
 		window.addEventListener("resize", updateRect);
@@ -359,6 +396,7 @@ const Dock = memo(function Dock() {
 
 			const separator = getVal("bloom-dock-separator-enabled", "true");
 			setDockSeparatorEnabled(separator === "true");
+			setDividerOpacity(readDividerOpacity(getVal("bloom-dock-divider-opacity", null)));
 
 			const adaptive = getVal("bloom-dock-adaptive", "false");
 			setDockAdaptive(adaptive === "true");
@@ -436,6 +474,7 @@ const Dock = memo(function Dock() {
 		"bloom-dock-preview-style": (v: unknown) => setPreviewStyle(String(v)),
 		"bloom-dock-icon-only": setDockIconOnly,
 		"bloom-dock-separator-enabled": setDockSeparatorEnabled,
+		"bloom-dock-divider-opacity": (v: unknown) => setDividerOpacity(readDividerOpacity(String(v))),
 		"bloom-dock-adaptive": setDockAdaptive,
 		"bloom-start-icon": setStartIcon,
 		...scaleSyncHandlers("dock", setScale),
@@ -697,7 +736,31 @@ const Dock = memo(function Dock() {
 		}
 	};
 
-	const handleClosePreview = async (e: React.MouseEvent, hwnd: number) => {
+	// The window whose preview close button was just pressed: the press closes
+	// it at once, and the click that follows never focuses it instead (when
+	// the button shrinks under the pointer, the release can land beside it).
+	const closingHwndRef = useRef<number | null>(null);
+	const closePreviewProps = (hwnd: number) => ({
+		onPointerDown: (e: React.PointerEvent) => {
+			if (e.button !== 0) return;
+			e.preventDefault();
+			e.stopPropagation();
+			if (closingHwndRef.current === hwnd) return;
+			closingHwndRef.current = hwnd;
+			void handleClosePreview(e, hwnd);
+		},
+		onClick: (e: React.MouseEvent) => {
+			e.stopPropagation();
+			// From the keyboard (no press came first).
+			if (e.detail === 0 && closingHwndRef.current !== hwnd) void handleClosePreview(e, hwnd);
+		}
+	});
+	const focusPreview = (hwnd: number) => {
+		if (closingHwndRef.current === hwnd) return;
+		void invoke("focus_window", { hwnd });
+	};
+
+	const handleClosePreview = async (e: React.SyntheticEvent, hwnd: number) => {
 		e.stopPropagation();
 		try {
 			await invoke("close_window", { hwnd });
@@ -712,6 +775,11 @@ const Dock = memo(function Dock() {
 			});
 		} catch (err) {
 			console.error("Failed to close window:", err);
+		} finally {
+			// A moment later, so the release of this press is still ignored.
+			window.setTimeout(() => {
+				if (closingHwndRef.current === hwnd) closingHwndRef.current = null;
+			}, 400);
 		}
 	};
 
@@ -1280,7 +1348,14 @@ const Dock = memo(function Dock() {
 						opacity: { type: "tween", duration: 0.2 },
 						scale: { duration: 0 }
 					}}
-					style={{ originX: 0.5, originY: 1, minWidth: 34 }}
+					style={
+						{
+							originX: 0.5,
+							originY: 1,
+							minWidth: 34,
+							"--dock-divider-strength": `${dividerOpacity}%`
+						} as React.CSSProperties & Record<string, string | number>
+					}
 					onContextMenu={(e) => handleContextMenu(e, null)}
 				>
 					<EdgeSurface edge="bottom" flares={isExpanded && !isHidden} />
@@ -1411,6 +1486,7 @@ const Dock = memo(function Dock() {
 																animate={{ opacity: 1, y: 0, scale: 1 }}
 																exit={{ opacity: 0, scale: 0.95 }}
 																transition={{ duration: 0.15 }}
+																onAnimationComplete={() => reportDockRect.current()}
 																onMouseEnter={() => {
 																	isPreviewHoveredRef.current = true;
 																}}
@@ -1425,13 +1501,13 @@ const Dock = memo(function Dock() {
 																		<div
 																			key={prev.hwnd}
 																			className="preview-item"
-																			onClick={() => invoke("focus_window", { hwnd: prev.hwnd })}
+																			onClick={() => focusPreview(prev.hwnd)}
 																		>
 																			<img src={prev.image} alt={`Preview ${idx}`} data-hwnd={prev.hwnd} />
 																			<div className="preview-label">{prev.title || app.name}</div>
 																			<button
 																				className="preview-close-btn"
-																				onClick={(e) => handleClosePreview(e, prev.hwnd)}
+																				{...closePreviewProps(prev.hwnd)}
 																				title="Close Window"
 																			>
 																				<svg
@@ -1574,6 +1650,7 @@ const Dock = memo(function Dock() {
 														animate={{ opacity: 1, y: 0, scale: 1 }}
 														exit={{ opacity: 0, scale: 0.95 }}
 														transition={{ duration: 0.15 }}
+														onAnimationComplete={() => reportDockRect.current()}
 														onMouseEnter={() => {
 															isPreviewHoveredRef.current = true;
 														}}
@@ -1588,13 +1665,13 @@ const Dock = memo(function Dock() {
 																<div
 																	key={prev.hwnd}
 																	className="preview-item"
-																	onClick={() => invoke("focus_window", { hwnd: prev.hwnd })}
+																	onClick={() => focusPreview(prev.hwnd)}
 																>
 																	<img src={prev.image} alt={`Preview ${idx}`} data-hwnd={prev.hwnd} />
 																	<div className="preview-label">{prev.title || app.name}</div>
 																	<button
 																		className="preview-close-btn"
-																		onClick={(e) => handleClosePreview(e, prev.hwnd)}
+																		{...closePreviewProps(prev.hwnd)}
 																		title="Close Window"
 																	>
 																		<svg

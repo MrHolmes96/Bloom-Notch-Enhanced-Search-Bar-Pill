@@ -37,10 +37,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, GetMessageW, GetWindowThreadProcessId, InSendMessage, IsWindow, KillTimer,
     PostMessageW, RegisterClassExW, RegisterWindowMessageW, SendMessageTimeoutW,
     SendNotifyMessageW, SetTimer, SetWindowPos, TranslateMessage, HICON, HWND_BROADCAST,
-    HWND_TOPMOST, MSG, SMTO_ABORTIFHUNG, SMTO_NORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    HWND_MESSAGE, HWND_TOPMOST, MSG, SMTO_ABORTIFHUNG, SMTO_NORMAL, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 /// `TRAYNOTIFYDATAW.dwSignature`.
@@ -208,6 +208,9 @@ pub struct HostedIcon {
     /// The icon's GUID ("{...}"), for icons that have one.
     pub guid: Option<String>,
     pub window: isize,
+    /// Hidden from Windows' tray (`NIS_HIDDEN`), as Tray Icon Manager hides
+    /// icons: still running, and shown under the notch's hidden icons.
+    pub hidden: bool,
 }
 
 static ICONS: Mutex<Vec<Icon>> = Mutex::new(Vec::new());
@@ -336,6 +339,56 @@ unsafe fn icon_source(icon: HICON) -> Option<IconSource> {
     }
 }
 
+/// A hidden state another program set for an icon Bloom hasn't seen yet.
+struct StateSeen {
+    id: String,
+    hwnd: isize,
+    uid: u32,
+    hidden: bool,
+    /// When the app was last asked to add its icons (or the state was seen).
+    at: i64,
+}
+
+static STATES_SEEN: Mutex<Vec<StateSeen>> = Mutex::new(Vec::new());
+
+unsafe fn remember_state(id: &str, hwnd: isize, uid: u32, hidden: bool) {
+    let now = now_ms();
+    let Ok(mut seen) = STATES_SEEN.lock() else {
+        return;
+    };
+    seen.retain(|entry| now - entry.at < 10 * 60_000);
+    let asked_lately = seen.iter().any(|entry| {
+        (entry.id == id || (hwnd != 0 && entry.hwnd == hwnd)) && now - entry.at < 60_000
+    });
+    match seen.iter_mut().find(|entry| entry.id == id) {
+        Some(entry) => {
+            entry.hidden = hidden;
+            if !asked_lately {
+                entry.at = now;
+            }
+        }
+        None => seen.push(StateSeen {
+            id: id.to_string(),
+            hwnd,
+            uid,
+            hidden,
+            at: now,
+        }),
+    }
+    if !asked_lately && hwnd != 0 {
+        ask_to_add_again(hwnd);
+    }
+}
+
+/// The state remembered for an icon now added, used once.
+fn remembered_state(id: &str, hwnd: isize, uid: u32) -> Option<bool> {
+    let mut seen = STATES_SEEN.lock().ok()?;
+    let index = seen.iter().position(|entry| {
+        entry.id == id || (hwnd != 0 && entry.hwnd == hwnd && entry.uid == uid)
+    })?;
+    Some(seen.remove(index).hidden)
+}
+
 /// Records what one `Shell_NotifyIcon` call says. Runs while the app waits,
 /// so it only copies what it needs.
 unsafe fn record(message: u32, nid: &NotifyIconData32) -> bool {
@@ -392,7 +445,7 @@ unsafe fn record(message: u32, nid: &NotifyIconData32) -> bool {
                     if message != NIM_ADD && nid.flags & NIF_MESSAGE == 0 {
                         ask_to_add_again(hwnd);
                     }
-                    let path = crate::commands::process_image_path(pid).unwrap_or_default();
+                    let path = crate::commands::any_process_path(pid).unwrap_or_default();
                     icons.push(Icon {
                         id,
                         hwnd,
@@ -410,8 +463,21 @@ unsafe fn record(message: u32, nid: &NotifyIconData32) -> bool {
                     });
                     icons.len() - 1
                 }
-                None => return false,
+                None => {
+                    // Another program (Tray Icon Manager) hiding or showing an
+                    // icon Bloom hasn't seen: kept for when the app adds it,
+                    // which it is asked to do.
+                    if nid.flags & NIF_STATE != 0 && nid.state_mask & NIS_HIDDEN != 0 {
+                        remember_state(&id, hwnd, nid.uid, nid.state & NIS_HIDDEN != 0);
+                    }
+                    return false;
+                }
             };
+            if message == NIM_ADD {
+                if let Some(hidden) = remembered_state(&icons[index].id, hwnd, nid.uid) {
+                    icons[index].hidden = hidden;
+                }
+            }
             let icon = &mut icons[index];
             icon.hwnd = hwnd;
             icon.uid = nid.uid;
@@ -553,6 +619,23 @@ unsafe fn request_icons() {
     LAST_RESYNC.store(now_ms(), Ordering::Relaxed);
     SYNCED_AT.store(now_ms(), Ordering::Relaxed);
     let _ = SendNotifyMessageW(HWND_BROADCAST, message, WPARAM(0), LPARAM(BLOOM_MARK));
+    // A broadcast reaches only ordinary windows; some apps keep their tray
+    // icon on a message-only one, so those are asked one by one.
+    let own = std::process::id();
+    let mut previous = None;
+    for _ in 0..4096 {
+        let Ok(window) =
+            FindWindowExW(Some(HWND_MESSAGE), previous, PCWSTR::null(), PCWSTR::null())
+        else {
+            break;
+        };
+        previous = Some(window);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(window, Some(&mut pid));
+        if pid != own && pid != 0 {
+            let _ = PostMessageW(Some(window), message, WPARAM(0), LPARAM(BLOOM_MARK));
+        }
+    }
 }
 
 unsafe fn raise(hwnd: HWND) {
@@ -808,7 +891,8 @@ unsafe fn render(picture: Option<HICON>, source: Option<&IconSource>) -> Option<
     picture.and_then(|p| crate::utils::icon_to_base64(p))
 }
 
-/// Every visible tray icon of other programs, with its picture.
+/// Every tray icon of other programs, with its picture, also the ones hidden
+/// from Windows' tray (each says whether it is).
 pub fn snapshot() -> Vec<HostedIcon> {
     if prune() {
         let host = HWND(HOST.load(Ordering::Relaxed) as *mut _);
@@ -825,7 +909,7 @@ pub fn snapshot() -> Vec<HostedIcon> {
         };
         icons
             .iter()
-            .filter(|icon| icon.image.is_none() && !icon.hidden)
+            .filter(|icon| icon.image.is_none())
             .map(|icon| {
                 let copy = icon.picture.and_then(|p| unsafe {
                     CopyIcon(HICON(p as *mut _)).ok().map(|c| c.0 as isize)
@@ -858,7 +942,6 @@ pub fn snapshot() -> Vec<HostedIcon> {
     }
     icons
         .iter()
-        .filter(|icon| !icon.hidden)
         .map(|icon| HostedIcon {
             id: icon.id.clone(),
             path: icon.path.clone(),
@@ -868,8 +951,49 @@ pub fn snapshot() -> Vec<HostedIcon> {
             uid: icon.uid,
             guid: icon.id.strip_prefix("g:").map(str::to_string),
             window: icon.hwnd,
+            hidden: icon.hidden,
         })
         .collect()
+}
+
+/// Every tray icon the host has, without pictures (quick).
+pub fn snapshot_ids() -> Vec<HostedIcon> {
+    let Ok(icons) = ICONS.lock() else {
+        return Vec::new();
+    };
+    icons
+        .iter()
+        .map(|icon| HostedIcon {
+            id: icon.id.clone(),
+            path: icon.path.clone(),
+            pid: icon.pid,
+            tooltip: icon.tooltip.clone(),
+            image: None,
+            uid: icon.uid,
+            guid: icon.id.strip_prefix("g:").map(str::to_string),
+            window: icon.hwnd,
+            hidden: icon.hidden,
+        })
+        .collect()
+}
+
+/// Asks the app that owns this window to add its tray icons again.
+pub fn ask_icons_again(hwnd: isize) {
+    unsafe { ask_to_add_again(hwnd) }
+}
+
+/// The host is up and apps have had time to add their icons since Bloom
+/// last asked them to.
+pub fn settled() -> bool {
+    ready() && now_ms() - SYNCED_AT.load(Ordering::Relaxed) > 5000
+}
+
+/// Tells the notch's tray that its icons changed.
+pub fn announce() {
+    let host = HWND(HOST.load(Ordering::Relaxed) as *mut _);
+    if !host.is_invalid() {
+        unsafe { announce_change(host) };
+    }
 }
 
 pub fn has_icon(id: &str) -> bool {

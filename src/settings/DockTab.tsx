@@ -16,9 +16,11 @@ import {
 	FolderOpen,
 	FolderPlus,
 	Plus,
-	X
+	X,
+	Contrast
 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
+import { useStoredString } from "./useStoredSetting";
 import { RecycleBinSettings } from "./RecycleBinSettings";
 import { PreviewStyleRow } from "./PreviewStyleRow";
 import { KNOWN_FOLDER_OPTIONS, parseEnabledFolders, parseCustomFolders } from "../dockExtras";
@@ -109,6 +111,7 @@ export function DockTab({
 	startIcon,
 	handleStartIconChange
 }: DockTabProps) {
+	const [dividerOpacity, setDividerOpacity] = useStoredString("bloom-dock-divider-opacity", "24");
 	const handleStartIconUpload = (e: ChangeEvent<HTMLInputElement>) => {
 		const file = e.target.files?.[0];
 		if (!file) return;
@@ -200,6 +203,22 @@ export function DockTab({
 								/>
 								<span className="slider"></span>
 							</label>
+						</SettingRow>
+
+						<SettingRow
+							icon={Contrast}
+							label="Divider Opacity"
+							desc={`How visible the dock's dividers are, also the one before the bin (${Math.round(Number(dividerOpacity) || 0)}%)`}
+						>
+							<input
+								type="range"
+								min="0"
+								max="100"
+								step="1"
+								value={Number(dividerOpacity) || 0}
+								onChange={(e) => setDividerOpacity(e.target.value)}
+								className="settings-slider"
+							/>
 						</SettingRow>
 
 						<SettingRow

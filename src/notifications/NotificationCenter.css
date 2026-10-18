@@ -71,7 +71,7 @@
 	max-height: var(--center-list-max, 600px);
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: 12px;
 	overflow-y: auto;
 	scrollbar-width: thin;
 	scrollbar-color: var(--bloom-scrollbar-thumb, rgba(255, 255, 255, 0.15)) transparent;
@@ -101,4 +101,85 @@
 .center-actions {
 	display: flex;
 	gap: 8px;
+}
+
+/* One app's notifications: its icon and name once, then its cards. */
+.center-group {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	flex: none;
+}
+
+.center-group-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 2px 4px 0;
+	font-size: 12px;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.65));
+}
+
+.center-group-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: 600;
+	color: var(--bloom-text, #fff);
+}
+
+.center-group-count {
+	flex: none;
+	min-width: 18px;
+	padding: 1px 6px;
+	box-sizing: border-box;
+	border-radius: 999px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.08));
+	text-align: center;
+	font-size: 11px;
+}
+
+.center-group-button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	color: inherit;
+	cursor: pointer;
+}
+
+.center-group-button:hover {
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.1));
+	color: var(--bloom-text, #fff);
+}
+
+/* In a group the card's head carries its title; the app is in the group's head. */
+.center-card-title {
+	flex: 1;
+	min-width: 0;
+	color: var(--bloom-text, #fff);
+}
+
+.center-group-more {
+	align-self: flex-start;
+	padding: 3px 10px;
+	border: none;
+	border-radius: 999px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.08));
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.7));
+	font-family: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+
+.center-group-more:hover {
+	background: var(--bloom-border, rgba(255, 255, 255, 0.15));
+	color: var(--bloom-text, #fff);
 }

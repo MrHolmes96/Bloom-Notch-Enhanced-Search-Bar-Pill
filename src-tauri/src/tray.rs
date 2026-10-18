@@ -122,19 +122,34 @@ fn is_explorer_hosted_icon(path: &str) -> bool {
         .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("explorer.exe"))
 }
 
+/// Windows with their program, each program looked up once.
+struct WindowList {
+    windows: Vec<(isize, String)>,
+    paths: HashMap<u32, Option<String>>,
+}
+
 unsafe extern "system" fn collect_window(hwnd: HWND, param: LPARAM) -> windows::core::BOOL {
-    let windows = &mut *(param.0 as *mut Vec<(isize, String)>);
+    let list = &mut *(param.0 as *mut WindowList);
     let mut pid = 0;
     GetWindowThreadProcessId(hwnd, Some(&mut pid));
-    if let Some(path) = crate::commands::process_image_path(pid) {
-        windows.push((hwnd.0 as isize, path));
+    // Also programs running as the system (NVIDIA's tray helpers).
+    let path = list
+        .paths
+        .entry(pid)
+        .or_insert_with(|| crate::commands::any_process_path(pid))
+        .clone();
+    if let Some(path) = path {
+        list.windows.push((hwnd.0 as isize, path));
     }
     true.into()
 }
 
 unsafe fn process_windows() -> Vec<(isize, String)> {
-    let mut windows = Vec::new();
-    let param = LPARAM(&mut windows as *mut Vec<(isize, String)> as isize);
+    let mut list = WindowList {
+        windows: Vec::new(),
+        paths: HashMap::new(),
+    };
+    let param = LPARAM(&mut list as *mut WindowList as isize);
     let _ = EnumWindows(Some(collect_window), param);
     // Some apps own their notification icon through a message-only window.
     let mut previous = None;
@@ -143,7 +158,7 @@ unsafe fn process_windows() -> Vec<(isize, String)> {
         let _ = collect_window(hwnd, param);
         previous = Some(hwnd);
     }
-    windows
+    list.windows
 }
 
 unsafe fn live_icons(windows: &[(isize, String)], include_own: bool) -> Vec<Icon> {
@@ -280,6 +295,8 @@ pub struct TrayIconInfo {
     pub promoted: bool,
     /// Hidden by Tray Icon Manager.
     pub manager_hidden: bool,
+    /// Hidden from Windows' own tray (by Tray Icon Manager, or by the app).
+    pub hidden_in_windows: bool,
     /// The icon's live picture (PNG data URI) from Bloom's tray host. Without
     /// it the notch shows the program's own icon.
     pub image: Option<String>,
@@ -379,6 +396,7 @@ pub fn tray_state() -> TrayState {
                     path: icon.path.clone(),
                     promoted: icon.promoted,
                     manager_hidden,
+                    hidden_in_windows: false,
                     image: None,
                 }
             })
@@ -462,42 +480,207 @@ fn registry_entries() -> Vec<RegistryEntry> {
     }
 }
 
-/// The notch's tray from Bloom's tray host: every visible icon with its live
-/// picture, Windows' "shown on the taskbar" flag and Tray Icon Manager's rules.
+/// An icon in Explorer's tray that Bloom's tray host hasn't seen: its app
+/// added it before Bloom's host was there and didn't add it again when asked
+/// (asking reaches only ordinary windows, and some apps keep their icon on a
+/// message-only one).
+#[derive(Clone, PartialEq)]
+struct ExplorerIcon {
+    /// Its `NotifyIconSettings` key: clicks go through Explorer's tray.
+    key: String,
+    path: String,
+    tooltip: String,
+    guid: String,
+    promoted: bool,
+}
+
+static EXPLORER_ONLY: std::sync::Mutex<Vec<ExplorerIcon>> = std::sync::Mutex::new(Vec::new());
+static EXPLORER_CHECKED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+static EXPLORER_CHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// When each app was last asked to add its icons again, so it is asked
+/// at most once a minute.
+static ASKED: std::sync::Mutex<Option<HashMap<String, i64>>> = std::sync::Mutex::new(None);
+
+/// Explorer's icons that Bloom's tray host doesn't have, as last found. A
+/// fresh look runs in the background at most every 5 s (and not while apps
+/// are still adding their icons after Bloom asked them); when it finds a
+/// change the notch's tray is told (`tray-changed`). Each such app is asked to
+/// add its icons again, straight to the window that owns the icon, so the
+/// host gets it with its live picture and click message.
+fn explorer_only() -> Vec<ExplorerIcon> {
+    use std::sync::atomic::Ordering;
+    let now = crate::utils::get_now_ms();
+    if crate::tray_host::settled()
+        && now - EXPLORER_CHECKED.load(Ordering::Relaxed) > 5000
+        && !EXPLORER_CHECKING.swap(true, Ordering::AcqRel)
+    {
+        EXPLORER_CHECKED.store(now, Ordering::Relaxed);
+        std::thread::spawn(|| {
+            let found = unsafe { find_explorer_only() };
+            let changed = match EXPLORER_ONLY.lock() {
+                Ok(mut current) => {
+                    let changed = *current != found;
+                    *current = found;
+                    changed
+                }
+                Err(_) => false,
+            };
+            EXPLORER_CHECKED.store(crate::utils::get_now_ms(), Ordering::Relaxed);
+            EXPLORER_CHECKING.store(false, Ordering::Release);
+            if changed {
+                crate::tray_host::announce();
+            }
+        });
+    }
+    EXPLORER_ONLY
+        .lock()
+        .map(|list| list.clone())
+        .unwrap_or_default()
+}
+
+unsafe fn find_explorer_only() -> Vec<ExplorerIcon> {
+    use crate::tray_manager::normalize_guid;
+    let hosted = crate::tray_host::snapshot_ids();
+    let windows = process_windows();
+    let now = crate::utils::get_now_ms();
+    let mut found = Vec::new();
+    for icon in live_icons(&windows, false) {
+        if is_explorer_hosted_icon(&icon.path) {
+            continue;
+        }
+        let guid = normalize_guid(&format!("{:?}", icon.identifier.guidItem));
+        let hwnd = icon.identifier.hWnd.0 as isize;
+        let known = if !guid.is_empty() {
+            hosted.iter().any(|h| {
+                h.guid.as_deref().map(normalize_guid).as_deref() == Some(guid.as_str())
+                    // An icon the host knows by its window and id only.
+                    || (h.guid.is_none() && h.path.eq_ignore_ascii_case(&icon.path))
+            })
+        } else {
+            hosted
+                .iter()
+                .any(|h| h.window == hwnd && h.uid == icon.identifier.uID)
+        };
+        if known {
+            continue;
+        }
+        // Ask the app to add it again, at most once a minute.
+        let ask = ASKED.lock().ok().is_some_and(|mut asked| {
+            let asked = asked.get_or_insert_with(HashMap::new);
+            asked.retain(|_, at| now - *at < 60_000);
+            if asked.contains_key(&icon.key) {
+                return false;
+            }
+            asked.insert(icon.key.clone(), now);
+            true
+        });
+        if ask {
+            if hwnd != 0 {
+                crate::tray_host::ask_icons_again(hwnd);
+            } else {
+                for (window, path) in &windows {
+                    if path.eq_ignore_ascii_case(&icon.path) {
+                        crate::tray_host::ask_icons_again(*window);
+                    }
+                }
+            }
+        }
+        found.push(ExplorerIcon {
+            key: icon.key,
+            path: icon.path,
+            tooltip: icon.tooltip,
+            guid,
+            promoted: icon.promoted,
+        });
+    }
+    found
+}
+
+/// The notch's tray from Bloom's tray host: every icon with its live picture
+/// (also the ones hidden from Windows' tray, such as by Tray Icon Manager, for
+/// the notch's hidden icons), Windows' "shown on the taskbar" flag and Tray
+/// Icon Manager's rules, plus any icon only Explorer's tray has.
 fn host_state() -> TrayState {
     use crate::tray_manager::{hides, normalize_guid, IconFacts};
+    struct Candidate {
+        id: String,
+        path: String,
+        tooltip: String,
+        guid: String,
+        /// Windows' entry for it.
+        entry: Option<usize>,
+        promoted: bool,
+        image: Option<String>,
+        hidden: bool,
+    }
     let hosted = crate::tray_host::snapshot();
     let registry = registry_entries();
+    let extra = explorer_only();
     let manager = crate::tray_manager::read();
     let hidden = manager
         .as_ref()
         .map(|m| m.entries.as_slice())
         .unwrap_or_default();
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for icon in hosted {
+        let guid = icon.guid.as_deref().map(normalize_guid).unwrap_or_default();
+        // Windows' own entry for this icon: by GUID, else by program and id.
+        let entry = registry.iter().position(|entry| {
+            if !guid.is_empty() {
+                return entry.guid.as_deref() == Some(guid.as_str());
+            }
+            !icon.path.is_empty()
+                && entry.guid.is_none()
+                && entry.uid == Some(icon.uid)
+                && entry.path.eq_ignore_ascii_case(&icon.path)
+        });
+        // A program Bloom couldn't look up: the one Windows has for the icon.
+        let path = if icon.path.is_empty() {
+            entry.map(|i| registry[i].path.clone()).unwrap_or_default()
+        } else {
+            icon.path
+        };
+        if path.is_empty() || is_explorer_hosted_icon(&path) {
+            continue;
+        }
+        candidates.push(Candidate {
+            id: icon.id,
+            path,
+            tooltip: icon.tooltip,
+            guid,
+            entry,
+            promoted: entry.is_some_and(|i| registry[i].promoted),
+            image: icon.image,
+            hidden: icon.hidden,
+        });
+    }
+    for icon in extra {
+        let entry = registry.iter().position(|entry| entry.key == icon.key);
+        candidates.push(Candidate {
+            id: icon.key,
+            path: icon.path,
+            tooltip: icon.tooltip,
+            guid: icon.guid,
+            entry,
+            promoted: icon.promoted,
+            image: None,
+            hidden: false,
+        });
+    }
     let mut per_exe: HashMap<String, usize> = HashMap::new();
-    for icon in &hosted {
+    for icon in &candidates {
         *per_exe.entry(exe_name(&icon.path)).or_default() += 1;
     }
     let mut matched = vec![false; hidden.len()];
-    let mut list: Vec<TrayIconInfo> = hosted
-        .iter()
-        .filter(|icon| !is_explorer_hosted_icon(&icon.path) && !icon.path.is_empty())
+    let mut list: Vec<TrayIconInfo> = candidates
+        .into_iter()
         .map(|icon| {
             let exe = exe_name(&icon.path);
             let name = crate::commands::app_display_name(&icon.path, None);
-            let guid = icon.guid.as_deref().map(normalize_guid).unwrap_or_default();
-            // Windows' own entry for this icon: by GUID, else by program and id.
-            let entry = registry.iter().find(|entry| {
-                if !guid.is_empty() {
-                    return entry.guid.as_deref() == Some(guid.as_str());
-                }
-                entry.guid.is_none()
-                    && entry.uid == Some(icon.uid)
-                    && entry.path.eq_ignore_ascii_case(&icon.path)
-            });
             let same_program = per_exe.get(&exe).copied().unwrap_or(1);
             let facts = IconFacts {
                 exe: &exe,
-                guid: &guid,
+                guid: &icon.guid,
                 tooltip: &icon.tooltip,
                 name: &name,
                 same_program,
@@ -514,22 +697,23 @@ fn host_state() -> TrayState {
                 format!(
                     "{}|{}",
                     exe,
-                    entry
-                        .map(|e| e.key.clone())
+                    icon.entry
+                        .map(|i| registry[i].key.clone())
                         .unwrap_or_else(|| icon.id.clone())
                 )
             } else {
                 exe.clone()
             };
             TrayIconInfo {
-                id: icon.id.clone(),
+                id: icon.id,
                 key,
                 name,
-                tooltip: icon.tooltip.clone(),
-                path: icon.path.clone(),
-                promoted: entry.is_some_and(|e| e.promoted),
+                tooltip: icon.tooltip,
+                path: icon.path,
+                promoted: icon.promoted,
                 manager_hidden,
-                image: icon.image.clone(),
+                hidden_in_windows: icon.hidden,
+                image: icon.image,
             }
         })
         .collect();
@@ -572,10 +756,9 @@ fn host_enumerate() -> Vec<TrayApp> {
     }
     windows.retain(|(_, pid)| pids.contains(pid));
     let mut apps: HashMap<String, TrayApp> = HashMap::new();
-    for icon in hosted
-        .into_iter()
-        .filter(|icon| !is_explorer_hosted_icon(&icon.path) && !icon.path.is_empty())
-    {
+    for icon in hosted.into_iter().filter(|icon| {
+        !icon.hidden && !is_explorer_hosted_icon(&icon.path) && !icon.path.is_empty()
+    }) {
         let app = apps
             .entry(icon.path.to_lowercase())
             .or_insert_with(|| TrayApp {

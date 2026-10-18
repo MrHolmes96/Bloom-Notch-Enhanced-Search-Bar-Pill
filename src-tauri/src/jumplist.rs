@@ -205,6 +205,29 @@ unsafe fn item_name(item: &IShellItem, sigdn: SIGDN) -> Option<String> {
     item.GetDisplayName(sigdn).ok().and_then(|p| take_pwstr(p))
 }
 
+/// The AppUserModelID Explorer groups a window under on the taskbar.
+pub(crate) unsafe fn window_app_id(hwnd: isize) -> Option<String> {
+    let resolver: IAppResolver8 = CoCreateInstance(
+        &CLSID_APP_RESOLVER,
+        None,
+        CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER,
+    )
+    .ok()?;
+    let mut id = PWSTR::null();
+    let hr = resolver.GetAppIDForWindow(
+        HWND(hwnd as *mut c_void),
+        &mut id,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
+    if hr.is_ok() {
+        take_pwstr(id)
+    } else {
+        None
+    }
+}
+
 /// Finds the AppUserModelID Explorer files the app's jump list under.
 unsafe fn resolve_app_id(path: &str, hwnd: Option<isize>) -> Option<String> {
     let resolver: IAppResolver8 = CoCreateInstance(

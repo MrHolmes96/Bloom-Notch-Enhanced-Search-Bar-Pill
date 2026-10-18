@@ -901,8 +901,7 @@ pub fn start(app: AppHandle) {
     let _ = APP.set(app.clone());
     repair_leftover();
     start_toast_watcher();
-    let uses_bloom = style(&app) == "bloom"
-        || get_setting_str(&app, "bloom-notification-center").as_deref() == Some("bloom");
+    let uses_bloom = style(&app) == "bloom" || uses_bloom_center(&app);
     if uses_bloom {
         crate::toast::prewarm();
     }
@@ -918,9 +917,156 @@ pub fn notifications_status() -> String {
     STATUS.lock().map(|s| s.to_string()).unwrap_or_default()
 }
 
-/// Does what clicking the notification in Windows does (opens its page, its
-/// app, or hands the app its arguments) and clears it from the notification
-/// center, as Windows does.
+// ---------------------------------------------------------------- clicking
+
+/// Letters and digits only, lower case, for comparing texts.
+fn squash(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// A notification's title and first body line: from Bloom's history, else
+/// from Windows.
+fn texts_of(id: u32) -> Option<(String, String)> {
+    let saved = with_history(|list| {
+        let found = list
+            .iter()
+            .find(|saved| saved.id == id)
+            .map(|saved| (saved.title.clone(), saved.body.clone()));
+        (found, false)
+    });
+    if saved.is_some() {
+        return saved;
+    }
+    with_listener(|listener| {
+        let notification = listener.GetNotification(id).map_err(|e| e.to_string())?;
+        read_notification(&notification)
+            .map(|item| (item.title, item.body))
+            .ok_or_else(|| "unreadable".to_string())
+    })
+    .ok()
+}
+
+/// Clicks the notification in Windows' own pop-up, which is still there,
+/// invisible behind Bloom's card, for as long as Windows shows it: through
+/// Windows' accessibility interface, which does exactly what clicking it
+/// there does. Apps that take the click inside the running app instead of
+/// being launched with it (Discord and other Electron apps) only answer this
+/// way, and then open what the notification is about (the chat, the page).
+fn click_windows_popup(title: &str, body: &str) -> bool {
+    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+    use windows::Win32::UI::Accessibility::{
+        CUIAutomation8, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
+        IUIAutomationLegacyIAccessiblePattern, TreeScope_Descendants, UIA_InvokePatternId,
+        UIA_LegacyIAccessiblePatternId, UIA_TextControlTypeId,
+    };
+    let Some(hwnd) = find_toast_window() else {
+        return false;
+    };
+    let title = squash(title);
+    let body = squash(body.lines().next().unwrap_or_default());
+    if title.is_empty() && body.is_empty() {
+        return false;
+    }
+    unsafe {
+        let Ok(automation) =
+            CoCreateInstance::<_, IUIAutomation>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)
+        else {
+            return false;
+        };
+        let Ok(root) = automation.ElementFromHandle(hwnd) else {
+            return false;
+        };
+        let Ok(condition) = automation.CreateTrueCondition() else {
+            return false;
+        };
+        let Ok(elements) = root.FindAll(TreeScope_Descendants, &condition) else {
+            return false;
+        };
+        // The notification itself: the outermost element that names it
+        // (its title, and its text when it has some) and can be clicked;
+        // never its own buttons (dismiss, settings, its actions).
+        let mut best: Option<(u8, IUIAutomationElement)> = None;
+        for index in 0..elements.Length().unwrap_or(0) {
+            let Ok(element) = elements.GetElement(index) else {
+                continue;
+            };
+            let id = element
+                .CurrentAutomationId()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            if matches!(
+                id.as_str(),
+                "DismissButton"
+                    | "VerbButton"
+                    | "MoreButton"
+                    | "SettingsButton"
+                    | "ExpandButton"
+                    | "CollapseButton"
+                    | "SnoozeButton"
+            ) {
+                continue;
+            }
+            if element
+                .CurrentControlType()
+                .is_ok_and(|t| t == UIA_TextControlTypeId)
+            {
+                continue;
+            }
+            let name = squash(
+                &element
+                    .CurrentName()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+            );
+            let has_title = !title.is_empty() && name.contains(&title);
+            let has_body = !body.is_empty() && name.contains(&body);
+            if !has_title && !has_body {
+                continue;
+            }
+            let score = has_title as u8 + has_body as u8;
+            if best.as_ref().is_some_and(|(top, _)| *top >= score) {
+                continue;
+            }
+            let clickable = element
+                .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+                .is_ok()
+                || element
+                    .GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                        UIA_LegacyIAccessiblePatternId,
+                    )
+                    .is_ok_and(|p| p.CurrentDefaultAction().is_ok_and(|a| !a.is_empty()));
+            if clickable {
+                best = Some((score, element));
+            }
+        }
+        let Some((_, element)) = best else {
+            return false;
+        };
+        // The app may bring its window forward, as from Windows' pop-up.
+        crate::foreground::grant();
+        if let Ok(pattern) =
+            element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+        {
+            if pattern.Invoke().is_ok() {
+                return true;
+            }
+        }
+        element
+            .GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+                UIA_LegacyIAccessiblePatternId,
+            )
+            .is_ok_and(|p| p.DoDefaultAction().is_ok())
+    }
+}
+
+/// Does what clicking the notification in Windows does (opens what it is
+/// about: its chat or page, or its app with its arguments) and clears it from
+/// the notification center, as Windows does. While Windows' own pop-up still
+/// shows it, that pop-up is clicked, which works for every app; later Bloom
+/// does what the notification says clicking does, or opens its app.
 #[tauri::command]
 pub async fn notification_activate(
     id: u32,
@@ -930,29 +1076,39 @@ pub async fn notification_activate(
     tauri::async_runtime::spawn_blocking(move || {
         use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        let content = content_of(id, &aumid, time.unwrap_or_default());
-        let result = match &content {
-            Some(content) => crate::toast::activate(&aumid, content),
-            None if aumid.is_empty() => {
-                crate::commands::open_notification_center();
-                Ok(())
+        let clicked_in_windows =
+            texts_of(id).is_some_and(|(title, body)| click_windows_popup(&title, &body));
+        let result = if clicked_in_windows {
+            Ok(())
+        } else {
+            let content = content_of(id, &aumid, time.unwrap_or_default());
+            let result = match &content {
+                Some(content) => crate::toast::activate(&aumid, content),
+                None if aumid.is_empty() => {
+                    crate::commands::open_notification_center();
+                    Ok(())
+                }
+                None => crate::toast::open_app(&aumid),
+            };
+            // The app didn't take the click (its activator is gone, say):
+            // open the app itself, which is what clicking still means.
+            match result {
+                Err(_) if !aumid.is_empty() && !aumid.starts_with("Windows.SystemToast.") => {
+                    crate::toast::open_app(&aumid)
+                }
+                other => other,
             }
-            None => crate::toast::open_app(&aumid),
         };
-        // The app didn't take the click (its activator is gone, say): open
-        // the app itself, which is what clicking still means.
-        let result = match result {
-            Err(_) if !aumid.is_empty() && !aumid.starts_with("Windows.SystemToast.") => {
-                crate::toast::open_app(&aumid)
+        // Cleared once it did something, as in Windows; a click that did
+        // nothing leaves it in the center.
+        if result.is_ok() {
+            if let Ok(listener) =
+                windows::UI::Notifications::Management::UserNotificationListener::Current()
+            {
+                let _ = listener.RemoveNotification(id);
             }
-            other => other,
-        };
-        if let Ok(listener) =
-            windows::UI::Notifications::Management::UserNotificationListener::Current()
-        {
-            let _ = listener.RemoveNotification(id);
+            forget(id);
         }
-        forget(id);
         result
     })
     .await
@@ -1227,6 +1383,17 @@ pub async fn notification_clear_all() -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Bloom's center is the one the bell opens: when chosen, and by default
+/// while notifications are Bloom cards, so every card is there too (apps such
+/// as Discord take theirs out of Windows' center as soon as they go).
+fn uses_bloom_center(app: &AppHandle) -> bool {
+    match get_setting_str(app, "bloom-notification-center").as_deref() {
+        Some("bloom") => true,
+        Some("windows") => false,
+        _ => style(app) == "bloom",
+    }
+}
+
 /// The notification button opens Bloom's center instead of Windows' when
 /// that is chosen in Settings > Notifications. Returns false to let Windows'
 /// open.
@@ -1234,11 +1401,19 @@ pub fn try_open_bloom_center() -> bool {
     let Some(app) = APP.get() else {
         return false;
     };
-    if get_setting_str(app, "bloom-notification-center").as_deref() != Some("bloom") {
+    if !uses_bloom_center(app) {
         return false;
     }
     let Some(window) = app.get_webview_window("notification-center") else {
-        return false;
+        // Not made yet (just after start): made now, and opened.
+        let app = app.clone();
+        std::thread::spawn(move || {
+            if crate::later_windows::ensure(&app, "notification-center").is_some() {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                try_open_bloom_center();
+            }
+        });
+        return true;
     };
     if window.is_visible().unwrap_or(false) {
         let _ = window.hide();

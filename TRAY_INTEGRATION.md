@@ -27,6 +27,16 @@ is read, never written, and no icon is changed in Windows. The view is never
 shorter than the control center it opens from, so the pointer that clicked
 the tray button stays inside the notch.
 
+Icons hidden from Windows' own tray (`NIS_HIDDEN`, which is how Tray Icon
+Manager hides them) are still running, so they are listed too, under "Hidden
+icons" until shown in Bloom. Icons Explorer's tray has but Bloom's tray host
+never saw (the app added it before Bloom started and didn't add it again when
+asked) are found in the registry and checked live at most every 5 seconds, so
+every running icon is there as in Windows' tray; their app is asked once a
+minute to add it again so it gets its live picture, and until then clicks go
+through Explorer's tray. Programs Bloom may not open (running as the system,
+such as NVIDIA's tray helpers) are still named by their program file.
+
 Settings > Notch > System Tray lists every live icon with a switch, and
 follows Tray Icon Manager: the `HiddenIcons` in its
 `%AppData%\TrayIconManager\config.json` (read only, in whatever text encoding
@@ -58,7 +68,11 @@ bars such as Bloom's fixed dock and notch register but never reserve their
 strip, and maximized windows go underneath them.
 
 At start Bloom broadcasts `TaskbarCreated` (what Explorer sends after a
-restart), so running apps add their icons again and Bloom sees them all. Every
+restart), and sends it to every message-only window too (a broadcast doesn't
+reach those, and some apps keep their icon on one), so running apps add their
+icons again and Bloom sees them all. A hide or show another program sends for
+an icon Bloom hasn't seen yet is kept for when the app adds it, and the app is
+asked to. Every
 two seconds it checks that it is still the first window of that class (Explorer
 raises its taskbar when it is shown); if not, it gets back in front and asks
 for the icons again, at most every 30 seconds. After an Explorer restart it does

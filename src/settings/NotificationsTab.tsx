@@ -19,9 +19,12 @@ export function NotificationsTab() {
 	const [position, setPosition] = useStoredString("bloom-notify-position", "default");
 	const [radius, setRadius] = useStoredString("bloom-notify-radius", "16");
 	const [duration, setDuration] = useStoredString("bloom-notify-duration", "6");
-	const [center, setCenter] = useStoredString("bloom-notification-center", "windows");
+	const [chosenCenter, setCenter] = useStoredString("bloom-notification-center", "");
 	const [status, setStatus] = useState<string>("off");
 	const bloom = style === "bloom";
+	// Until one is chosen, the bell opens Bloom's center while notifications
+	// are Bloom cards, so every card is there too.
+	const center = chosenCenter || (bloom ? "bloom" : "windows");
 
 	useEffect(() => {
 		void invoke<string>("notifications_status")

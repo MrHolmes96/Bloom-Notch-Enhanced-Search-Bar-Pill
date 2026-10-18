@@ -553,10 +553,71 @@ fn open_link(link: &str) -> Result<(), String> {
     shell_open(link, None)
 }
 
-/// Opens the notification's app, as Bloom did before it knew more.
+/// Brings the app's open window to the front (restoring it when minimized),
+/// as its taskbar button does. False when it has no window open.
+fn bring_app_forward(aumid: &str) -> bool {
+    use windows::Win32::Foundation::{HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindow, GetWindowLongW, IsWindowVisible, GWL_EXSTYLE, GW_OWNER, WS_EX_TOOLWINDOW,
+    };
+    if aumid.is_empty() {
+        return false;
+    }
+    unsafe extern "system" fn visit(hwnd: HWND, found: LPARAM) -> windows::core::BOOL {
+        let found = &mut *(found.0 as *mut Vec<isize>);
+        let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        let owned = GetWindow(hwnd, GW_OWNER).is_ok_and(|owner| !owner.is_invalid());
+        // A cloaked window is not really open (a closed Store app's frame).
+        let mut cloaked = 0u32;
+        let _ = windows::Win32::Graphics::Dwm::DwmGetWindowAttribute(
+            hwnd,
+            windows::Win32::Graphics::Dwm::DWMWA_CLOAKED,
+            &mut cloaked as *mut u32 as *mut _,
+            4,
+        );
+        if IsWindowVisible(hwnd).as_bool()
+            && !owned
+            && style & WS_EX_TOOLWINDOW.0 == 0
+            && cloaked == 0
+        {
+            found.push(hwnd.0 as isize);
+        }
+        true.into()
+    }
+    let mut windows: Vec<isize> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(
+            Some(visit),
+            LPARAM(&mut windows as *mut Vec<isize> as isize),
+        );
+    }
+    // Front-most first, as Windows lists them.
+    let own = std::process::id();
+    for hwnd in windows {
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(HWND(hwnd as *mut _), Some(&mut pid)) };
+        if pid == own {
+            continue;
+        }
+        let matches = unsafe { crate::jumplist::window_app_id(hwnd) }
+            .is_some_and(|id| id.eq_ignore_ascii_case(aumid));
+        if matches {
+            return crate::foreground::bring_to_front(HWND(hwnd as *mut _));
+        }
+    }
+    false
+}
+
+/// Opens the notification's app: its open window to the front (restored
+/// when minimized), else the app itself, which also shows the window of an
+/// app that is running in the tray.
 pub fn open_app(aumid: &str) -> Result<(), String> {
     if aumid.is_empty() {
         return Err("This notification has no app".to_string());
+    }
+    if bring_app_forward(aumid) {
+        return Ok(());
     }
     shell_open(
         "explorer.exe",

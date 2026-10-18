@@ -737,7 +737,9 @@ fn is_pwa_shortcut_for(app: &AppInfo, name: &str, host_exe: &str) -> bool {
 /// Opens a file path, shortcut, or shell application id through the shell.
 pub(crate) fn launch_path(path: &str) {
     // The app opens in front, as from the taskbar, not behind the window
-    // that had the foreground.
+    // that had the foreground (nor behind a game the Start menu, as it
+    // closes, would hand the foreground back to).
+    crate::foreground::leave_start_menu();
     crate::foreground::grant();
     unsafe {
         use windows::Win32::UI::Shell::ShellExecuteW;
@@ -1102,7 +1104,7 @@ pub async fn focus_window(hwnd: isize) {
         let my_pid = std::process::id();
 
         if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
-            crate::foreground::bring_to_front(hwnd);
+            crate::foreground::switch_to(hwnd);
         } else {
             // Minimize if: window is foreground, OR same process as foreground (not Bloom), OR recently focused
             let fg = GetForegroundWindow();
@@ -1139,7 +1141,7 @@ pub async fn focus_window(hwnd: isize) {
             if should_minimize {
                 let _ = ShowWindow(hwnd, SW_MINIMIZE);
             } else {
-                crate::foreground::bring_to_front(hwnd);
+                crate::foreground::switch_to(hwnd);
             }
         }
     })
@@ -1167,7 +1169,7 @@ pub async fn focus_app_windows(hwnds: Vec<isize>) {
             None => most_recent,
         };
 
-        crate::foreground::bring_to_front(HWND(target as *mut _));
+        crate::foreground::switch_to(HWND(target as *mut _));
     })
     .await
     .unwrap_or_default();
@@ -2839,6 +2841,84 @@ pub(crate) unsafe fn process_image_path(pid: u32) -> Option<String> {
     Some(String::from_utf16_lossy(&buf[..size as usize]))
 }
 
+/// A process's program, also for one Bloom may not open (a program running
+/// as the system, such as NVIDIA's tray helpers): Windows tells any process
+/// another's program file by its id, without opening it.
+pub(crate) unsafe fn any_process_path(pid: u32) -> Option<String> {
+    if let Some(path) = process_image_path(pid) {
+        return Some(path);
+    }
+    if pid == 0 {
+        return None;
+    }
+    use windows::Win32::Storage::FileSystem::QueryDosDeviceW;
+    use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+
+    #[repr(C)]
+    struct UnicodeString {
+        length: u16,
+        maximum_length: u16,
+        buffer: *mut u16,
+    }
+    #[repr(C)]
+    struct ProcessIdInformation {
+        process_id: isize,
+        image_name: UnicodeString,
+    }
+    type Query = unsafe extern "system" fn(u32, *mut core::ffi::c_void, u32, *mut u32) -> i32;
+    const SYSTEM_PROCESS_ID_INFORMATION: u32 = 88;
+
+    let ntdll = GetModuleHandleW(windows::core::w!("ntdll.dll")).ok()?;
+    let query: Query = std::mem::transmute(GetProcAddress(
+        ntdll,
+        windows::core::s!("NtQuerySystemInformation"),
+    )?);
+    let mut buffer = vec![0u16; 2048];
+    let mut info = ProcessIdInformation {
+        process_id: pid as isize,
+        image_name: UnicodeString {
+            length: 0,
+            maximum_length: (buffer.len() * 2) as u16,
+            buffer: buffer.as_mut_ptr(),
+        },
+    };
+    let status = query(
+        SYSTEM_PROCESS_ID_INFORMATION,
+        &mut info as *mut ProcessIdInformation as *mut _,
+        std::mem::size_of::<ProcessIdInformation>() as u32,
+        std::ptr::null_mut(),
+    );
+    if status < 0 {
+        return None;
+    }
+    let length = (info.image_name.length as usize / 2).min(buffer.len());
+    let device_path = String::from_utf16_lossy(&buffer[..length]);
+    if device_path.is_empty() {
+        return None;
+    }
+    // "\Device\HarddiskVolume3\Program Files\..." as "C:\Program Files\...".
+    for letter in b'A'..=b'Z' {
+        let drive = format!("{}:", letter as char);
+        let drive_w: Vec<u16> = drive.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut target = [0u16; 512];
+        let written = QueryDosDeviceW(windows::core::PCWSTR(drive_w.as_ptr()), Some(&mut target));
+        if written == 0 {
+            continue;
+        }
+        let end = target.iter().position(|&c| c == 0).unwrap_or(target.len());
+        let device = String::from_utf16_lossy(&target[..end]);
+        if device.is_empty() {
+            continue;
+        }
+        if let Some(rest) = device_path.strip_prefix(device.as_str()) {
+            if rest.starts_with('\\') {
+                return Some(format!("{}{}", drive, rest));
+            }
+        }
+    }
+    None
+}
+
 /// The name an app goes by in the Start menu, from the installed-apps scan:
 /// a packaged app by its AppUserModelID or package family, a desktop app by
 /// its executable. Programs often leave their own description unset or set it
@@ -3229,12 +3309,15 @@ pub async fn restart_bloom(handle: AppHandle) {
 #[tauri::command]
 pub async fn close_window(hwnd: isize) {
     tauri::async_runtime::spawn_blocking(move || unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+        use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, SC_CLOSE, WM_SYSCOMMAND};
+        // As the taskbar's preview and Alt+F4 close a window: the window menu's
+        // Close, which apps that keep their own close handling (Store apps,
+        // ones asking to save) answer the same way as their own X.
         let hwnd = HWND(hwnd as *mut _);
         let _ = PostMessageW(
             Some(hwnd),
-            WM_CLOSE,
-            windows::Win32::Foundation::WPARAM(0),
+            WM_SYSCOMMAND,
+            windows::Win32::Foundation::WPARAM(SC_CLOSE as usize),
             windows::Win32::Foundation::LPARAM(0),
         );
     })
@@ -4429,7 +4512,12 @@ pub async fn double_click_tray_icon(tray_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn activate_tray_icon(tray_id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || crate::tray::interact(&tray_id, false))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        // From the dock over a game with Start open: Start closes first, so
+        // the app's window isn't sent behind the game as it closes.
+        crate::foreground::leave_start_menu();
+        crate::tray::interact(&tray_id, false)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

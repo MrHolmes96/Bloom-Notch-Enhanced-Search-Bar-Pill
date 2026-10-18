@@ -24,6 +24,8 @@ export interface TrayIconInfo {
 	promoted: boolean;
 	/** Tray Icon Manager hides it. */
 	manager_hidden: boolean;
+	/** Hidden from Windows' own tray (by Tray Icon Manager, or by the app). */
+	hidden_in_windows?: boolean;
 	/** The icon's live picture, as Windows' tray shows it right now. */
 	image?: string | null;
 }
@@ -51,9 +53,15 @@ export function parsePlacements(raw: string | null): Record<string, Visibility> 
 	}
 }
 
-/** Before anything is chosen in Bloom: hidden only when Tray Icon Manager hides it. */
+/**
+ * Before anything is chosen in Bloom: hidden when Tray Icon Manager hides it
+ * (while Bloom follows it), or when it is hidden from Windows' own tray for
+ * another reason, so the notch's tray matches Windows' and every running icon
+ * is there, the hidden ones under "Hidden icons".
+ */
 export function defaultVisibility(icon: TrayIconInfo, followManager: boolean): Visibility {
-	return followManager && icon.manager_hidden ? "hidden" : "shown";
+	if (icon.manager_hidden) return followManager ? "hidden" : "shown";
+	return icon.hidden_in_windows ? "hidden" : "shown";
 }
 
 export function visibilityOf(

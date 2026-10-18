@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { Bell, BellOff, PanelRight, ShieldAlert, X } from "lucide-react";
+import { Bell, BellOff, ChevronDown, PanelRight, ShieldAlert, X } from "lucide-react";
 import { initTheme } from "../theme";
 import { useSettingsSync } from "../hooks/useSettingsSync";
 import { ToastActions, type ToastButton, type ToastInput } from "./ToastActions";
@@ -14,8 +14,10 @@ import "./NotificationCenter.css";
  * Bloom's notification center (Settings > Notifications > Notification
  * Center: Bloom): the same notifications as Windows' sidebar, in Bloom's look,
  * with their buttons and reply boxes, plus every notification Bloom showed as
- * a card until it is clicked or cleared. It hangs from the top of the screen and
- * is only as tall as its notifications; past about six the list scrolls.
+ * a card until it is clicked or cleared, grouped by app (the app with the
+ * newest first; an app's group shows its newest few until opened). It hangs
+ * from the top of the screen and is only as tall as its notifications; past
+ * about six the list scrolls.
  * Opened by the notch's bell button; closes when it loses focus or on Escape.
  */
 
@@ -32,6 +34,36 @@ interface Item {
 }
 
 const appWindow = getCurrentWebviewWindow();
+
+/** An app's group shows this many until it is opened. */
+const GROUP_PREVIEW = 3;
+
+interface Group {
+	key: string;
+	app: string;
+	icon: string | null;
+	items: Item[];
+}
+
+/** One group per app, the app with the newest notification first. */
+function groupByApp(items: Item[]): Group[] {
+	const groups = new Map<string, Group>();
+	for (const item of items) {
+		const key = (item.aumid || item.app || "notification").toLowerCase();
+		let group = groups.get(key);
+		if (!group) {
+			group = { key, app: item.app, icon: item.icon, items: [] };
+			groups.set(key, group);
+		}
+		group.items.push(item);
+		if (!group.icon && item.icon) group.icon = item.icon;
+		if (!group.app && item.app) group.app = item.app;
+	}
+	const list = [...groups.values()];
+	for (const group of list) group.items.sort((a, b) => b.time - a.time);
+	list.sort((a, b) => b.items[0].time - a.items[0].time);
+	return list;
+}
 
 function formatTime(ms: number) {
 	const date = new Date(ms);
@@ -112,6 +144,21 @@ export default function NotificationCenter() {
 		void invoke("notification_remove", { id }).catch(console.error);
 	};
 
+	const groups = useMemo(() => groupByApp(items), [items]);
+	const [opened, setOpened] = useState<Set<string>>(() => new Set());
+	const toggleGroup = (key: string) =>
+		setOpened((prev) => {
+			const next = new Set(prev);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			return next;
+		});
+	const clearGroup = (group: Group) => {
+		const ids = new Set(group.items.map((item) => item.id));
+		setItems((prev) => prev.filter((n) => !ids.has(n.id)));
+		for (const id of ids) void invoke("notification_remove", { id }).catch(console.error);
+	};
+
 	const openWindowsCenter = () => {
 		void invoke("notification_center_hide");
 		void invoke("open_windows_notification_center");
@@ -182,62 +229,118 @@ export default function NotificationCenter() {
 			) : (
 				<div className="center-list">
 					<AnimatePresence initial={false}>
-						{items.map((item) => (
-							<motion.div
-								key={item.id}
-								layout
-								className="notify-card center-card"
-								initial={{ opacity: 0, y: -8 }}
-								animate={{ opacity: 1, y: 0 }}
-								exit={{ opacity: 0, x: 40, transition: { duration: 0.15 } }}
-								onClick={() => {
-									setItems((prev) => prev.filter((n) => n.id !== item.id));
-									void invoke("notification_activate", {
-										id: item.id,
-										aumid: item.aumid,
-										time: item.time
-									}).catch(console.error);
-									void invoke("notification_center_hide");
-								}}
-							>
-								<div className="notify-head">
-									{item.icon ? (
-										<img className="notify-app-icon" src={item.icon} alt="" draggable={false} />
-									) : (
-										<Bell className="notify-app-icon" size={14} />
+						{groups.map((group) => {
+							const open = opened.has(group.key);
+							const hiddenCount = open ? 0 : Math.max(0, group.items.length - GROUP_PREVIEW);
+							const shown = open ? group.items : group.items.slice(0, GROUP_PREVIEW);
+							return (
+								<motion.div
+									key={group.key}
+									layout
+									className="center-group"
+									initial={{ opacity: 0, y: -8 }}
+									animate={{ opacity: 1, y: 0 }}
+									exit={{ opacity: 0, x: 40, transition: { duration: 0.15 } }}
+								>
+									<div className="center-group-head">
+										{group.icon ? (
+											<img className="notify-app-icon" src={group.icon} alt="" draggable={false} />
+										) : (
+											<Bell className="notify-app-icon" size={14} />
+										)}
+										<span className="center-group-name">{group.app || "Notification"}</span>
+										{group.items.length > 1 && (
+											<span className="center-group-count">{group.items.length}</span>
+										)}
+										{group.items.length > GROUP_PREVIEW && (
+											<button
+												type="button"
+												className="center-group-button"
+												title={open ? "Show fewer" : "Show all"}
+												onClick={() => toggleGroup(group.key)}
+											>
+												<ChevronDown
+													size={14}
+													style={{
+														transform: open ? "rotate(180deg)" : undefined,
+														transition: "transform 0.15s ease"
+													}}
+												/>
+											</button>
+										)}
+										<button
+											type="button"
+											className="center-group-button"
+											title={`Clear ${group.app || "these"}`}
+											onClick={() => clearGroup(group)}
+										>
+											<X size={13} />
+										</button>
+									</div>
+									<AnimatePresence initial={false}>
+										{shown.map((item) => (
+											<motion.div
+												key={item.id}
+												layout
+												className="notify-card center-card"
+												initial={{ opacity: 0, y: -8 }}
+												animate={{ opacity: 1, y: 0 }}
+												exit={{ opacity: 0, x: 40, transition: { duration: 0.15 } }}
+												onClick={() => {
+													setItems((prev) => prev.filter((n) => n.id !== item.id));
+													void invoke("notification_activate", {
+														id: item.id,
+														aumid: item.aumid,
+														time: item.time
+													}).catch(console.error);
+													void invoke("notification_center_hide");
+												}}
+											>
+												<div className="notify-head">
+													<span className="notify-title center-card-title">{item.title}</span>
+													<span className="notify-time">{formatTime(item.time)}</span>
+													<button
+														type="button"
+														className="notify-close"
+														title="Dismiss"
+														onClick={(e) => {
+															e.stopPropagation();
+															remove(item.id);
+														}}
+													>
+														<X size={12} />
+													</button>
+												</div>
+												{item.body && <div className="notify-body">{item.body}</div>}
+												<ToastActions
+													buttons={item.buttons ?? []}
+													inputs={item.inputs ?? []}
+													onPress={(button, typed) => {
+														setItems((prev) => prev.filter((n) => n.id !== item.id));
+														invoke("notification_action", {
+															id: item.id,
+															aumid: item.aumid,
+															time: item.time,
+															button,
+															typed
+														}).catch(console.error);
+													}}
+												/>
+											</motion.div>
+										))}
+									</AnimatePresence>
+									{hiddenCount > 0 && (
+										<button
+											type="button"
+											className="center-group-more"
+											onClick={() => toggleGroup(group.key)}
+										>
+											{hiddenCount} more from {group.app || "this app"}
+										</button>
 									)}
-									<span className="notify-app">{item.app || "Notification"}</span>
-									<span className="notify-time">{formatTime(item.time)}</span>
-									<button
-										type="button"
-										className="notify-close"
-										title="Dismiss"
-										onClick={(e) => {
-											e.stopPropagation();
-											remove(item.id);
-										}}
-									>
-										<X size={12} />
-									</button>
-								</div>
-								<div className="notify-title">{item.title}</div>
-								{item.body && <div className="notify-body">{item.body}</div>}
-								<ToastActions
-									buttons={item.buttons ?? []}
-									inputs={item.inputs ?? []}
-									onPress={(button, typed) => {
-										setItems((prev) => prev.filter((n) => n.id !== item.id));
-										invoke("notification_action", {
-											id: item.id,
-											aumid: item.aumid,
-											time: item.time,
-											button,
-											typed
-										}).catch(console.error);
-									}}
-								/>
-							</motion.div>
-						))}
+								</motion.div>
+							);
+						})}
 					</AnimatePresence>
 				</div>
 			)}
