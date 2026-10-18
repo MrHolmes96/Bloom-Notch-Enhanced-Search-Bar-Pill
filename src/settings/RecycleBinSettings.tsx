@@ -1,12 +1,21 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Bell, Image, LayoutGrid, MousePointerClick, ShieldCheck, Volume2 } from "lucide-react";
+import {
+	Bell,
+	Image,
+	LayoutGrid,
+	MousePointerClick,
+	MoveHorizontal,
+	ShieldCheck,
+	Volume2
+} from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { useSettingsSync } from "../hooks/useSettingsSync";
 
 /** The dock bin's options, the same set Tray Bin has in its Configure menu. */
 
 const KEYS = {
+	position: "bloom-dock-bin-position",
 	icons: "bloom-dock-bin-icons",
 	onlyEmptyFull: "bloom-dock-bin-only-empty-full",
 	doubleClick: "bloom-dock-bin-double-click",
@@ -35,7 +44,11 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (next: bool
 }
 
 export function RecycleBinSettings() {
-	const [icons, setIcons] = useState(() => localStorage.getItem(KEYS.icons) ?? "traybin");
+	const [position, setPosition] = useState(() => localStorage.getItem(KEYS.position) ?? "end");
+	const [icons, setIcons] = useState(() => {
+		const stored = localStorage.getItem(KEYS.icons);
+		return stored === "traybin" || stored === "windows" ? stored : "bloom";
+	});
 	const [onlyEmptyFull, setOnlyEmptyFull] = useState(() => readFlag(KEYS.onlyEmptyFull, false));
 	const [doubleClick, setDoubleClick] = useState(
 		() => localStorage.getItem(KEYS.doubleClick) ?? "open"
@@ -46,7 +59,8 @@ export function RecycleBinSettings() {
 	const [trayBinFound, setTrayBinFound] = useState<boolean | null>(null);
 
 	useSettingsSync({
-		[KEYS.icons]: (v) => setIcons(String(v)),
+		[KEYS.position]: (v) => setPosition(String(v)),
+		[KEYS.icons]: (v) => setIcons(String(v) === "traybin" || String(v) === "windows" ? String(v) : "bloom"),
 		[KEYS.onlyEmptyFull]: (v) => setOnlyEmptyFull(v !== false),
 		[KEYS.doubleClick]: (v) => setDoubleClick(String(v)),
 		[KEYS.confirm]: (v) => setConfirm(v !== false),
@@ -69,6 +83,27 @@ export function RecycleBinSettings() {
 	return (
 		<>
 			<SettingRow
+				icon={MoveHorizontal}
+				label="Bin Position"
+				desc={
+					position === "start"
+						? "Right after Start, at the left end of the dock"
+						: "In its own section at the right end of the dock"
+				}
+			>
+				<select
+					className="settings-select"
+					value={position}
+					onChange={(e) => {
+						setPosition(e.target.value);
+						save(KEYS.position, e.target.value);
+					}}
+				>
+					<option value="end">End of Dock</option>
+					<option value="start">Next to Start</option>
+				</select>
+			</SettingRow>
+			<SettingRow
 				icon={Image}
 				label="Bin Icons"
 				desc={
@@ -76,7 +111,9 @@ export function RecycleBinSettings() {
 						? "Tray Bin isn't installed, so the Windows icons are used"
 						: icons === "traybin"
 							? "Tray Bin's icons, filling up as the bin grows"
-							: "The standard Windows Recycle Bin icons"
+							: icons === "windows"
+								? "The standard Windows Recycle Bin icons"
+								: "Up to five bars: under 100 MB, 100 MB, 500 MB, 1 GB, 5 GB and up"
 				}
 			>
 				<select
@@ -87,15 +124,16 @@ export function RecycleBinSettings() {
 						save(KEYS.icons, e.target.value);
 					}}
 				>
+					<option value="bloom">Bloom</option>
 					<option value="traybin">Tray Bin</option>
 					<option value="windows">Windows</option>
 				</select>
 			</SettingRow>
-			{icons === "traybin" && (
+			{icons !== "windows" && (
 				<SettingRow
 					icon={LayoutGrid}
 					label="Only Empty and Full Icons"
-					desc="Skip the in-between icons (100 MB, 500 MB and 2 GB steps)"
+					desc="Skip the in-between icons (the 100 MB, 500 MB, 1 GB and 5 GB steps)"
 				>
 					<Toggle checked={onlyEmptyFull} onChange={flag(KEYS.onlyEmptyFull, setOnlyEmptyFull)} />
 				</SettingRow>

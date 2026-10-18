@@ -157,6 +157,10 @@ const Dock = memo(function Dock() {
 		() => localStorage.getItem("bloom-dock-extras-recycle-bin") !== "false"
 	);
 	const [recycleBin, setRecycleBin] = useState<DockExtra | null>(null);
+	// "end": its own section at the right end; "start": right after Start.
+	const [binPosition, setBinPosition] = useState(
+		() => localStorage.getItem("bloom-dock-bin-position") ?? "end"
+	);
 	const [dockExtrasRevision, setDockExtrasRevision] = useState(0);
 	const [isMaximized, setIsMaximized] = useState(false);
 	// "live": Windows' own moving thumbnails over the preview cards.
@@ -434,6 +438,7 @@ const Dock = memo(function Dock() {
 		"bloom-dock-extras-folders": () => setDockExtrasRevision((r) => r + 1),
 		"bloom-dock-extras-custom-folders": () => setDockExtrasRevision((r) => r + 1),
 		"bloom-dock-bin-icons": () => refreshRecycleBin(),
+		"bloom-dock-bin-position": (v: unknown) => setBinPosition(String(v) === "start" ? "start" : "end"),
 		"bloom-dock-bin-only-empty-full": () => refreshRecycleBin()
 	});
 
@@ -1329,6 +1334,8 @@ const Dock = memo(function Dock() {
 									</motion.div>
 								)}
 
+								{binEnabled && recycleBin && binPosition === "start" && renderExtra(recycleBin)}
+
 								{dockExtrasPosition === "left" && dockExtras.length > 0 && (
 									<>
 										{dockExtras.map((extra) => renderExtra(extra))}
@@ -1669,7 +1676,7 @@ const Dock = memo(function Dock() {
 									</>
 								)}
 
-								{binEnabled && recycleBin && (
+								{binEnabled && recycleBin && binPosition !== "start" && (
 									<>
 										<div
 											className="dock-app-divider"

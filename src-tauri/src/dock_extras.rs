@@ -311,20 +311,27 @@ fn parse_enabled_folders(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// The bin with Tray Bin's fill-level icon (or the Windows icon when those
-/// are turned off or missing) and its size for the tooltip.
+/// The bin with its fill-level icon (Bloom's own five bars, Tray Bin's
+/// icons, or the Windows icon when chosen or when Tray Bin's are missing) and
+/// its size for the tooltip.
 fn recycle_bin_extra(app: &AppHandle) -> DockExtra {
     let state = crate::recycle_bin::query();
-    let traybin = if crate::recycle_bin::uses_traybin_icons(app) {
-        let level = crate::recycle_bin::level(state, crate::recycle_bin::only_empty_full(app));
-        crate::recycle_bin::traybin_icons(app, level)
-    } else {
-        None
+    let level = crate::recycle_bin::level(state, crate::recycle_bin::only_empty_full(app));
+    let style = crate::recycle_bin::icon_style(app);
+    let filled = match style.as_str() {
+        "bloom" => Some((
+            crate::recycle_bin::bloom_icon(level, true),
+            crate::recycle_bin::bloom_icon(level, false),
+            false,
+        )),
+        "traybin" => {
+            crate::recycle_bin::traybin_icons(app, level).map(|(dark, light)| (dark, light, true))
+        }
+        _ => None,
     };
-    let pixelated = traybin.is_some();
-    let (icon, icon_light) = match traybin {
-        Some((dark, light)) => (Some(dark), Some(light)),
-        None => (recycle_bin_icon(state.items > 0), None),
+    let (icon, icon_light, pixelated) = match filled {
+        Some((dark, light, pixelated)) => (Some(dark), Some(light), pixelated),
+        None => (recycle_bin_icon(state.items > 0), None, false),
     };
     DockExtra {
         id: "recycle-bin".into(),

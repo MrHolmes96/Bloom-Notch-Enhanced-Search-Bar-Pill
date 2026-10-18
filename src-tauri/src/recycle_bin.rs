@@ -1,12 +1,19 @@
-//! The dock's Recycle Bin, modelled on Tray Bin (a MiniBin replacement): five
-//! fill-level icons chosen by the bin's total size, a choice of what a double
-//! click does, and the shell's confirm / sound / progress options when emptying.
+//! The dock's Recycle Bin, modelled on Tray Bin (a MiniBin replacement): an
+//! icon that fills up bar by bar with the bin's total size, a choice of what a
+//! double click does, and the shell's confirm / sound / progress options when
+//! emptying.
 //!
-//! The fill-level icons are MiniBin's artwork, so they are not shipped with
-//! Bloom. They are copied once out of an installed Tray Bin (`TrayBin.exe`
-//! keeps them as RCDATA resources 10-14 and 20-24) into Bloom's config folder,
-//! so they stay after Tray Bin is uninstalled. Without them the dock falls back
-//! to the standard Windows bin icons.
+//! Bloom draws its own bin by default: five bars, one more for each size step
+//! (under 100 MB, 100-500 MB, 500 MB-1 GB, 1-5 GB, 5 GB and up), sharp at any
+//! dock size. Tray Bin's icons (MiniBin's artwork, four steps) can be used
+//! instead: they are not shipped with Bloom but copied once out of an
+//! installed Tray Bin (`TrayBin.exe` keeps them as RCDATA resources 10-14 and
+//! 20-24) into Bloom's config folder, so they stay after Tray Bin is
+//! uninstalled. The Windows bin icons are the third choice.
+//!
+//! The icon updates the moment the bin changes: Bloom watches each drive's
+//! `$Recycle.Bin` folder for this user with Windows' change notifications, so
+//! nothing polls.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -27,10 +34,15 @@ use crate::utils::get_setting_str;
 /// Event sent when the bin's contents change, so the dock can redraw it.
 pub const CHANGED_EVENT: &str = "recycle-bin-changed";
 
-/// Bin size (MB) at which the 2, 3 and 4 bar icons take over. Same defaults as
-/// Tray Bin; any item at all shows 1 bar.
-const THRESHOLDS_MB: [i64; 3] = [100, 500, 2048];
+const MB: i64 = 1024 * 1024;
+/// Bin size at which 2, 3, 4 and 5 bars take over; any item at all shows 1.
+const LEVEL_STEPS: [i64; 4] = [100 * MB, 500 * MB, 1024 * MB, 5 * 1024 * MB];
+/// The fullest level: 5 bars.
+pub const FULL: usize = 5;
 const LEVEL_NAMES: [&str; 5] = ["0", "25", "50", "75", "100"];
+/// Which of Tray Bin's five icons (empty, 25, 50, 75, 100 %) shows each of
+/// Bloom's six levels: 5 GB and up is its full icon.
+const TRAYBIN_ICON_FOR_LEVEL: [usize; 6] = [0, 1, 2, 3, 3, 4];
 /// Tray Bin's resource ids: white set (dark backgrounds) and black set.
 const WHITE_BASE: u16 = 10;
 const BLACK_BASE: u16 = 20;
@@ -87,24 +99,19 @@ fn invalidate() {
     }
 }
 
-/// 0 = empty, 1-4 = bars, from the total size like Tray Bin.
+/// 0 = empty, 1-5 bars from the total size: under 100 MB 1, 100-500 MB 2,
+/// 500 MB-1 GB 3, 1-5 GB 4, 5 GB and up 5 (full).
 pub fn level(state: BinState, only_empty_full: bool) -> usize {
     if state.items <= 0 {
         return 0;
     }
     if only_empty_full {
-        return 4;
+        return FULL;
     }
-    let mb = state.bytes / (1024 * 1024);
-    if mb >= THRESHOLDS_MB[2] {
-        4
-    } else if mb >= THRESHOLDS_MB[1] {
-        3
-    } else if mb >= THRESHOLDS_MB[0] {
-        2
-    } else {
-        1
-    }
+    1 + LEVEL_STEPS
+        .iter()
+        .filter(|&&step| state.bytes >= step)
+        .count()
 }
 
 /// "4,88 MB" with the shell's own rounding and decimal separator.
@@ -130,8 +137,14 @@ fn setting_on(app: &AppHandle, key: &str, default: bool) -> bool {
     get_setting_str(app, key).map_or(default, |v| v != "false")
 }
 
-pub fn uses_traybin_icons(app: &AppHandle) -> bool {
-    get_setting_str(app, "bloom-dock-bin-icons").as_deref() != Some("windows")
+/// Which icons the bin uses: Bloom's own ("bloom", the default), Tray Bin's
+/// ("traybin") or Windows' ("windows").
+pub fn icon_style(app: &AppHandle) -> String {
+    match get_setting_str(app, "bloom-dock-bin-icons").as_deref() {
+        Some("traybin") => "traybin".into(),
+        Some("windows") => "windows".into(),
+        _ => "bloom".into(),
+    }
 }
 
 pub fn only_empty_full(app: &AppHandle) -> bool {
@@ -288,9 +301,46 @@ fn have_all_icons(dir: &Path) -> bool {
     })
 }
 
-/// (for a dark background, for a light background), or None when Tray Bin's
-/// icons are neither copied yet nor installed.
+/// Bloom's own bin at a fill level (0-5) as an SVG data URI, in the dock's
+/// text colour for a dark or a light dock: a bin with its lid and handle and
+/// five bar slots, filled from the bottom up.
+pub fn bloom_icon(level: usize, dark_background: bool) -> String {
+    let ink = if dark_background {
+        "#ffffff"
+    } else {
+        "#1d1d1f"
+    };
+    let mut bars = String::new();
+    if level > 0 {
+        // Five bars from the bottom of the body up; the body narrows towards
+        // its foot, and so do the bars.
+        for index in 0..FULL {
+            let bottom = 52.0 - index as f64 * 6.0;
+            let top = bottom - 4.0;
+            let middle = (top + bottom) / 2.0;
+            let edge = 17.0 + 2.6 * ((middle - 20.0) / 34.4) + 4.6;
+            let filled = index < level;
+            bars.push_str(&format!(
+                r#"<rect x="{x:.2}" y="{top:.2}" width="{w:.2}" height="4" rx="1.6" fill="{ink}" opacity="{o}"/>"#,
+                x = edge,
+                w = 64.0 - 2.0 * edge,
+                o = if filled { "1" } else { "0.22" },
+            ));
+        }
+    }
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><g fill="none" stroke="{ink}" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round"><path d="M26 12V9.6a2.2 2.2 0 0 1 2.2-2.2h7.6A2.2 2.2 0 0 1 38 9.6V12"/><path d="M17 20h30l-2.6 34.4a4 4 0 0 1-4 3.6H23.6a4 4 0 0 1-4-3.6Z"/></g><rect x="12" y="12.4" width="40" height="4.4" rx="2.2" fill="{ink}"/>{bars}</svg>"#
+    );
+    format!(
+        "data:image/svg+xml;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(svg)
+    )
+}
+
+/// (for a dark background, for a light background) at one of Bloom's levels
+/// (0-5), or None when Tray Bin's icons are neither copied yet nor installed.
 pub fn traybin_icons(app: &AppHandle, level: usize) -> Option<(String, String)> {
+    let level = TRAYBIN_ICON_FOR_LEVEL[level.min(FULL)];
     let cache = ICONS.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(guard) = cache.lock() {
         if let (Some(dark), Some(light)) = (guard.get(&(true, level)), guard.get(&(false, level))) {
@@ -487,36 +537,164 @@ pub fn empty_recycle_bin(app: AppHandle) {
 
 static WATCHING: AtomicBool = AtomicBool::new(false);
 
-/// Polls the bin every second while the dock shows it and tells the dock when
-/// the contents change, so files deleted anywhere update the icon right away.
+/// This user's SID ("S-1-5-21-..."), the name of their folder in each
+/// drive's `$Recycle.Bin`.
+fn user_sid() -> Option<String> {
+    use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
+    use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    unsafe {
+        let mut token = HANDLE::default();
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).ok()?;
+        let mut size = 0u32;
+        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut size);
+        let mut buffer = vec![0u8; size.max(64) as usize];
+        let read = GetTokenInformation(
+            token,
+            TokenUser,
+            Some(buffer.as_mut_ptr() as *mut _),
+            buffer.len() as u32,
+            &mut size,
+        );
+        let _ = CloseHandle(token);
+        read.ok()?;
+        let user = &*(buffer.as_ptr() as *const TOKEN_USER);
+        let mut text = windows::core::PWSTR::null();
+        ConvertSidToStringSidW(user.User.Sid, &mut text).ok()?;
+        let sid = text.to_string().ok();
+        let _ = LocalFree(Some(HLOCAL(text.0 as *mut _)));
+        sid
+    }
+}
+
+/// The folders whose changes mean the bin changed: this user's folder in
+/// `$Recycle.Bin` on every fixed or removable drive (or `$Recycle.Bin` itself
+/// until that folder exists, so its creation is noticed).
+fn bin_folders(sid: Option<&str>) -> Vec<(PathBuf, bool)> {
+    use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+    let mut folders = Vec::new();
+    let drives = unsafe { GetLogicalDrives() };
+    for index in 0..26u32 {
+        if drives & (1 << index) == 0 {
+            continue;
+        }
+        let root = format!("{}:\\", (b'A' + index as u8) as char);
+        let wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
+        // 2 = removable, 3 = fixed.
+        let kind = unsafe { GetDriveTypeW(PCWSTR(wide.as_ptr())) };
+        if kind != 2 && kind != 3 {
+            continue;
+        }
+        let bin = PathBuf::from(&root).join("$Recycle.Bin");
+        match sid.map(|sid| bin.join(sid)) {
+            Some(own) if own.is_dir() => folders.push((own, true)),
+            _ if bin.is_dir() => folders.push((bin, false)),
+            _ => {}
+        }
+    }
+    folders
+}
+
+/// Re-reads the bin and tells the dock when anything changed.
+fn recheck(app: &AppHandle, last: &mut BinState) {
+    let now = query_now();
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some(Cached {
+            state: now,
+            at_ms: crate::utils::get_now_ms(),
+        });
+    }
+    if now != *last {
+        *last = now;
+        let _ = app.emit(CHANGED_EVENT, ());
+    }
+}
+
+/// Watches the bin while the dock shows it and tells the dock the moment its
+/// contents change, wherever files are deleted from. Windows' change
+/// notifications wake it; it only re-reads the drive list now and then, in
+/// case a drive was connected.
 pub fn ensure_watcher(app: &AppHandle) {
+    use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows::Win32::Storage::FileSystem::{
+        FindCloseChangeNotification, FindFirstChangeNotificationW, FindNextChangeNotification,
+        FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_SIZE,
+    };
+    use windows::Win32::System::Threading::WaitForMultipleObjects;
     if WATCHING.swap(true, Ordering::SeqCst) {
         return;
     }
     let app = app.clone();
     std::thread::spawn(move || {
+        let sid = user_sid();
         let mut last = query_now();
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(1000));
-            let shown = get_setting_str(&app, "bloom-dock-extras-recycle-bin").as_deref()
-                != Some("false")
-                && matches!(
-                    get_setting_str(&app, "bloom-dock-extras-position").as_deref(),
-                    Some("left") | Some("right")
-                );
+            let shown =
+                get_setting_str(&app, "bloom-dock-extras-recycle-bin").as_deref() != Some("false");
             if !shown {
+                std::thread::sleep(std::time::Duration::from_secs(5));
                 continue;
             }
-            let now = query_now();
-            if now != last {
-                last = now;
-                if let Ok(mut guard) = CACHE.lock() {
-                    *guard = Some(Cached {
-                        state: now,
-                        at_ms: crate::utils::get_now_ms(),
-                    });
+            let folders = bin_folders(sid.as_deref());
+            let handles: Vec<HANDLE> = folders
+                .iter()
+                .filter_map(|(folder, subtree)| {
+                    let wide: Vec<u16> = folder
+                        .to_string_lossy()
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect();
+                    unsafe {
+                        FindFirstChangeNotificationW(
+                            PCWSTR(wide.as_ptr()),
+                            *subtree,
+                            FILE_NOTIFY_CHANGE_FILE_NAME
+                                | FILE_NOTIFY_CHANGE_DIR_NAME
+                                | FILE_NOTIFY_CHANGE_SIZE,
+                        )
+                    }
+                    .ok()
+                })
+                .take(64)
+                .collect();
+            recheck(&app, &mut last);
+            // Until the drive list is read again (a drive plugged in, this
+            // user's bin folder created on a drive).
+            let rescan_at = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while std::time::Instant::now() < rescan_at {
+                if handles.is_empty() {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    recheck(&app, &mut last);
+                    continue;
                 }
-                let _ = app.emit(CHANGED_EVENT, ());
+                let woke = unsafe { WaitForMultipleObjects(&handles, false, 15_000) };
+                if woke == WAIT_TIMEOUT {
+                    continue;
+                }
+                let index = woke.0.wrapping_sub(WAIT_OBJECT_0.0) as usize;
+                if index >= handles.len() {
+                    break;
+                }
+                // A delete or an empty is many changes in a row: let them
+                // settle for a moment, then read the bin once.
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                for handle in &handles {
+                    unsafe {
+                        let _ = FindNextChangeNotification(*handle);
+                    }
+                }
+                recheck(&app, &mut last);
+                if get_setting_str(&app, "bloom-dock-extras-recycle-bin").as_deref()
+                    == Some("false")
+                {
+                    break;
+                }
+            }
+            for handle in handles {
+                unsafe {
+                    let _ = FindCloseChangeNotification(handle);
+                }
             }
         }
     });
@@ -527,14 +705,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn levels_follow_traybin_thresholds() {
-        let mb = 1024 * 1024;
+    fn levels_follow_the_size_steps() {
         let state = |items, bytes| BinState { items, bytes };
         assert_eq!(level(state(0, 0), false), 0);
         assert_eq!(level(state(1, 10), false), 1);
-        assert_eq!(level(state(3, 100 * mb), false), 2);
-        assert_eq!(level(state(3, 500 * mb), false), 3);
-        assert_eq!(level(state(3, 2048 * mb), false), 4);
-        assert_eq!(level(state(1, 10), true), 4);
+        assert_eq!(level(state(3, 99 * MB), false), 1);
+        assert_eq!(level(state(3, 100 * MB), false), 2);
+        assert_eq!(level(state(3, 499 * MB), false), 2);
+        assert_eq!(level(state(3, 500 * MB), false), 3);
+        assert_eq!(level(state(3, 1023 * MB), false), 3);
+        assert_eq!(level(state(3, 1024 * MB), false), 4);
+        assert_eq!(level(state(3, 5 * 1024 * MB - 1), false), 4);
+        assert_eq!(level(state(3, 5 * 1024 * MB), false), 5);
+        assert_eq!(level(state(3, 40 * 1024 * MB), false), 5);
+        assert_eq!(level(state(1, 10), true), 5);
+    }
+
+    #[test]
+    fn tray_bin_icons_cover_every_level() {
+        assert_eq!(TRAYBIN_ICON_FOR_LEVEL[0], 0);
+        assert_eq!(TRAYBIN_ICON_FOR_LEVEL[FULL], 4);
+        assert!(TRAYBIN_ICON_FOR_LEVEL.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[test]
+    fn bloom_icon_fills_one_bar_per_level() {
+        use base64::Engine;
+        let decode = |uri: String| {
+            let data = uri.split_once(',').unwrap().1.to_string();
+            String::from_utf8(
+                base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(decode(bloom_icon(0, true)).matches("<rect").count(), 1);
+        for level in 1..=FULL {
+            let svg = decode(bloom_icon(level, true));
+            assert_eq!(svg.matches(r#"opacity="1""#).count(), level);
+            assert_eq!(svg.matches(r#"opacity="0.22""#).count(), FULL - level);
+        }
+        assert!(decode(bloom_icon(3, false)).contains("#1d1d1f"));
     }
 }

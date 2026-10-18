@@ -992,7 +992,10 @@ pub fn get_dock_scale(app: &tauri::AppHandle) -> f64 {
 
 /// True for a setting that changes the notch's or the dock's size.
 pub fn is_scale_key(key: &str) -> bool {
-    matches!(key, "bloom-scale" | "bloom-notch-scale" | "bloom-dock-scale")
+    matches!(
+        key,
+        "bloom-scale" | "bloom-notch-scale" | "bloom-dock-scale"
+    )
 }
 
 /// Read any string value from the settings cache. Returns None if the key is absent.

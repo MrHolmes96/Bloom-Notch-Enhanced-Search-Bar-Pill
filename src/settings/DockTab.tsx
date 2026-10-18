@@ -235,7 +235,7 @@ export function DockTab({
 						<SettingRow
 							icon={Trash2}
 							label="Recycle Bin"
-							desc="At the end of the dock, with Tray Bin's icons filling up as the bin grows"
+							desc="In the dock, filling up bar by bar as the bin grows, updated the moment it changes"
 						>
 							<label className="toggle-switch">
 								<input
