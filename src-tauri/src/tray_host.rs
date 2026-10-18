@@ -492,7 +492,8 @@ unsafe extern "system" fn window_proc(
             TIMER_CHANGED => {
                 let _ = KillTimer(Some(hwnd), TIMER_CHANGED);
                 if let Some(app) = APP.get() {
-                    let _ = app.emit("tray-changed", ());
+                    // Only the notch shows the tray.
+                    let _ = app.emit_to("main", "tray-changed", ());
                 }
             }
             TIMER_RESYNC => {
