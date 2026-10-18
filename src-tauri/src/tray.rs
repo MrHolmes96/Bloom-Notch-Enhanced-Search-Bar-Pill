@@ -1093,7 +1093,7 @@ pub fn interact(key: &str, context_menu: bool) -> Result<(), String> {
 /// Clicks an icon in Explorer's own tray (through Windows' accessibility
 /// interface), found by its key or, for an icon Bloom's tray knows, by its
 /// window and id or its GUID.
-fn interact_in_explorer(key: &str, context_menu: bool) -> Result<(), String> {
+pub(crate) fn interact_in_explorer(key: &str, context_menu: bool) -> Result<(), String> {
     let identity = crate::tray_host::identity(key);
     unsafe {
         let _com = ComApartment::new()?;

@@ -183,6 +183,8 @@ pub fn set_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
 pub fn migrate(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
+        // After the notch and dock are up: this runs schtasks.
+        std::thread::sleep(std::time::Duration::from_secs(6));
         let exe = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_lowercase())
             .unwrap_or_default();
@@ -218,6 +220,9 @@ pub async fn startup_set(app: AppHandle, enabled: bool) -> Result<bool, String> 
 
 /// After a start by the startup task: above normal priority for the first
 /// half minute, so Bloom is ready before the other startup apps, then normal.
+/// Its web view processes (which draw the notch and the dock) get the same:
+/// Windows starts them at normal priority whatever Bloom's is. This changes
+/// the order work is done in at sign-in, not how much is done.
 pub fn boost_startup() {
     use windows::Win32::System::Threading::{
         GetCurrentProcess, SetPriorityClass, ABOVE_NORMAL_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS,
@@ -226,11 +231,87 @@ pub fn boost_startup() {
         let _ = SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
     }
     std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_secs(30));
+        let started = std::time::Instant::now();
+        let mut boosted: Vec<u32> = Vec::new();
+        while started.elapsed() < std::time::Duration::from_secs(30) {
+            for pid in descendants(std::process::id()) {
+                if !boosted.contains(&pid) && set_priority(pid, ABOVE_NORMAL_PRIORITY_CLASS) {
+                    boosted.push(pid);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
         unsafe {
             let _ = SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
         }
+        // Only the ones still Bloom's (a process id can be reused).
+        let still = descendants(std::process::id());
+        for pid in boosted.into_iter().filter(|pid| still.contains(pid)) {
+            set_priority(pid, NORMAL_PRIORITY_CLASS);
+        }
     });
+}
+
+/// The processes started by `root`, and the ones they started, and so on.
+fn descendants(root: u32) -> Vec<u32> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    let mut pairs: Vec<(u32, u32)> = Vec::new();
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return Vec::new();
+        };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                pairs.push((entry.th32ProcessID, entry.th32ParentProcessID));
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot);
+    }
+    descendants_of(root, &pairs)
+}
+
+/// From (process, parent) pairs, every process below `root`.
+fn descendants_of(root: u32, pairs: &[(u32, u32)]) -> Vec<u32> {
+    let mut found: Vec<u32> = Vec::new();
+    let mut frontier = vec![root];
+    while let Some(parent) = frontier.pop() {
+        for &(pid, of) in pairs {
+            if of == parent && pid != root && pid != 0 && !found.contains(&pid) {
+                found.push(pid);
+                frontier.push(pid);
+            }
+        }
+    }
+    found
+}
+
+fn set_priority(
+    pid: u32,
+    class: windows::Win32::System::Threading::PROCESS_CREATION_FLAGS,
+) -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, SetPriorityClass, PROCESS_SET_INFORMATION,
+    };
+    unsafe {
+        let Ok(process) = OpenProcess(PROCESS_SET_INFORMATION, false, pid) else {
+            return false;
+        };
+        let done = SetPriorityClass(process, class).is_ok();
+        let _ = CloseHandle(process);
+        done
+    }
 }
 
 /// Waits (on its own thread) for the uninstaller or installer to ask Bloom
@@ -291,6 +372,17 @@ pub fn restore_windows() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_every_process_below_bloom() {
+        // Bloom 10 started a browser 20, which started renderers 21 and 22;
+        // 30 is unrelated, and a reused id can't loop back to Bloom.
+        let pairs = [(10, 1), (20, 10), (21, 20), (22, 20), (30, 1), (10, 22)];
+        let mut found = descendants_of(10, &pairs);
+        found.sort();
+        assert_eq!(found, vec![20, 21, 22]);
+        assert!(descendants_of(30, &pairs).is_empty());
+    }
 
     #[test]
     fn task_runs_bloom_at_sign_in_at_normal_priority() {

@@ -72,7 +72,17 @@ function SettingsApp() {
 	}, []);
 
 	useEffect(() => {
-		const unlisten = listen<SettingsTab>("settings-open-tab", (e) => setActiveTab(e.payload));
+		const unlisten = listen<SettingsTab>("settings-open-tab", (e) => {
+			setActiveTab(e.payload);
+			void invoke("settings_take_tab").catch(() => {});
+		});
+		// Opened on a page before this window was ready (it is made a moment
+		// after Bloom starts): that page.
+		void invoke<SettingsTab | null>("settings_take_tab")
+			.then((tab) => {
+				if (tab) setActiveTab(tab);
+			})
+			.catch(() => {});
 		return () => {
 			void unlisten.then((fn) => fn());
 		};

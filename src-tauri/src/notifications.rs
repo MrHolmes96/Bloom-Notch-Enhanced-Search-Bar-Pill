@@ -430,6 +430,41 @@ fn start_toast_watcher() {
 
 // ---------------------------------------------------------------- Bloom cards
 
+/// Cards that came before the card window's page could show them (the window
+/// is made a moment after Bloom starts), and whether that page is ready.
+static CARDS_WAITING: Mutex<(bool, Vec<BloomNotification>)> = Mutex::new((false, Vec::new()));
+
+/// Shows a card, or keeps it (the last few) until the card window's page is
+/// ready, making the window if it isn't there yet.
+fn show_card(app: &AppHandle, item: BloomNotification) {
+    if let Ok(mut waiting) = CARDS_WAITING.lock() {
+        if !waiting.0 {
+            waiting.1.push(item);
+            let extra = waiting.1.len().saturating_sub(5);
+            waiting.1.drain(..extra);
+            drop(waiting);
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = crate::later_windows::ensure(&app, "notifications");
+            });
+            return;
+        }
+    }
+    let _ = app.emit_to("notifications", "bloom-notification", item);
+}
+
+/// The card window's page is listening: the cards that came before it.
+#[tauri::command]
+pub fn notifications_ready() -> Vec<BloomNotification> {
+    match CARDS_WAITING.lock() {
+        Ok(mut waiting) => {
+            waiting.0 = true;
+            std::mem::take(&mut waiting.1)
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
 #[derive(Clone, Serialize)]
 pub struct BloomNotification {
     id: u32,
@@ -801,7 +836,7 @@ fn poll(seen: &mut HashSet<u32>, primed: &mut bool, app: &AppHandle) -> Result<(
     let contents = attach_content(&mut fresh);
     remember(&fresh, &contents);
     for item in fresh {
-        let _ = app.emit_to("notifications", "bloom-notification", item);
+        show_card(app, item);
     }
     *seen = current;
     *primed = true;
@@ -1043,9 +1078,8 @@ pub fn notifications_allow_typing(app: AppHandle, typing: bool) {
 /// A sample card, for trying the look from Settings.
 #[tauri::command]
 pub fn notifications_test(app: AppHandle) {
-    let _ = app.emit_to(
-        "notifications",
-        "bloom-notification",
+    show_card(
+        &app,
         BloomNotification {
             id: 0,
             app: "Bloom".into(),

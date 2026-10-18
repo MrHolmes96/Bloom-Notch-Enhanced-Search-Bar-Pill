@@ -2104,6 +2104,11 @@ static MOUSE_HOOK_LAST_EVENT_MS: AtomicI64 = AtomicI64::new(0);
 static MH_LAST_MAIN_IGNORE: AtomicI32 = AtomicI32::new(-1);
 static MH_LAST_DOCK_IGNORE: AtomicI32 = AtomicI32::new(-1);
 static MH_LAST_OV_IGNORE: AtomicI32 = AtomicI32::new(-1);
+
+/// The overlay window was just made (a moment after start) click-through.
+pub fn overlay_made() {
+    MH_LAST_OV_IGNORE.store(1, Ordering::Relaxed);
+}
 static MH_LAST_EDGE_HOVER: AtomicI32 = AtomicI32::new(-1);
 static MH_LAST_TOP_EDGE_HOVER: AtomicI32 = AtomicI32::new(-1);
 static MH_LAST_LEFT_EDGE_HOVER: AtomicI32 = AtomicI32::new(-1);
@@ -4399,6 +4404,13 @@ static RECOVERING_FROM_WEBVIEW_FAILURE: AtomicBool = AtomicBool::new(false);
 pub fn watch_webview_processes(app: &AppHandle) {
     let _ = WEBVIEWS_WATCHED_AT.set(Instant::now());
     for (_, window) in app.webview_windows() {
+        watch_webview_process(app, &window);
+    }
+}
+
+/// Watches one window's web view (also the ones made after start).
+pub fn watch_webview_process(app: &AppHandle, window: &tauri::WebviewWindow) {
+    {
         let handle = app.clone();
         let _ = window.with_webview(move |webview| unsafe {
             use webview2_com::Microsoft::Web::WebView2::Win32::{

@@ -280,6 +280,13 @@ fn position_window(app: &AppHandle, window: &tauri::WebviewWindow) {
 /// shows it with that query.
 pub fn toggle_launcher(app: &AppHandle, query: Option<String>) {
     let Some(window) = app.get_webview_window("launcher") else {
+        // Pressed in the moment after start, before the bar is made.
+        let app = app.clone();
+        std::thread::spawn(move || {
+            if crate::later_windows::ensure(&app, "launcher").is_some() {
+                toggle_launcher(&app, query);
+            }
+        });
         return;
     };
     if window.is_visible().unwrap_or(false) && query.is_none() {
@@ -333,8 +340,7 @@ pub fn launcher_game_mode() -> bool {
 /// Opens Bloom's settings on the Search Bar Pill page.
 #[tauri::command]
 pub fn launcher_open_settings(app: AppHandle) {
-    crate::commands::open_settings_window(app.clone());
-    let _ = app.emit_to("settings", "settings-open-tab", "search-bar");
+    crate::commands::open_settings_tab(app, "search-bar".into());
 }
 
 /// Opens the folder where Bloom keeps settings.json.

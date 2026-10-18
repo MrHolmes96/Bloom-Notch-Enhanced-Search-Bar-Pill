@@ -68,10 +68,17 @@ export default function Notifications() {
 	};
 
 	useEffect(() => {
-		const unlisten = listen<Incoming>("bloom-notification", (event) => {
-			const card = { ...event.payload, key: nextKey.current++ };
+		const add = (incoming: Incoming) => {
+			const card = { ...incoming, key: nextKey.current++ };
 			setCards((prev) => [card, ...prev].slice(0, MAX_CARDS));
-		});
+		};
+		const unlisten = listen<Incoming>("bloom-notification", (event) => add(event.payload));
+		// Listening now: the cards that came before this page was ready
+		// (this window is made a moment after Bloom starts).
+		void unlisten
+			.then(() => invoke<Incoming[]>("notifications_ready"))
+			.then((waiting) => waiting.forEach(add))
+			.catch(() => {});
 		return () => {
 			void unlisten.then((fn) => fn());
 		};
