@@ -1094,65 +1094,23 @@ pub async fn get_active_windows() -> Vec<AppInfo> {
 }
 
 #[tauri::command]
-pub async fn focus_window(hwnd: isize, from_preview: Option<bool>) {
-    let from_preview = from_preview.unwrap_or(false);
+pub async fn focus_window(hwnd: isize) {
+    // A dock icon (and a window's preview) does what a taskbar button does:
+    // the active window is minimized, any other is restored and activated.
     tauri::async_runtime::spawn_blocking(move || unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-        };
+        use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindowVisible};
         let hwnd = HWND(hwnd as *mut _);
-        let my_pid = std::process::id();
-
-        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
-            crate::foreground::switch_to(hwnd);
+        let shown = IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool();
+        if shown && crate::foreground::is_active(hwnd) {
+            // Its preview while minimized is how it looks right now.
+            if crate::window_capture::age_ms(hwnd) > 1500
+                && !crate::utils::is_window_fullscreen(hwnd)
+            {
+                let _ = crate::window_capture::take(hwnd, 320, 200);
+            }
+            crate::foreground::minimize(hwnd);
         } else {
-            // Minimize if: window is foreground, OR same process as foreground (not Bloom), OR recently focused
-            let fg = GetForegroundWindow();
-            let mut should_minimize = false;
-
-            if !fg.is_invalid() && fg == hwnd {
-                should_minimize = true;
-            } else if from_preview {
-                // A window's own preview brings that window forward, even
-                // when another window of the same app (a sign-in pop-up, a
-                // second window) is the one in front.
-            } else if !fg.is_invalid() {
-                let mut fg_pid = 0u32;
-                let mut target_pid = 0u32;
-                GetWindowThreadProcessId(fg, Some(&mut fg_pid));
-                GetWindowThreadProcessId(hwnd, Some(&mut target_pid));
-                if fg_pid == target_pid && fg_pid != 0 && fg_pid != my_pid {
-                    should_minimize = true;
-                }
-            }
-
-            if !should_minimize && !from_preview {
-                let now = crate::utils::get_now_ms();
-                should_minimize = if let Some(map) = crate::state::FOCUS_TIMESTAMPS.get() {
-                    if let Ok(guard) = map.lock() {
-                        guard
-                            .get(&(hwnd.0 as *mut () as isize))
-                            .map(|ts| now - ts < 2000)
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-            }
-
-            if should_minimize {
-                // Its preview while minimized is how it looks right now.
-                if crate::window_capture::age_ms(hwnd) > 1500
-                    && !crate::utils::is_window_fullscreen(hwnd)
-                {
-                    let _ = crate::window_capture::take(hwnd, 320, 200);
-                }
-                crate::foreground::minimize(hwnd);
-            } else {
-                crate::foreground::switch_to(hwnd);
-            }
+            crate::foreground::switch_to(hwnd);
         }
     })
     .await
@@ -1166,19 +1124,19 @@ pub async fn focus_window(hwnd: isize, from_preview: Option<bool>) {
 /// of flipping between the two most recent.
 #[tauri::command]
 pub async fn focus_app_windows(hwnds: Vec<isize>) {
-    tauri::async_runtime::spawn_blocking(move || unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    tauri::async_runtime::spawn_blocking(move || {
         let Some(&most_recent) = hwnds.first() else {
             return;
         };
-        let foreground = GetForegroundWindow().0 as isize;
         let mut ring = hwnds.clone();
         ring.sort_unstable();
-        let target = match ring.iter().position(|&h| h == foreground) {
+        let active = ring
+            .iter()
+            .position(|&h| crate::foreground::is_active(HWND(h as *mut _)));
+        let target = match active {
             Some(i) => ring[(i + 1) % ring.len()],
             None => most_recent,
         };
-
         crate::foreground::switch_to(HWND(target as *mut _));
     })
     .await

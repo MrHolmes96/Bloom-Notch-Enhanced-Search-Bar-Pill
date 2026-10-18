@@ -544,6 +544,11 @@ unsafe extern "system" fn focus_event_proc(
 /// The app window last in front (Bloom's own windows aside).
 static LAST_FRONT: AtomicIsize = AtomicIsize::new(0);
 
+/// The app window last in front (Bloom's own windows aside), 0 for none.
+pub fn last_front_window() -> isize {
+    LAST_FRONT.load(Ordering::Relaxed)
+}
+
 /// Takes a new snapshot of an app window in front, unless its snapshot is
 /// younger than `fresh_ms`: not minimized, full-screen (games, video:
 /// capturing them can hitch), untitled or one of Bloom's, and one at a time.

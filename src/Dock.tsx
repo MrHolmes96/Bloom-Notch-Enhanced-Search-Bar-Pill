@@ -787,7 +787,7 @@ const Dock = memo(function Dock() {
 	});
 	const focusPreview = (hwnd: number) => {
 		if (closingHwndRef.current === hwnd) return;
-		void invoke("focus_window", { hwnd, fromPreview: true });
+		void invoke("focus_window", { hwnd });
 	};
 
 	const handleClosePreview = async (e: React.SyntheticEvent, hwnd: number) => {
