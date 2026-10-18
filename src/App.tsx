@@ -94,6 +94,33 @@ const NOTCH_PANELS: readonly NotchPanel[] = ["calendar", "command-center"];
 const asNotchPanel = (value: unknown): NotchPanel | null =>
 	NOTCH_PANELS.includes(value as NotchPanel) ? (value as NotchPanel) : null;
 
+/**
+ * Every page the open notch can be left on and reopened at: the tool panels,
+ * the scroll-menu pages (shelf, notes, Blitzit) and the control center's own
+ * pages (tray, Wi-Fi, Bluetooth). Only the panels can be the fixed default.
+ */
+type NotchPage = NotchPanel | "shelf" | "notes" | "blitzit" | "tray" | "wifi" | "bluetooth";
+const NOTCH_PAGES: readonly NotchPage[] = [
+	...NOTCH_PANELS,
+	"shelf",
+	"notes",
+	"blitzit",
+	"tray",
+	"wifi",
+	"bluetooth"
+];
+const asNotchPage = (value: unknown): NotchPage | null =>
+	NOTCH_PAGES.includes(value as NotchPage) ? (value as NotchPage) : null;
+
+/** A pause this long between wheel events ends one scroll gesture. */
+const WHEEL_GESTURE_GAP_MS = 220;
+/** Wheel distance (px) one gesture needs before it turns a page. */
+const WHEEL_PAGE_DISTANCE = 60;
+/** How long the pointer can be off the notch before it closes. */
+const NOTCH_LEAVE_GRACE_MS = 260;
+/** How long the pointer rests on the notch before it expands. */
+const NOTCH_HOVER_INTENT_MS = 90;
+
 // Pomodoro timer limit.
 const MAX_TIMER_SECONDS = 180 * 60;
 
@@ -527,6 +554,8 @@ function App() {
 
 	const [time, setTime] = useState("");
 	const [isHovered, setIsHovered] = useState(false);
+	const isHoveredRef = useRef(isHovered);
+	isHoveredRef.current = isHovered;
 	// Expanded into a panel by a click. Hover alone only peeks.
 	const [isOpen, setIsOpen] = useState(false);
 	const isOpenRef = useRef(false);
@@ -910,8 +939,8 @@ function App() {
 	);
 	// The panel the open notch was last left on. Opening the notch returns to it,
 	// across restarts too (bloom-notch-last-panel).
-	const [lastPanel, setLastPanel] = useState<NotchPanel | null>(() =>
-		asNotchPanel(localStorage.getItem("bloom-notch-last-panel"))
+	const [lastPanel, setLastPanel] = useState<NotchPage | null>(() =>
+		asNotchPage(localStorage.getItem("bloom-notch-last-panel"))
 	);
 	const [settingsMusicCompactNotch, setSettingsMusicCompactNotch] = useState(
 		() => localStorage.getItem("bloom-music-compact-notch") !== "false"
@@ -1012,7 +1041,7 @@ function App() {
 				setBlitzitInScroll(getVal("bloom-notch-blitzit", "true") !== "false");
 				setSettingsMusicCompactNotch(getVal("bloom-music-compact-notch", "true") !== "false");
 				setWidgetsOnHoverOnly(getVal("bloom-notch-widgets-on-hover", "true") !== "false");
-				setLastPanel(asNotchPanel(getVal("bloom-notch-last-panel")));
+				setLastPanel(asNotchPage(getVal("bloom-notch-last-panel")));
 				const viz =
 					getVal("bloom-media-visualizer-enabled") ?? getVal("bloom-visualizer-enabled", "true");
 				setSettingsVisualizerEnabled(viz !== "false");
@@ -1141,7 +1170,7 @@ function App() {
 		// the webview still thinks the pointer is inside the notch (it cannot
 		// receive the mouseleave once the window is click-through).
 		const unlistenNotchPointerLeft = listen("notch-pointer-left", () => {
-			releaseNotchHover();
+			releaseNotchHoverSoon();
 		});
 
 		return () => {
@@ -1171,7 +1200,7 @@ function App() {
 			"bloom-notch-blitzit": (v: unknown) => setBlitzitInScroll(v !== false && v !== "false"),
 			"bloom-music-compact-notch": setSettingsMusicCompactNotch,
 			"bloom-notch-widgets-on-hover": setWidgetsOnHoverOnly,
-			"bloom-notch-last-panel": (v: unknown) => setLastPanel(asNotchPanel(v)),
+			"bloom-notch-last-panel": (v: unknown) => setLastPanel(asNotchPage(v)),
 			"bloom-media-visualizer-enabled": setSettingsVisualizerEnabled,
 			"bloom-visualizer-enabled": setSettingsVisualizerEnabled,
 			"bloom-media-album-art-enabled": setSettingsAlbumArtEnabled,
@@ -1473,9 +1502,36 @@ function App() {
 	// the current state.
 	const restingModeRef = useRef<BloomMode>("status");
 	const bloomModeRef = useRef<BloomMode>("status");
-	const rememberPanelRef = useRef<(panel: NotchPanel) => void>(() => {});
+	const rememberPanelRef = useRef<(panel: NotchPage) => void>(() => {});
 	const notchPinnedRef = useRef(false);
 	const releaseDeferredRef = useRef(false);
+
+	// Leaving the notch closes it after a short grace, so brushing past its
+	// edge, or overshooting it on the way to a control, doesn't snap it shut.
+	// Coming back in time cancels the close.
+	const releaseTimerRef = useRef<number | null>(null);
+	// Passing over the notch on the way to something else (a browser tab at the
+	// top of the screen) doesn't expand it; resting on it for a moment does.
+	const hoverIntentRef = useRef<number | null>(null);
+	const cancelHoverIntent = () => {
+		if (hoverIntentRef.current !== null) {
+			window.clearTimeout(hoverIntentRef.current);
+			hoverIntentRef.current = null;
+		}
+	};
+	const cancelNotchRelease = () => {
+		if (releaseTimerRef.current !== null) {
+			window.clearTimeout(releaseTimerRef.current);
+			releaseTimerRef.current = null;
+		}
+	};
+	const releaseNotchHoverSoon = () => {
+		cancelNotchRelease();
+		releaseTimerRef.current = window.setTimeout(() => {
+			releaseTimerRef.current = null;
+			releaseNotchHover();
+		}, NOTCH_LEAVE_GRACE_MS);
+	};
 
 	// Shared hover-release, called on DOM hover end and when the backend
 	// reports the pointer left the (now click-through) notch window. Closes an
@@ -1490,8 +1546,8 @@ function App() {
 		setIsHovered(false);
 		setIsNotchHovered(false);
 		if (isOpenRef.current) {
-			const panel = asNotchPanel(bloomModeRef.current);
-			if (panel && rememberPanelEnabledRef.current) rememberPanelRef.current(panel);
+			const page = asNotchPage(bloomModeRef.current);
+			if (page && rememberPanelEnabledRef.current) rememberPanelRef.current(page);
 			setIsOpen(false);
 		}
 		setBloomMode((prev) =>
@@ -1735,7 +1791,11 @@ function App() {
 
 	// Window height is now kept constant to prevent rendering layout lag and sharp corners
 
-	const lastScrollTime = useRef(0);
+	// One page per scroll gesture, like the notch on a Mac: a mouse wheel
+	// click turns a page at once, a trackpad swipe once it has moved far
+	// enough, and the rest of the gesture (trackpad momentum, a fast spin of
+	// the wheel) is ignored until the wheel pauses.
+	const wheelGestureRef = useRef({ last: 0, distance: 0, turned: false });
 	const handleWheel = (e: React.WheelEvent) => {
 		const target = e.target as HTMLElement;
 		if (
@@ -1766,14 +1826,24 @@ function App() {
 			}
 		}
 
-		const now = Date.now();
-		if (now - lastScrollTime.current < 250) return;
+		const gesture = wheelGestureRef.current;
+		const now = performance.now();
+		if (now - gesture.last > WHEEL_GESTURE_GAP_MS) {
+			gesture.distance = 0;
+			gesture.turned = false;
+		}
+		gesture.last = now;
+		if (gesture.turned) return;
 
-		// Use absolute values to detect horizontal swipe gestures on trackpad
-		const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-		if (Math.abs(delta) < 5) return; // Ignore tiny movements
+		// Horizontal trackpad swipes count too; lines and pages become pixels.
+		const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+		const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1;
+		gesture.distance += raw * unit;
+		if (Math.abs(gesture.distance) < WHEEL_PAGE_DISTANCE) return;
 
-		if (cycleBloomMode(delta > 0 ? 1 : -1)) lastScrollTime.current = now;
+		const direction = gesture.distance > 0 ? 1 : -1;
+		gesture.distance = 0;
+		if (cycleBloomMode(direction)) gesture.turned = true;
 	};
 
 	function panelAvailable(panel: NotchPanel) {
@@ -2005,27 +2075,53 @@ function App() {
 	restingModeRef.current = collapsedMode;
 	bloomModeRef.current = bloomMode;
 
-	// A click opens the last-used panel when memory is enabled, otherwise the
-	// selected default. The controls panel is always available as a fallback.
-	const openingPanel = (): NotchPanel => {
-		const preferred = rememberPanelEnabled ? lastPanel ?? defaultPanel : defaultPanel;
-		return panelAvailable(preferred) ? preferred : "command-center";
+	// A page that still exists: a scroll-menu page only while it is in the
+	// scroll menu, the calendar only while it is turned on.
+	const pageAvailable = (page: NotchPage) => {
+		if (page === "calendar") return settingsCalendarEnabled;
+		if (page === "shelf") return shelfInScroll;
+		if (page === "notes") return notesInScroll;
+		if (page === "blitzit") return blitzitInScroll;
+		return true;
 	};
 
-	// Expands the notch into a panel, or into an activity's own view.
-	const openNotch = (view: NotchPanel | "music" | "shelf") => {
+	// A click opens the page the notch was last left on when memory is
+	// enabled, otherwise the selected default. The controls panel is always
+	// available as a fallback.
+	const openingPanel = (): NotchPage => {
+		if (rememberPanelEnabled && lastPanel && pageAvailable(lastPanel)) return lastPanel;
+		return panelAvailable(defaultPanel) ? defaultPanel : "command-center";
+	};
+
+	// Expands the notch into a page, or into an activity's own view.
+	const openNotch = (view: NotchPage | "music") => {
 		if (bloomMode === "announcement") return;
 		setIsOpen(true);
 		setBloomMode(view);
 	};
 
-	const rememberPanel = (panel: NotchPanel) => {
-		if (panel === lastPanel) return;
-		setLastPanel(panel);
-		localStorage.setItem("bloom-notch-last-panel", panel);
-		invoke("save_setting", { key: "bloom-notch-last-panel", value: panel }).catch(console.error);
+	const lastPanelRef = useRef(lastPanel);
+	lastPanelRef.current = lastPanel;
+	const rememberPanel = (page: NotchPage) => {
+		if (page === lastPanelRef.current) return;
+		lastPanelRef.current = page;
+		setLastPanel(page);
+		localStorage.setItem("bloom-notch-last-panel", page);
+		invoke("save_setting", { key: "bloom-notch-last-panel", value: page }).catch(console.error);
 	};
 	rememberPanelRef.current = rememberPanel;
+
+	// The page is remembered the moment it is shown, not only when the notch
+	// closes by the pointer leaving: closing any other way (a click elsewhere,
+	// the notch hiding, Bloom restarting) used to lose it. Activity views
+	// (music, a shelf opened by a drop) are never remembered.
+	useEffect(() => {
+		if (!isOpen || !rememberPanelEnabled) return;
+		const page = asNotchPage(bloomMode);
+		if (!page || !pageAvailable(page)) return;
+		rememberPanel(page);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [bloomMode, isOpen, rememberPanelEnabled]);
 
 	// Called by views that take typed input; see releaseNotchHover.
 	const setNotchPinned = useCallback((pinned: boolean) => {
@@ -2922,12 +3018,22 @@ function App() {
 						if (!isOpen) openNotch(openingPanel());
 					}}
 					onHoverStart={() => {
+						cancelNotchRelease();
 						releaseDeferredRef.current = false;
-						setIsHovered(true);
-						// Hovering the shelf cancels its post-drop auto-close.
-						if (bloomMode === "shelf") clearShelfCollapse();
+						cancelHoverIntent();
+						// Back within the leave grace: still expanded, nothing to wait for.
+						if (isHoveredRef.current) return;
+						hoverIntentRef.current = window.setTimeout(() => {
+							hoverIntentRef.current = null;
+							setIsHovered(true);
+							// Hovering the shelf cancels its post-drop auto-close.
+							if (bloomModeRef.current === "shelf") clearShelfCollapse();
+						}, NOTCH_HOVER_INTENT_MS);
 					}}
-					onHoverEnd={releaseNotchHover}
+					onHoverEnd={() => {
+						cancelHoverIntent();
+						releaseNotchHoverSoon();
+					}}
 					style={{ originY: 0 }}
 					transition={{
 						width: { type: "spring", stiffness: 400, damping: 31 },
