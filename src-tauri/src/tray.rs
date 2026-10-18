@@ -1,5 +1,11 @@
-//! Read-only discovery of live notification icons. Registry entries are only
-//! candidates: Shell_NotifyIconGetRect must confirm each icon before it is used.
+//! The tray icons of running apps, for the notch's tray and the dock.
+//!
+//! Bloom's tray host (`tray_host`) sees every icon as apps add and change it,
+//! so its list is used whenever it runs: instant, with each icon's own live
+//! picture, and clicks go straight to the app. Without it (turned off, or
+//! still starting), live icons are found read-only from the registry, where
+//! entries are only candidates: Shell_NotifyIconGetRect must confirm each icon
+//! before it is used, and clicks go through Explorer's hidden tray.
 use serde::Serialize;
 use std::collections::HashMap;
 use windows::core::{w, Interface, BOOL, GUID, PCWSTR};
@@ -225,6 +231,9 @@ unsafe fn live_icons(windows: &[(isize, String)], include_own: bool) -> Vec<Icon
 }
 
 pub fn enumerate() -> Vec<TrayApp> {
+    if crate::tray_host::ready() {
+        return host_enumerate();
+    }
     unsafe {
         let windows = process_windows();
         let mut apps: HashMap<String, TrayApp> = HashMap::new();
@@ -271,6 +280,9 @@ pub struct TrayIconInfo {
     pub promoted: bool,
     /// Hidden by Tray Icon Manager.
     pub manager_hidden: bool,
+    /// The icon's live picture (PNG data URI) from Bloom's tray host. Without
+    /// it the notch shows the program's own icon.
+    pub image: Option<String>,
 }
 
 /// An icon Tray Icon Manager hides, whether or not it is running now.
@@ -314,6 +326,9 @@ fn exe_name(path: &str) -> String {
 /// Every live tray icon, and which ones Tray Icon Manager hides.
 pub fn tray_state() -> TrayState {
     use crate::tray_manager::{hides, normalize_guid, IconFacts};
+    if crate::tray_host::ready() {
+        return host_state();
+    }
     unsafe {
         let windows = process_windows();
         let icons: Vec<Icon> = live_icons(&windows, false)
@@ -364,6 +379,7 @@ pub fn tray_state() -> TrayState {
                     path: icon.path.clone(),
                     promoted: icon.promoted,
                     manager_hidden,
+                    image: None,
                 }
             })
             .collect();
@@ -387,6 +403,197 @@ pub fn tray_state() -> TrayState {
                 .collect(),
         }
     }
+}
+
+/// What Windows' tray settings say about one icon (`NotifyIconSettings`).
+struct RegistryEntry {
+    key: String,
+    path: String,
+    guid: Option<String>,
+    uid: Option<u32>,
+    promoted: bool,
+}
+
+/// Every icon Windows' tray settings know, without checking which run.
+fn registry_entries() -> Vec<RegistryEntry> {
+    unsafe {
+        let Some(root) = open_key(HKEY_CURRENT_USER, "Control Panel\\NotifyIconSettings") else {
+            return vec![];
+        };
+        let mut entries = Vec::new();
+        for index in 0..4096 {
+            let mut name = [0u16; 256];
+            let mut length = name.len() as u32;
+            if RegEnumKeyExW(
+                root.0,
+                index,
+                Some(windows::core::PWSTR(name.as_mut_ptr())),
+                &mut length,
+                None,
+                None,
+                None,
+                None,
+            )
+            .is_err()
+            {
+                break;
+            }
+            let key_name = String::from_utf16_lossy(&name[..length as usize]);
+            let Some(key) = open_key(root.0, &key_name) else {
+                continue;
+            };
+            let Some(path) = string(key.0, "ExecutablePath").and_then(|p| resolve_path(&p)) else {
+                continue;
+            };
+            let dword = |name: &str| {
+                value(key.0, name, REG_DWORD)
+                    .and_then(|v| <[u8; 4]>::try_from(v).ok())
+                    .map(u32::from_le_bytes)
+            };
+            entries.push(RegistryEntry {
+                key: key_name,
+                path,
+                guid: string(key.0, "IconGuid").map(|g| crate::tray_manager::normalize_guid(&g)),
+                uid: dword("UID"),
+                promoted: dword("IsPromoted") == Some(1),
+            });
+        }
+        entries
+    }
+}
+
+/// The notch's tray from Bloom's tray host: every visible icon with its live
+/// picture, Windows' "shown on the taskbar" flag and Tray Icon Manager's rules.
+fn host_state() -> TrayState {
+    use crate::tray_manager::{hides, normalize_guid, IconFacts};
+    let hosted = crate::tray_host::snapshot();
+    let registry = registry_entries();
+    let manager = crate::tray_manager::read();
+    let hidden = manager
+        .as_ref()
+        .map(|m| m.entries.as_slice())
+        .unwrap_or_default();
+    let mut per_exe: HashMap<String, usize> = HashMap::new();
+    for icon in &hosted {
+        *per_exe.entry(exe_name(&icon.path)).or_default() += 1;
+    }
+    let mut matched = vec![false; hidden.len()];
+    let mut list: Vec<TrayIconInfo> = hosted
+        .iter()
+        .filter(|icon| !is_explorer_hosted_icon(&icon.path) && !icon.path.is_empty())
+        .map(|icon| {
+            let exe = exe_name(&icon.path);
+            let name = crate::commands::app_display_name(&icon.path, None);
+            let guid = icon.guid.as_deref().map(normalize_guid).unwrap_or_default();
+            // Windows' own entry for this icon: by GUID, else by program and id.
+            let entry = registry.iter().find(|entry| {
+                if !guid.is_empty() {
+                    return entry.guid.as_deref() == Some(guid.as_str());
+                }
+                entry.guid.is_none()
+                    && entry.uid == Some(icon.uid)
+                    && entry.path.eq_ignore_ascii_case(&icon.path)
+            });
+            let same_program = per_exe.get(&exe).copied().unwrap_or(1);
+            let facts = IconFacts {
+                exe: &exe,
+                guid: &guid,
+                tooltip: &icon.tooltip,
+                name: &name,
+                same_program,
+            };
+            let mut manager_hidden = false;
+            for (index, rule) in hidden.iter().enumerate() {
+                if hides(rule, &facts) {
+                    manager_hidden = true;
+                    matched[index] = true;
+                }
+            }
+            // The same lasting key as before, so choices made in Bloom stay.
+            let key = if same_program > 1 {
+                format!(
+                    "{}|{}",
+                    exe,
+                    entry
+                        .map(|e| e.key.clone())
+                        .unwrap_or_else(|| icon.id.clone())
+                )
+            } else {
+                exe.clone()
+            };
+            TrayIconInfo {
+                id: icon.id.clone(),
+                key,
+                name,
+                tooltip: icon.tooltip.clone(),
+                path: icon.path.clone(),
+                promoted: entry.is_some_and(|e| e.promoted),
+                manager_hidden,
+                image: icon.image.clone(),
+            }
+        })
+        .collect();
+    list.sort_by_key(|a| a.name.to_lowercase());
+    TrayState {
+        icons: list,
+        manager_found: manager.is_some(),
+        manager_path: manager.as_ref().map(|m| m.path.clone()),
+        manager_entries: hidden
+            .iter()
+            .zip(&matched)
+            .map(|(entry, running)| ManagerEntry {
+                name: if entry.name.is_empty() {
+                    entry.exe.clone()
+                } else {
+                    entry.name.clone()
+                },
+                key: (!entry.exe.is_empty()).then(|| entry.exe.clone()),
+                running: *running,
+            })
+            .collect(),
+    }
+}
+
+/// The dock's tray apps from Bloom's tray host, with each app's windows.
+fn host_enumerate() -> Vec<TrayApp> {
+    let hosted = crate::tray_host::snapshot();
+    let pids: Vec<u32> = hosted.iter().map(|icon| icon.pid).collect();
+    let mut windows: Vec<(isize, u32)> = Vec::new();
+    unsafe extern "system" fn collect(hwnd: HWND, param: LPARAM) -> windows::core::BOOL {
+        let found = &mut *(param.0 as *mut Vec<(isize, u32)>);
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        found.push((hwnd.0 as isize, pid));
+        true.into()
+    }
+    unsafe {
+        let param = LPARAM(&mut windows as *mut Vec<(isize, u32)> as isize);
+        let _ = EnumWindows(Some(collect), param);
+    }
+    windows.retain(|(_, pid)| pids.contains(pid));
+    let mut apps: HashMap<String, TrayApp> = HashMap::new();
+    for icon in hosted
+        .into_iter()
+        .filter(|icon| !is_explorer_hosted_icon(&icon.path) && !icon.path.is_empty())
+    {
+        let app = apps
+            .entry(icon.path.to_lowercase())
+            .or_insert_with(|| TrayApp {
+                name: crate::commands::app_display_name(&icon.path, None),
+                window_handles: Vec::new(),
+                path: icon.path.clone(),
+                tray_ids: vec![],
+            });
+        for (hwnd, pid) in &windows {
+            if *pid == icon.pid && !app.window_handles.contains(hwnd) {
+                app.window_handles.push(*hwnd);
+            }
+        }
+        app.tray_ids.push(icon.id);
+    }
+    let mut apps: Vec<_> = apps.into_values().collect();
+    apps.sort_by(|a, b| a.path.cmp(&b.path));
+    apps
 }
 
 struct ComApartment;
@@ -422,8 +629,7 @@ impl TrayExposure {
         if crate::state::SHUTTING_DOWN.load(Ordering::Relaxed) {
             return Err("Bloom is shutting down.".into());
         }
-        let hwnd = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null())
-            .map_err(|_| "Windows taskbar is unavailable.")?;
+        let hwnd = crate::tray_host::explorer_taskbar().ok_or("Windows taskbar is unavailable.")?;
         let mut rect = RECT::default();
         GetWindowRect(hwnd, &mut rect).map_err(|e| e.to_string())?;
         if crate::state::TRAY_INTERACTION_ACTIVE.swap(true, Ordering::SeqCst) {
@@ -744,8 +950,7 @@ unsafe fn find_promoted_icon(
 ) -> Result<IUIAutomationElement3, String> {
     let icon = Shell_NotifyIconGetRect(&target.identifier)
         .map_err(|_| "This tray icon is no longer running.")?;
-    let taskbar = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null())
-        .map_err(|_| "Windows taskbar is unavailable.")?;
+    let taskbar = crate::tray_host::explorer_taskbar().ok_or("Windows taskbar is unavailable.")?;
     let bridge = FindWindowExW(
         Some(taskbar),
         None,
@@ -870,6 +1075,14 @@ unsafe fn move_new_menu_to(app_path: &str, before: &[HWND], anchor: POINT) {
 }
 
 pub fn interact(key: &str, context_menu: bool) -> Result<(), String> {
+    if crate::tray_host::has_icon(key) {
+        let button = if context_menu {
+            crate::tray_host::Button::Right
+        } else {
+            crate::tray_host::Button::Left
+        };
+        return crate::tray_host::click(key, button);
+    }
     unsafe {
         let _com = ComApartment::new()?;
         let windows = process_windows();

@@ -229,9 +229,12 @@ pub fn setup_taskbar_hook() {
         use windows::Win32::UI::Accessibility::SetWinEventHook;
         use windows::Win32::UI::WindowsAndMessaging::{
             EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, WINEVENT_OUTOFCONTEXT,
+            WINEVENT_SKIPOWNPROCESS,
         };
 
-        // Hook both "Show" and "Location Change" (happen when maximizing/switching apps)
+        // Hook both "Show" and "Location Change" (happen when maximizing/switching apps).
+        // Bloom's own windows (its tray host has the taskbar's class) are skipped.
+        let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
         let _show_hook = SetWinEventHook(
             EVENT_OBJECT_SHOW,
             EVENT_OBJECT_SHOW,
@@ -239,7 +242,7 @@ pub fn setup_taskbar_hook() {
             Some(taskbar_event_proc),
             0,
             0,
-            WINEVENT_OUTOFCONTEXT,
+            flags,
         );
         let _loc_hook = SetWinEventHook(
             EVENT_OBJECT_LOCATIONCHANGE,
@@ -248,7 +251,7 @@ pub fn setup_taskbar_hook() {
             Some(taskbar_event_proc),
             0,
             0,
-            WINEVENT_OUTOFCONTEXT,
+            flags,
         );
     }
 }
@@ -619,6 +622,11 @@ unsafe extern "system" fn taskbar_event_proc(
     _dw_event_thread: u32,
     _dwms_event_time: u32,
 ) {
+    // Only windows themselves (not the cursor or a caret, which fire this
+    // event on every mouse move).
+    if _id_object != 0 || _id_child != 0 || hwnd.0.is_null() {
+        return;
+    }
     if NATIVE_TASKBAR_HIDDEN.load(Ordering::Relaxed) {
         let mut class_name = [0u8; 256];
         let len = windows::Win32::UI::WindowsAndMessaging::GetClassNameA(hwnd, &mut class_name);
@@ -1473,12 +1481,11 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                 // Enforce native taskbar hiding (periodic check)
                 if NATIVE_TASKBAR_HIDDEN.load(Ordering::Relaxed) {
                     use windows::Win32::UI::WindowsAndMessaging::{FindWindowA, IsWindowVisible};
-                    let tray_class = windows::core::PCSTR(c"Shell_TrayWnd".as_ptr() as *const u8);
                     let secondary_tray_class =
                         windows::core::PCSTR(c"Shell_SecondaryTrayWnd".as_ptr() as *const u8);
 
                     let mut should_rehide = false;
-                    if let Ok(tray_hwnd) = FindWindowA(tray_class, windows::core::PCSTR::null()) {
+                    if let Some(tray_hwnd) = crate::tray_host::explorer_taskbar() {
                         if IsWindowVisible(tray_hwnd).as_bool() {
                             should_rehide = true;
                         }
@@ -1755,13 +1762,11 @@ unsafe fn popup_base_window(hwnd: HWND, my_process_id: u32) -> Option<HWND> {
 fn native_osd_windows() -> Vec<HWND> {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowA, FindWindowExW, GetSystemMetrics, GetWindowRect, SM_CXSCREEN, SM_CYSCREEN,
-        WS_EX_NOACTIVATE,
+        FindWindowExW, GetSystemMetrics, GetWindowRect, SM_CXSCREEN, SM_CYSCREEN, WS_EX_NOACTIVATE,
     };
     let mut found = Vec::new();
     unsafe {
-        let tray_class = windows::core::PCSTR(c"Shell_TrayWnd".as_ptr() as *const u8);
-        let Ok(tray) = FindWindowA(tray_class, windows::core::PCSTR::null()) else {
+        let Some(tray) = crate::tray_host::explorer_taskbar() else {
             return found;
         };
         let mut explorer_pid = 0u32;

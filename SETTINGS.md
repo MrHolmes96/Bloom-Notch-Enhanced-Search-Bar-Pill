@@ -54,6 +54,7 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-notch-notes` | JSON array of `{ id, text, todo, done, created }` | `"[]"` | The notch's quick notes and to-dos, newest first. |
 | `bloom-control-center-buttons` | comma-separated ids, or `"none"` | `"dnd,energy-saver,tray,notifications,bloom-settings,restart-bloom"` | The control center's round buttons, in order. Also: `night-light`, `airplane`, `hotspot`, `rotation-lock`, `live-captions`, `project`, `cast`, `keyboard-layout`, `accessibility`, `nearby-sharing`, `vpn`, `color-filters`. |
 | `bloom-tray-placement` | JSON object of icon key → `"shown"` / `"hidden"` | `"{}"` | Tray icons shown or hidden in the notch's tray when changed in Bloom (hidden ones sit in its "Hidden icons" menu). Keys are the program's file name (plus Windows' icon id when one program has several icons). Icons not listed are shown, unless Tray Icon Manager hides them. Bloom only; Windows' tray isn't changed. |
+| `bloom-tray-live` | `"true"` / `"false"` | `"true"` | Bloom hosts the tray icons itself (passing everything on to Explorer), so the notch's tray shows each icon's live picture, updates instantly and clicks open at once. `"false"` reads icons from Windows' tray instead. Takes effect after restarting Bloom. |
 | `bloom-tray-follow-manager` | `"true"` / `"false"` | `"true"` | Icons Tray Icon Manager hides (its `HiddenIcons` in `%AppData%\TrayIconManager\config.json`, read only, in any text encoding) stay hidden in the notch's tray. |
 
 ### Weather

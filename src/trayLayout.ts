@@ -24,6 +24,8 @@ export interface TrayIconInfo {
 	promoted: boolean;
 	/** Tray Icon Manager hides it. */
 	manager_hidden: boolean;
+	/** The icon's live picture, as Windows' tray shows it right now. */
+	image?: string | null;
 }
 
 export interface TrayState {

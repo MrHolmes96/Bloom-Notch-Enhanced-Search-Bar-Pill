@@ -38,6 +38,43 @@ stay hidden without it.
 
 ## Implementation and compatibility
 
+### Live tray (default)
+
+`tray_host.rs` keeps a hidden, top-most window of the taskbar's class,
+`Shell_TrayWnd`. `Shell_NotifyIcon` hands every icon change to the first window
+of that class, so Bloom records each icon (window, id, GUID, callback message,
+version, tooltip, hidden state, and a copy of its picture) and passes the
+message on unchanged to Explorer's taskbar, which answers it. Explorer's tray
+stays complete, so nothing changes for Windows or after Bloom quits. AppBar
+messages, icon positions and commands sent to that class are passed straight
+on as well. This is how RetroBar and Cairo show the tray alongside Explorer.
+
+At start Bloom broadcasts `TaskbarCreated` (what Explorer sends after a
+restart), so running apps add their icons again and Bloom sees them all. Every
+two seconds it checks that it is still the first window of that class (Explorer
+raises its taskbar when it is shown); if not, it gets back in front and asks
+for the icons again, at most every 30 seconds. After an Explorer restart it does
+the same. Icons whose window is gone are dropped.
+
+A click sends the app the callback messages Explorer sends for a click on its
+icon (mouse move, button down and up, then `NIN_SELECT` or `WM_CONTEXTMENU` for
+version 3 and 4 icons, with the pointer position for version 4), after giving
+the app the right to come to the front. The app opens its menu or window at the
+pointer at once. While a menu or flyout it opened is on screen, the notch stays
+open (`tray-interaction-end` tells it when they are gone).
+
+An icon's picture is loaded again at 64 px from the file Windows loaded it from
+when that is known (`GetIconInfoEx`), so it stays sharp at the notch's size;
+otherwise the app's own picture is used. Changes reach the notch as
+`tray-changed`, at most every 120 ms.
+
+Bloom's own code looks Explorer's taskbar up with `explorer_taskbar()`, which
+skips Bloom's window of the same class. Settings > Notch > System Tray > Live
+Tray (`bloom-tray-live`) turns this off; the registry-based reading below is
+then used, and it is also the fallback before the first icons arrive.
+
+### Without the live tray
+
 `tray.rs` reads notification-icon candidates from Windows 11's
 `HKCU\Control Panel\NotifyIconSettings`. Each candidate must match a running
 process path and pass `Shell_NotifyIconGetRect`; historical entries alone never

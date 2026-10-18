@@ -2389,8 +2389,7 @@ pub fn open_system_tray() {
             return;
         }
 
-        let tray_class = PCSTR(c"Shell_TrayWnd".as_ptr() as *const u8);
-        let hwnd = FindWindowA(tray_class, windows::core::PCSTR::null()).unwrap_or_default();
+        let hwnd = crate::tray_host::explorer_taskbar().unwrap_or_default();
         if hwnd.0.is_null() {
             return;
         }
@@ -2569,8 +2568,7 @@ pub fn open_system_tray() {
                 }
 
                 // Revert transparency
-                let tray_class = PCSTR(c"Shell_TrayWnd".as_ptr() as *const u8);
-                let hwnd = FindWindowA(tray_class, PCSTR::null()).unwrap_or_default();
+                let hwnd = crate::tray_host::explorer_taskbar().unwrap_or_default();
                 if !hwnd.0.is_null() {
                     let exstyle = GetWindowLongA(hwnd, GWL_EXSTYLE);
                     let _ = SetLayeredWindowAttributes(
@@ -4325,6 +4323,20 @@ pub async fn open_system_action(action: SystemAction) -> Result<(), String> {
             Err("Windows could not open this system tool.".into())
         } else {
             Ok(())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// A double click on a tray icon in the notch, as on the taskbar.
+#[tauri::command]
+pub async fn double_click_tray_icon(tray_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if crate::tray_host::has_icon(&tray_id) {
+            crate::tray_host::click(&tray_id, crate::tray_host::Button::Double)
+        } else {
+            crate::tray::interact(&tray_id, false)
         }
     })
     .await

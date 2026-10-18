@@ -18,6 +18,7 @@ mod shelf_preview;
 mod state;
 mod toast;
 mod tray;
+mod tray_host;
 mod tray_manager;
 mod types;
 mod updater;
@@ -159,6 +160,7 @@ fn main() {
             get_active_windows,
             get_tray_apps,
             get_tray_state,
+            double_click_tray_icon,
             show_tray_context_menu,
             activate_tray_icon,
             open_system_action,
@@ -425,6 +427,7 @@ fn main() {
             services::setup_keyboard_hook(app.handle().clone());
             launcher::start_hotkey_listener(app.handle().clone());
             notifications::start(app.handle().clone());
+            tray_host::start(app.handle().clone());
             window_memory::start(app.handle().clone());
             setup_taskbar_hook();
             setup_audio_visualization(app.handle().clone());

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Download, EyeOff, LayoutGrid, ListX, RotateCcw } from "lucide-react";
+import { Download, EyeOff, LayoutGrid, ListX, RotateCcw, Zap } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { useStoredFlag, useStoredString } from "./useStoredSetting";
 import {
@@ -20,9 +20,13 @@ import {
  * settings; what is chosen here changes Bloom's tray, not Windows'.
  */
 
-function AppImage({ path }: { path: string }) {
-	const [src, setSrc] = useState<string | null>(null);
+function AppImage({ path, image }: { path: string; image?: string | null }) {
+	const [src, setSrc] = useState<string | null>(image ?? null);
 	useEffect(() => {
+		if (image) {
+			setSrc(image);
+			return;
+		}
 		let alive = true;
 		void invoke<string | null>("get_app_icon", { path })
 			.then((icon) => alive && setSrc(icon ?? null))
@@ -30,7 +34,7 @@ function AppImage({ path }: { path: string }) {
 		return () => {
 			alive = false;
 		};
-	}, [path]);
+	}, [path, image]);
 	return src ? (
 		<img src={src} alt="" width={16} height={16} style={{ objectFit: "contain" }} />
 	) : (
@@ -42,6 +46,7 @@ export function TraySettings() {
 	const [state, setState] = useState<TrayState | null>(null);
 	const [placementsRaw, setPlacementsRaw] = useStoredString(TRAY_PLACEMENT_KEY, "{}");
 	const [followManager, setFollowManager] = useStoredFlag(TRAY_FOLLOW_KEY, true);
+	const [liveTray, setLiveTray] = useStoredFlag("bloom-tray-live", true);
 	const [imported, setImported] = useState<number | null>(null);
 	const placements = useMemo(() => parsePlacements(placementsRaw), [placementsRaw]);
 
@@ -94,6 +99,24 @@ export function TraySettings() {
 			<div className="setting-group-label">System Tray</div>
 			<div className="setting-group">
 				<SettingRow
+					icon={Zap}
+					label="Live Tray"
+					desc={
+						liveTray
+							? "Icons show and update instantly, with their own pictures, and clicks open at once"
+							: "Icons are read from Windows' tray when it opens (takes effect after restarting Bloom)"
+					}
+				>
+					<label className="toggle-switch">
+						<input
+							type="checkbox"
+							checked={liveTray}
+							onChange={(e) => setLiveTray(e.target.checked)}
+						/>
+						<span className="slider"></span>
+					</label>
+				</SettingRow>
+				<SettingRow
 					icon={EyeOff}
 					label="Follow Tray Icon Manager"
 					desc={
@@ -144,7 +167,7 @@ export function TraySettings() {
 						<div key={icon.id}>
 							<div className="setting-item">
 								<div className="setting-icon-bg">
-									<AppImage path={icon.path} />
+									<AppImage path={icon.path} image={icon.image} />
 								</div>
 								<div className="setting-info">
 									<span className="setting-label">{label}</span>

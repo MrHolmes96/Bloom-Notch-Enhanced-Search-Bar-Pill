@@ -244,10 +244,10 @@ pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) -> bool {
             return false;
         }
 
-        let tray_class = windows::core::PCSTR(c"Shell_TrayWnd".as_ptr() as *const u8);
         let secondary_tray_class =
             windows::core::PCSTR(c"Shell_SecondaryTrayWnd".as_ptr() as *const u8);
-        let Ok(tray_hwnd) = FindWindowA(tray_class, windows::core::PCSTR::null()) else {
+        // Explorer's, not Bloom's tray host window of the same class.
+        let Some(tray_hwnd) = crate::tray_host::explorer_taskbar() else {
             return false;
         };
         let secondary_tray = FindWindowA(secondary_tray_class, windows::core::PCSTR::null()).ok();

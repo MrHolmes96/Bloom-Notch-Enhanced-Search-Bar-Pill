@@ -1,14 +1,23 @@
 import { memo, useEffect, useState } from "react";
 
 /**
- * Dock icons drawn at exactly the same size. Icons come with different
- * amounts of empty space around them (a 48 px icon centred in a 256 px image,
- * Tray Bin's 16 px art with a margin, shortcut icons with padding), so each
- * one is cropped to its visible pixels and centred in a square before it is
- * shown. The result is cached per image.
+ * Icons drawn at the same size. Icons come with different amounts of empty
+ * space around them (a 48 px icon centred in a 256 px image, Tray Bin's 16 px
+ * art with a margin, shortcut icons with padding), so each one is cropped to
+ * its visible pixels first.
+ *
+ * Cropped alone, a full square (RuneLite's tile, a Windows logo plate) then
+ * looks much bigger than a round or thin icon of the same width. So, as
+ * launchers on phones do, each icon is also scaled by how much of its box it
+ * actually covers: every icon ends up covering about the same area, which is
+ * what reads as "the same size". A circle fills the square, a full square is
+ * drawn at about 89 % of it, and shapes in between in proportion. The result
+ * is cached per image.
  */
 
 const SIZE = 128;
+/** The share of the square a circle covers; every icon is matched to it. */
+const TARGET_COVERAGE = Math.PI / 4;
 const done = new Map<string, string>();
 const working = new Map<string, Promise<string>>();
 
@@ -58,7 +67,25 @@ function cropToContent(src: string, pixelArt: boolean): Promise<string> {
 
 		const boxW = maxX - minX + 1;
 		const boxH = maxY - minY + 1;
-		const scale = SIZE / Math.max(boxW, boxH);
+		// The shape's area, measured per row from its first to its last
+		// visible pixel, so a ring or a glyph with holes counts as solid.
+		let area = 0;
+		for (let y = minY; y <= maxY; y++) {
+			let left = -1;
+			let right = -1;
+			for (let x = minX; x <= maxX; x++) {
+				if (data[(y * width + x) * 4 + 3] > 16) {
+					if (left < 0) left = x;
+					right = x;
+				}
+			}
+			if (left >= 0) area += right - left + 1;
+		}
+		const fit = SIZE / Math.max(boxW, boxH);
+		const coverage = (area * fit * fit) / (SIZE * SIZE);
+		// Never larger than fitting the square, and never tiny for odd shapes.
+		const balance = coverage > TARGET_COVERAGE ? Math.sqrt(TARGET_COVERAGE / coverage) : 1;
+		const scale = fit * Math.max(balance, 0.8);
 		const drawW = boxW * scale;
 		const drawH = boxH * scale;
 

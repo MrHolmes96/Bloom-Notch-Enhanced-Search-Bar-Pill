@@ -3645,6 +3645,7 @@ function App() {
 											<TrayPanel
 												onBack={() => setBloomMode("command-center")}
 												onHeightChange={setTrayHeight}
+												onPinChange={setNotchPinned}
 											/>
 										</motion.div>
 									)}

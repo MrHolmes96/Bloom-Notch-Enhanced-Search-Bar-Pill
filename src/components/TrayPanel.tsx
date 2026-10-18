@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
 	ChevronDown,
 	ChevronLeft,
@@ -10,6 +11,7 @@ import {
 	RefreshCw
 } from "lucide-react";
 import { useStoredFlag, useStoredString } from "../settings/useStoredSetting";
+import { DockIconImage } from "../dockIcon";
 import {
 	TRAY_FOLLOW_KEY,
 	TRAY_PLACEMENT_KEY,
@@ -26,8 +28,11 @@ import "./TrayPanel.css";
 
 /**
  * The system tray inside the notch, opened from the control center's tray
- * button: one tile per tray icon. Click runs an icon's default action,
- * right-click opens the app's own tray menu, as on the taskbar.
+ * button: one tile per tray icon, with the icon's live picture (as Windows'
+ * tray shows it right now), updated the moment an app changes it. Click runs
+ * an icon's default action, double click its double-click action, right-click
+ * opens the app's own tray menu, as on the taskbar. The notch stays open while
+ * the menu or flyout an icon opened is on screen.
  *
  * Hidden icons (hidden here, or by Tray Icon Manager) are in the "Hidden
  * icons" menu below, where they still work. The pencil switches to editing:
@@ -54,6 +59,7 @@ export function trayPanelHeight(shown: number, hidden: number, menuOpen: boolean
 	return 4 + 26 + 6 + Math.min(body, MAX_BODY) + 12;
 }
 
+/** Program icons, for tray icons Bloom has no live picture of. */
 const iconCache = new Map<string, string | null>();
 
 function TrayTile({
@@ -62,7 +68,8 @@ function TrayTile({
 	visibility,
 	editing,
 	onChange,
-	onError
+	onError,
+	onInteract
 }: {
 	icon: TrayIconInfo;
 	label: string;
@@ -70,18 +77,22 @@ function TrayTile({
 	editing: boolean;
 	onChange: (visibility: Visibility) => void;
 	onError: (text: string) => void;
+	onInteract: (id: string) => void;
 }) {
-	const [image, setImage] = useState<string | null>(() => iconCache.get(icon.path) ?? null);
+	const [programIcon, setProgramIcon] = useState<string | null>(
+		() => iconCache.get(icon.path) ?? null
+	);
 
 	useEffect(() => {
-		if (iconCache.has(icon.path)) return;
+		if (icon.image || iconCache.has(icon.path)) return;
 		void invoke<string | null>("get_app_icon", { path: icon.path })
 			.then((value) => {
 				iconCache.set(icon.path, value ?? null);
-				setImage(value ?? null);
+				setProgramIcon(value ?? null);
 			})
 			.catch(() => iconCache.set(icon.path, null));
-	}, [icon.path]);
+	}, [icon.path, icon.image]);
+	const image = icon.image ?? programIcon;
 
 	const title = editing
 		? label
@@ -96,22 +107,27 @@ function TrayTile({
 				onClick={(e) => {
 					e.stopPropagation();
 					if (editing) {
-						onChange(visibility === "hidden" ? "shown" : "hidden");
+						if (e.detail <= 1) onChange(visibility === "hidden" ? "shown" : "hidden");
 						return;
 					}
-					invoke("activate_tray_icon", { trayId: icon.id }).catch((err) => onError(String(err)));
+					onInteract(icon.id);
+					// The second click of a double click is the icon's double
+					// click, as on the taskbar.
+					const command = e.detail >= 2 ? "double_click_tray_icon" : "activate_tray_icon";
+					invoke(command, { trayId: icon.id }).catch((err) => onError(String(err)));
 				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
 					if (editing) return;
+					onInteract(icon.id);
 					invoke("show_tray_context_menu", { trayId: icon.id }).catch((err) =>
 						onError(String(err))
 					);
 				}}
 			>
 				{image ? (
-					<img className="tray-tile-icon" src={image} alt="" draggable={false} />
+					<DockIconImage className="tray-tile-icon" src={image} alt="" />
 				) : (
 					<span className="tray-tile-icon tray-tile-letter">{label[0]}</span>
 				)}
@@ -136,10 +152,13 @@ function TrayTile({
 
 export function TrayPanel({
 	onBack,
-	onHeightChange
+	onHeightChange,
+	onPinChange
 }: {
 	onBack: () => void;
 	onHeightChange: (height: number) => void;
+	/** Keeps the notch open while an icon's menu or flyout is on screen. */
+	onPinChange?: (pinned: boolean) => void;
 }) {
 	const [state, setState] = useState<TrayState | null>(null);
 	const [loading, setLoading] = useState(false);
@@ -150,20 +169,71 @@ export function TrayPanel({
 	const [followManager] = useStoredFlag(TRAY_FOLLOW_KEY, true);
 	const placements = useMemo(() => parsePlacements(placementsRaw), [placementsRaw]);
 
-	const load = async () => {
-		setLoading(true);
+	// One load at a time; a change while loading loads once more after.
+	const loadingRef = useRef(false);
+	const againRef = useRef(false);
+	const load = async (manual = false) => {
+		if (loadingRef.current) {
+			againRef.current = true;
+			return;
+		}
+		loadingRef.current = true;
+		if (manual) setLoading(true);
 		try {
-			setState(await invoke<TrayState>("get_tray_state"));
+			do {
+				againRef.current = false;
+				setState(await invoke<TrayState>("get_tray_state"));
+			} while (againRef.current);
 			setError(null);
 		} catch (e) {
 			setError(String(e));
 		} finally {
+			loadingRef.current = false;
 			setLoading(false);
 		}
 	};
 
 	useEffect(() => {
 		void load();
+		// Icons appear, change and leave live, as in Windows' tray.
+		const changed = listen("tray-changed", () => void load());
+		return () => {
+			void changed.then((f) => f());
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
+
+	// A message about a failed click clears itself.
+	useEffect(() => {
+		if (!error) return;
+		const timer = window.setTimeout(() => setError(null), 4000);
+		return () => window.clearTimeout(timer);
+	}, [error]);
+
+	// While an icon's menu or flyout is open the notch stays open, so it is
+	// still there when the menu closes. Bloom says when that happens; if it
+	// can't tell (an older way of clicking), the pin lets go after a while.
+	const pinTimerRef = useRef<number | null>(null);
+	const pinChangeRef = useRef(onPinChange);
+	pinChangeRef.current = onPinChange;
+	const releasePin = () => {
+		if (pinTimerRef.current !== null) {
+			window.clearTimeout(pinTimerRef.current);
+			pinTimerRef.current = null;
+			pinChangeRef.current?.(false);
+		}
+	};
+	const pin = () => {
+		if (pinTimerRef.current !== null) window.clearTimeout(pinTimerRef.current);
+		else pinChangeRef.current?.(true);
+		pinTimerRef.current = window.setTimeout(releasePin, 10000);
+	};
+	useEffect(() => {
+		const ended = listen<string>("tray-interaction-end", () => releasePin());
+		return () => {
+			void ended.then((f) => f());
+			releasePin();
+		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
@@ -194,6 +264,7 @@ export function TrayPanel({
 					editing={editing}
 					onChange={(next) => change(icon, next)}
 					onError={setError}
+					onInteract={pin}
 				/>
 			))}
 		</div>
@@ -216,7 +287,7 @@ export function TrayPanel({
 				</button>
 				<button
 					className="qp-icon-btn"
-					onClick={() => void load()}
+					onClick={() => void load(true)}
 					disabled={loading}
 					aria-label="Refresh"
 					title="Refresh"
