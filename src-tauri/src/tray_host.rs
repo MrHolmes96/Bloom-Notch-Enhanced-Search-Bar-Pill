@@ -102,6 +102,34 @@ enum IconSource {
     Name(String, String),
 }
 
+impl IconSource {
+    fn module(&self) -> &str {
+        match self {
+            IconSource::Id(module, _) | IconSource::Name(module, _) => module,
+        }
+    }
+
+    /// The same source with its file as a full path: a bare file name is
+    /// looked for next to the program that owns the icon, never elsewhere,
+    /// so another file of the same name can't be picked up.
+    fn located(self, program: &str) -> Option<IconSource> {
+        let module = self.module();
+        let path = if std::path::Path::new(module).is_absolute() {
+            std::path::PathBuf::from(module)
+        } else {
+            std::path::Path::new(program).parent()?.join(module)
+        };
+        if !path.is_file() {
+            return None;
+        }
+        let path = path.to_string_lossy().into_owned();
+        Some(match self {
+            IconSource::Id(_, id) => IconSource::Id(path, id),
+            IconSource::Name(_, name) => IconSource::Name(path, name),
+        })
+    }
+}
+
 struct Icon {
     id: String,
     hwnd: isize,
@@ -634,7 +662,8 @@ pub fn snapshot() -> Vec<HostedIcon> {
     }
     // Pictures are made outside the lock, from copies, so the host never
     // waits on them; an icon changed meanwhile keeps its newer picture.
-    let wanted: Vec<(String, u64, Option<isize>, Option<IconSource>)> = {
+    type Wanted = (String, u64, Option<isize>, Option<IconSource>);
+    let wanted: Vec<Wanted> = {
         let Ok(icons) = ICONS.lock() else {
             return Vec::new();
         };
@@ -645,7 +674,11 @@ pub fn snapshot() -> Vec<HostedIcon> {
                 let copy = icon.picture.and_then(|p| unsafe {
                     CopyIcon(HICON(p as *mut _)).ok().map(|c| c.0 as isize)
                 });
-                (icon.id.clone(), icon.serial, copy, icon.source.clone())
+                let source = icon
+                    .source
+                    .clone()
+                    .and_then(|source| source.located(&icon.path));
+                (icon.id.clone(), icon.serial, copy, source)
             })
             .collect()
     };
