@@ -1073,6 +1073,17 @@ function App() {
 							.catch(() => {});
 						localStorage.setItem("bloom-first-run", "done");
 					}
+					// "Only Empty and Full Icons" could be left on from an earlier
+					// build, which shows the full bin for any amount. Switched off
+					// once so the bars follow the bin's size; it can be turned on
+					// again in Settings.
+					if (getVal("bloom-dock-bin-levels") !== "5") {
+						localStorage.setItem("bloom-dock-bin-only-empty-full", "false");
+						localStorage.setItem("bloom-dock-bin-levels", "5");
+						void invoke("save_setting", { key: "bloom-dock-bin-only-empty-full", value: "false" })
+							.then(() => invoke("save_setting", { key: "bloom-dock-bin-levels", value: "5" }))
+							.catch(() => {});
+					}
 					const rawDockMode = getVal("bloom-dock-mode", "smart") as string;
 					const dockMode = rawDockMode === "auto-hide" ? "smart" : rawDockMode;
 					const syncWindows = async () => {

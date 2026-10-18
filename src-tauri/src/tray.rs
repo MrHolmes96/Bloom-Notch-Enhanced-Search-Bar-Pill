@@ -1107,18 +1107,18 @@ pub fn interact(key: &str, context_menu: bool) -> Result<(), String> {
         };
         Shell_NotifyIconGetRect(&icon.identifier)
             .map_err(|_| "This tray icon is no longer running.")?;
-        // The notch stays open while what this opens (its menu) is open.
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(icon.identifier.hWnd, Some(&mut pid));
+        // The notch stays open while the menu this opens is open.
         let mut clicked_at = POINT::default();
         let _ = GetCursorPos(&mut clicked_at);
-        let popups_before = crate::tray_host::open_popups(pid, clicked_at);
+        let excluded = crate::tray_host::bloom_processes();
+        let menus_before = crate::tray_host::open_menus(clicked_at, &excluded);
         let watch = || {
             crate::tray_host::watch_interaction(
                 key.to_string(),
-                pid,
                 clicked_at,
-                popups_before.clone(),
+                excluded.clone(),
+                menus_before.clone(),
+                context_menu,
             )
         };
         if context_menu {

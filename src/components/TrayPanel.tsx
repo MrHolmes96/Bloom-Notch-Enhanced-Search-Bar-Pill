@@ -77,7 +77,7 @@ function TrayTile({
 	editing: boolean;
 	onChange: (visibility: Visibility) => void;
 	onError: (text: string) => void;
-	/** Holds the notch open for this click; call the result if it failed. */
+	/** Holds the notch open for a right click; call the result if it failed. */
 	onInteract: (id: string) => () => void;
 }) {
 	const [programIcon, setProgramIcon] = useState<string | null>(
@@ -111,14 +111,11 @@ function TrayTile({
 						if (e.detail <= 1) onChange(visibility === "hidden" ? "shown" : "hidden");
 						return;
 					}
-					const failed = onInteract(icon.id);
 					// The second click of a double click is the icon's double
-					// click, as on the taskbar.
+					// click, as on the taskbar. A left click opens the app's
+					// window, so the notch only stays open if a menu appears.
 					const command = e.detail >= 2 ? "double_click_tray_icon" : "activate_tray_icon";
-					invoke(command, { trayId: icon.id }).catch((err) => {
-						failed();
-						onError(String(err));
-					});
+					invoke(command, { trayId: icon.id }).catch((err) => onError(String(err)));
 				}}
 				onContextMenu={(e) => {
 					e.preventDefault();
@@ -215,10 +212,12 @@ export function TrayPanel({
 		return () => window.clearTimeout(timer);
 	}, [error]);
 
-	// While an icon's menu or flyout is open the notch stays open, however
-	// long that is, so it is still there when the menu closes. Bloom says when
-	// what each click opened is gone again; a click that failed lets go at
-	// once. Only if Bloom never answers does the notch let go, after 10 min.
+	// While an icon's menu is open the notch stays open, however long that
+	// is, so it is still there when the menu closes: from a right click on
+	// (a menu is coming), or from when a left click turns out to open one
+	// (`tray-menu-open`). Bloom says when the menu is gone; a click that
+	// failed lets go at once. Only if Bloom never answers does the notch let
+	// go, after 10 min.
 	const openRef = useRef(new Map<string, number>());
 	const backstopRef = useRef<number | null>(null);
 	const pinChangeRef = useRef(onPinChange);
@@ -253,8 +252,10 @@ export function TrayPanel({
 		};
 	};
 	useEffect(() => {
+		const opened = listen<string>("tray-menu-open", (event) => void pin(event.payload));
 		const ended = listen<string>("tray-interaction-end", (event) => release(event.payload));
 		return () => {
+			void opened.then((f) => f());
 			void ended.then((f) => f());
 			releaseAll();
 		};

@@ -36,6 +36,7 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-dock-bin-position` | `"end"` / `"start"` | `"end"` | Where the Recycle Bin sits: its own section at the right end of the dock, or right after Start. |
 | `bloom-dock-bin-icons` | `"traybin"` / `"windows"` | `"traybin"` | Recycle Bin icons: Tray Bin's bin, drawn sharp at the dock's size, with one bar for anything under 100 MB and one more at 100 MB, 500 MB, 1 GB and 5 GB (five, full); or the Windows ones. The `"bloom"` value of an earlier build means `"traybin"`. |
 | `bloom-dock-bin-only-empty-full` | `"true"` / `"false"` | `"false"` | Use only the empty and full icons instead of the 100 MB / 500 MB / 1 GB / 5 GB steps. |
+| `bloom-dock-bin-levels` | `"5"` | absent | Set once when "Only Empty and Full Icons" was switched off so the five size bars apply (it could be left on by an earlier build). |
 | `bloom-dock-bin-double-click` | `"open"` / `"empty"` | `"open"` | What a double click on the Recycle Bin does. With `"empty"`, a single click still opens it. |
 | `bloom-dock-bin-confirm` | `"true"` / `"false"` | `"true"` | Ask before emptying the Recycle Bin. |
 | `bloom-dock-bin-sound` | `"true"` / `"false"` | `"true"` | Play the Windows sound when emptying. |

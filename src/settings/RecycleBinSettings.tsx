@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
 	Bell,
@@ -65,6 +65,37 @@ export function RecycleBinSettings() {
 		[KEYS.sound]: (v) => setSound(v !== false),
 		[KEYS.progress]: (v) => setProgress(v !== false)
 	});
+
+	// What Bloom itself uses (settings.json), in case this window's copy is
+	// out of date, so a switch never shows one thing while the dock does another.
+	useEffect(() => {
+		void invoke<Record<string, unknown>>("load_settings")
+			.then((settings) => {
+				const text = (key: string) => {
+					const value = settings[key];
+					if (value === undefined || value === null) return null;
+					localStorage.setItem(key, String(value));
+					return String(value);
+				};
+				const position = text(KEYS.position);
+				if (position !== null) setPosition(position);
+				const iconSet = text(KEYS.icons);
+				if (iconSet !== null) setIcons(iconSet === "windows" ? "windows" : "traybin");
+				const action = text(KEYS.doubleClick);
+				if (action !== null) setDoubleClick(action);
+				const flags: [string, (v: boolean) => void][] = [
+					[KEYS.onlyEmptyFull, setOnlyEmptyFull],
+					[KEYS.confirm, setConfirm],
+					[KEYS.sound, setSound],
+					[KEYS.progress, setProgress]
+				];
+				for (const [key, set] of flags) {
+					const value = text(key);
+					if (value !== null) set(value !== "false");
+				}
+			})
+			.catch(() => {});
+	}, []);
 
 	const flag = (key: string, set: (v: boolean) => void) => (next: boolean) => {
 		set(next);

@@ -855,26 +855,56 @@ pub enum Button {
 
 /// Menus and flyouts on screen: Windows' own menus, and pop-up windows (no
 /// title bar) of the icon's program.
-/// A window a tray click may have opened: its handle, and whether it is a
-/// menu (Windows' own menus, and the pop-up menus and flyouts apps draw
-/// themselves, which are tool or top-most pop-ups) rather than, say, an app's
-/// borderless main window.
-pub(crate) type Popup = (isize, bool);
+/// Bloom and the processes it started (its WebView2 browser processes, which
+/// draw its tooltips as windows of their own): never an app's menu.
+pub(crate) fn bloom_processes() -> Vec<u32> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    let own = std::process::id();
+    let mut found = vec![own];
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return found;
+        };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                if entry.th32ParentProcessID == own {
+                    found.push(entry.th32ProcessID);
+                }
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot);
+    }
+    found
+}
 
-/// The visible menus; the caption-less pop-ups of process `pid`; and the
-/// floating pop-ups of other processes at `point` (where the click was), as
-/// some apps draw their tray menu in a helper process (Steam's web helper).
-pub(crate) fn open_popups(pid: u32, point: POINT) -> Vec<Popup> {
+/// The menus on screen that a tray click at `point` may have opened, by
+/// handle: Windows' own menus (`#32768`), and the menus apps draw themselves
+/// (a tool or top-most pop-up without a caption, of menu width, that takes
+/// clicks) opening at the pointer, in the app's process or a helper's
+/// (Steam's web helper). An app's window or panel opened elsewhere is not a
+/// menu, so it never holds the notch open.
+pub(crate) fn open_menus(point: POINT, excluded: &[u32]) -> Vec<isize> {
     use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetWindowLongW, GetWindowRect, IsWindowVisible, GWL_EXSTYLE,
-        GWL_STYLE, WS_CAPTION,
+        GWL_STYLE, WS_CAPTION, WS_EX_TRANSPARENT,
     };
-    struct Search {
-        pid: u32,
+    struct Search<'a> {
         point: POINT,
-        own: u32,
-        found: Vec<Popup>,
+        excluded: &'a [u32],
+        found: Vec<isize>,
     }
     unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> windows::core::BOOL {
         let search = &mut *(param.0 as *mut Search);
@@ -883,41 +913,47 @@ pub(crate) fn open_popups(pid: u32, point: POINT) -> Vec<Popup> {
         }
         let mut class = [0u16; 16];
         let length = GetClassNameW(hwnd, &mut class) as usize;
-        let system_menu = &class[..length.min(class.len())]
-            == "#32768".encode_utf16().collect::<Vec<_>>().as_slice();
-        if system_menu {
-            search.found.push((hwnd.0 as isize, true));
+        if &class[..length.min(class.len())]
+            == "#32768".encode_utf16().collect::<Vec<_>>().as_slice()
+        {
+            search.found.push(hwnd.0 as isize);
             return true.into();
         }
         let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-        if style & WS_POPUP.0 == 0 || style & WS_CAPTION.0 == WS_CAPTION.0 {
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        if style & WS_POPUP.0 == 0
+            || style & WS_CAPTION.0 == WS_CAPTION.0
+            || ex_style & WS_EX_TRANSPARENT.0 != 0
+            || ex_style & (WS_EX_TOOLWINDOW.0 | WS_EX_TOPMOST.0) == 0
+        {
             return true.into();
         }
-        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-        let floating = ex_style & (WS_EX_TOOLWINDOW.0 | WS_EX_TOPMOST.0) != 0;
         let mut owner = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut owner));
-        if owner == search.pid {
-            search.found.push((hwnd.0 as isize, floating));
-        } else if floating && owner != search.own {
-            let mut rect = RECT::default();
-            let near = GetWindowRect(hwnd, &mut rect).is_ok()
-                && rect.right - rect.left > 8
-                && rect.bottom - rect.top > 8
-                && search.point.x >= rect.left - 48
-                && search.point.x <= rect.right + 48
-                && search.point.y >= rect.top - 48
-                && search.point.y <= rect.bottom + 48;
-            if near {
-                search.found.push((hwnd.0 as isize, true));
-            }
+        if search.excluded.contains(&owner) {
+            return true.into();
+        }
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return true.into();
+        }
+        let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+        let reach = 32 * dpi / 96;
+        let menu_sized = width > 8 && height > 8 && width <= 720 * dpi / 96;
+        let at_pointer = search.point.x >= rect.left - reach
+            && search.point.x <= rect.right + reach
+            && search.point.y >= rect.top - reach
+            && search.point.y <= rect.bottom + reach;
+        if menu_sized && at_pointer {
+            search.found.push(hwnd.0 as isize);
         }
         true.into()
     }
     let mut search = Search {
-        pid,
         point,
-        own: std::process::id(),
+        excluded,
         found: Vec::new(),
     };
     unsafe {
@@ -926,32 +962,48 @@ pub(crate) fn open_popups(pid: u32, point: POINT) -> Vec<Popup> {
     search.found
 }
 
-/// Tells the notch when what a click opened is gone again, so the notch stays
-/// open until then: for as long as a menu or flyout is open, however long
-/// that is, and up to two minutes for another window the click opened.
+/// Watches what a tray click opened. While a menu it opened is on screen the
+/// notch stays open, however long that is. A right click holds the notch open
+/// at once (`pinned`), as a menu is coming; a left click only once a menu
+/// actually appears (`tray-menu-open`), so opening an app's window lets the
+/// notch close as usual. `tray-interaction-end` says when the menu is gone.
 /// `before` is what was on screen before the click.
-pub(crate) fn watch_interaction(id: String, pid: u32, point: POINT, before: Vec<Popup>) {
+pub(crate) fn watch_interaction(
+    id: String,
+    point: POINT,
+    excluded: Vec<u32>,
+    before: Vec<isize>,
+    pinned: bool,
+) {
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
         let mut seen = false;
+        let mut announced = false;
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(120));
-            let opened: Vec<Popup> = open_popups(pid, point)
-                .into_iter()
-                .filter(|(hwnd, _)| !before.iter().any(|(old, _)| old == hwnd))
-                .collect();
-            let menu = opened.iter().any(|(_, menu)| *menu);
-            let other = !opened.is_empty() && !menu;
-            seen |= !opened.is_empty();
-            let elapsed = started.elapsed().as_millis();
-            let open = menu || (other && elapsed <= 120_000);
-            // Nothing opened at all: the click did something else.
-            if !open && (seen || elapsed > 1500) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let open = open_menus(point, &excluded)
+                .iter()
+                .any(|hwnd| !before.contains(hwnd));
+            if open && !seen && !pinned {
+                if let Some(app) = APP.get() {
+                    let _ = app.emit_to("main", "tray-menu-open", id.clone());
+                }
+                announced = true;
+            }
+            seen |= open;
+            let elapsed = started.elapsed();
+            // No menu at all: the click did something else.
+            if !open && (seen || elapsed.as_millis() > 1500) {
+                break;
+            }
+            if elapsed.as_secs() > 600 {
                 break;
             }
         }
-        if let Some(app) = APP.get() {
-            let _ = app.emit_to("main", "tray-interaction-end", id);
+        if pinned || announced {
+            if let Some(app) = APP.get() {
+                let _ = app.emit_to("main", "tray-interaction-end", id);
+            }
         }
     });
 }
@@ -979,7 +1031,8 @@ pub fn click(id: &str, button: Button) -> Result<(), String> {
     unsafe {
         let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut cursor);
     }
-    let before = open_popups(pid, cursor);
+    let excluded = bloom_processes();
+    let before = open_menus(cursor, &excluded);
     // The app may bring its menu or window to the front.
     crate::foreground::grant_to(pid);
     let anchor = ((cursor.y as u32 & 0xFFFF) << 16) | (cursor.x as u32 & 0xFFFF);
@@ -1016,6 +1069,12 @@ pub fn click(id: &str, button: Button) -> Result<(), String> {
             }
         }
     }
-    watch_interaction(id.to_string(), pid, cursor, before);
+    watch_interaction(
+        id.to_string(),
+        cursor,
+        excluded,
+        before,
+        matches!(button, Button::Right),
+    );
     Ok(())
 }
