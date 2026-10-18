@@ -459,20 +459,8 @@ pub fn setup_thumbnail_capture(_app_handle: AppHandle) {
     unsafe {
         use windows::Win32::UI::Accessibility::SetWinEventHook;
         use windows::Win32::UI::WindowsAndMessaging::{
-            EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART,
-            WINEVENT_OUTOFCONTEXT,
+            EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT,
         };
-
-        let hook = SetWinEventHook(
-            EVENT_SYSTEM_MINIMIZESTART,
-            EVENT_SYSTEM_MINIMIZEEND,
-            None,
-            Some(thumbnail_capture_proc),
-            0,
-            0,
-            WINEVENT_OUTOFCONTEXT,
-        );
-        Box::leak(Box::new(hook));
 
         let focus_hook = SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
@@ -485,7 +473,7 @@ pub fn setup_thumbnail_capture(_app_handle: AppHandle) {
         );
         Box::leak(Box::new(focus_hook));
     }
-    keep_front_snapshot_current();
+    prepare_capture();
 }
 
 unsafe extern "system" fn focus_event_proc(
@@ -507,6 +495,15 @@ unsafe extern "system" fn focus_event_proc(
         GetWindowLongW, IsWindow, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
     };
 
+    // The app window that was in front just lost it, while it is still on
+    // screen: its snapshot is taken now, once, so its preview (behind other
+    // windows or minimized later) is how it last looked. A window is never
+    // taken while it is the one in use, which could disturb a game.
+    let previous = LAST_FRONT.load(Ordering::Relaxed);
+    if previous != 0 && previous != hwnd.0 as isize {
+        std::thread::spawn(move || refresh_snapshot(HWND(previous as *mut _), 2000));
+    }
+
     if !IsWindow(Some(hwnd)).as_bool() {
         return;
     }
@@ -523,21 +520,29 @@ unsafe extern "system" fn focus_event_proc(
     }
 
     let hwnd_raw = hwnd.0 as isize;
+    LAST_FRONT.store(hwnd_raw, Ordering::Relaxed);
     if let Some(map) = crate::state::FOCUS_TIMESTAMPS.get() {
         if let Ok(mut guard) = map.lock() {
             guard.insert(hwnd_raw, crate::utils::get_now_ms());
         }
     }
 
-    // Keep the thumbnail cache warm for the focused window so that hovering a
-    // later-minimized window uses the cached image instead of restoring it.
-    // A moment after it comes to the front, so an app just restored (a
-    // browser) has drawn itself again by then.
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(700));
-        refresh_snapshot(HWND(hwnd_raw as *mut _), 2000);
-    });
+    // A window with no snapshot at all gets one a moment after it first
+    // comes to the front (once), so it has a preview even if it is
+    // minimized before it ever leaves the front.
+    if crate::window_capture::age_ms(hwnd) == i64::MAX {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            let hwnd = HWND(hwnd_raw as *mut _);
+            if crate::window_capture::age_ms(hwnd) == i64::MAX {
+                refresh_snapshot(hwnd, i64::MAX);
+            }
+        });
+    }
 }
+
+/// The app window last in front (Bloom's own windows aside).
+static LAST_FRONT: AtomicIsize = AtomicIsize::new(0);
 
 /// Takes a new snapshot of an app window in front, unless its snapshot is
 /// younger than `fresh_ms`: not minimized, full-screen (games, video:
@@ -581,21 +586,12 @@ fn refresh_snapshot(hwnd: HWND, fresh_ms: i64) {
     let _ = crate::window_capture::take(hwnd, 320, 200);
 }
 
-/// The window in front gets a new snapshot every few seconds while it stays
-/// there, so when it is minimized its preview is how it last looked, as in
-/// Windows' own previews.
-fn keep_front_snapshot_current() {
+/// Sets up window capture a moment after start, so the first preview never
+/// waits for it.
+fn prepare_capture() {
     std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_secs(3));
         crate::window_capture::prepare();
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            if SHUTTING_DOWN.load(Ordering::Relaxed) {
-                return;
-            }
-            let front = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
-            refresh_snapshot(front, 5000);
-        }
     });
 }
 
@@ -607,34 +603,6 @@ impl Drop for ThumbnailCaptureGuard {
     fn drop(&mut self) {
         THUMB_CAPTURE_IN_FLIGHT.store(false, Ordering::Relaxed);
     }
-}
-
-unsafe extern "system" fn thumbnail_capture_proc(
-    _hook: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
-    event: u32,
-    hwnd: HWND,
-    _id_object: i32,
-    _id_child: i32,
-    _event_thread: u32,
-    _ms_event_time: u32,
-) {
-    if hwnd.0.is_null() {
-        return;
-    }
-
-    // Only the restore event is useful here. On MINIMIZESTART the window is
-    // already minimized and can't be taken; the window in front keeps its
-    // snapshot current until then (`keep_front_snapshot_current`).
-    if event != windows::Win32::UI::WindowsAndMessaging::EVENT_SYSTEM_MINIMIZEEND {
-        return;
-    }
-    let hwnd_raw = hwnd.0 as isize;
-    // A moment after being restored, so the app has drawn itself again (a
-    // picture taken before that is see-through and wouldn't be kept anyway).
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(700));
-        refresh_snapshot(HWND(hwnd_raw as *mut _), 300);
-    });
 }
 
 unsafe extern "system" fn taskbar_event_proc(
