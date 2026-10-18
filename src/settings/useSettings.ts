@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import { readScale, scaleSyncHandlers, SCALE_KEYS } from "../uiScale";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, emit } from "@tauri-apps/api/event";
-import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { getVersion } from "@tauri-apps/api/app";
 import type { UpdateCheckResult } from "../updater";
 import { useSettingsSync } from "../hooks/useSettingsSync";
@@ -255,7 +254,7 @@ export function useSettings() {
 	useEffect(() => {
 		loadAllSettings();
 
-		isEnabled()
+		invoke<boolean>("startup_enabled")
 			.then(setAutostart)
 			.catch(() => {});
 
@@ -424,16 +423,12 @@ export function useSettings() {
 	}, []);
 
 	// ── Autostart ──
+	// Bloom starts with Windows through a startup task, so it is up before the
+	// other startup apps; the backend falls back to the Run entry if needed.
 	const toggleAutostart = async () => {
 		try {
-			const currentlyEnabled = await isEnabled();
-			if (currentlyEnabled) {
-				await disable();
-				setAutostart(false);
-			} else {
-				await enable();
-				setAutostart(true);
-			}
+			const enabled = await invoke<boolean>("startup_enabled");
+			setAutostart(await invoke<boolean>("startup_set", { enabled: !enabled }));
 		} catch (err) {}
 	};
 

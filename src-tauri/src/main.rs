@@ -16,6 +16,7 @@ mod recycle_bin;
 mod services;
 mod shelf;
 mod shelf_preview;
+mod startup;
 mod state;
 mod toast;
 mod tray;
@@ -50,7 +51,8 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
 
 fn main() {
     let mut args = std::env::args_os();
-    if args.nth(1).as_deref() == Some(std::ffi::OsStr::new("--taskbar-watchdog")) {
+    let first = args.nth(1);
+    if first.as_deref() == Some(std::ffi::OsStr::new("--taskbar-watchdog")) {
         if let (Some(pid), Some(marker)) = (args.next(), args.next()) {
             if let Ok(pid) = pid.to_string_lossy().parse::<u32>() {
                 utils::run_taskbar_watchdog(pid, marker.into());
@@ -58,6 +60,13 @@ fn main() {
         }
         return;
     }
+    // The uninstaller: hand Windows back and leave.
+    if first.as_deref() == Some(std::ffi::OsStr::new(startup::RESTORE_ARG)) {
+        startup::restore_windows();
+        return;
+    }
+    // Started by the startup task as Windows signs in.
+    let autostart = first.as_deref() == Some(std::ffi::OsStr::new(startup::AUTOSTART_ARG));
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), true);
     }
@@ -80,6 +89,14 @@ fn main() {
 
         let h_mutex = CreateMutexW(None, true, windows::core::PCWSTR(mutex_name.as_ptr())).ok();
         let err = GetLastError();
+
+        if err.0 == 183 && autostart {
+            // Already running (started some other way): nothing to open.
+            if let Some(h) = h_mutex {
+                let _ = CloseHandle(h);
+            }
+            return;
+        }
 
         if err.0 == 183 {
             // Another instance is already running — signal it to open settings
@@ -108,6 +125,10 @@ fn main() {
         if let Some(h) = h_mutex {
             let _ = SINGLE_INSTANCE_MUTEX_HANDLE.set(h.0 as isize);
         }
+    }
+
+    if autostart {
+        startup::boost_startup();
     }
 
     brightness::setup_worker();
@@ -162,6 +183,8 @@ fn main() {
             get_tray_apps,
             get_tray_state,
             double_click_tray_icon,
+            startup::startup_enabled,
+            startup::startup_set,
             show_tray_context_menu,
             activate_tray_icon,
             open_system_action,
@@ -429,6 +452,8 @@ fn main() {
             launcher::start_hotkey_listener(app.handle().clone());
             notifications::start(app.handle().clone());
             tray_host::start(app.handle().clone());
+            startup::listen_for_quit(app.handle().clone());
+            startup::migrate(app.handle());
             window_memory::start(app.handle().clone());
             setup_taskbar_hook();
             setup_audio_visualization(app.handle().clone());

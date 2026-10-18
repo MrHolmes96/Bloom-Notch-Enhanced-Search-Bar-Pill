@@ -271,7 +271,7 @@ pub fn restore_native_toasts() {
 
 /// Clears a hidden pop-up left by an earlier run that ended without cleaning
 /// up (a crash), before anything else.
-fn repair_leftover() {
+pub(crate) fn repair_leftover() {
     if let Some(hwnd) = find_toast_window() {
         unsafe {
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);

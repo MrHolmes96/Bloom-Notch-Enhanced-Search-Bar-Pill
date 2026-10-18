@@ -47,7 +47,7 @@ export function GeneralTab({
 		<>
 			<div className="setting-group-label">System</div>
 			<div className="setting-group">
-				<SettingRow icon={Power} label="Launch at Login" desc="Open Bloom automatically">
+				<SettingRow icon={Power} label="Launch at Login" desc="Start with Windows, ahead of other startup apps">
 					<label className="toggle-switch">
 						<input type="checkbox" checked={autostart} onChange={toggleAutostart} />
 						<span className="slider"></span>

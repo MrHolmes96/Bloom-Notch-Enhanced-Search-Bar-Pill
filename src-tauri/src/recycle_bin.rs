@@ -537,37 +537,6 @@ pub fn empty_recycle_bin(app: AppHandle) {
 
 static WATCHING: AtomicBool = AtomicBool::new(false);
 
-/// This user's SID ("S-1-5-21-..."), the name of their folder in each
-/// drive's `$Recycle.Bin`.
-fn user_sid() -> Option<String> {
-    use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
-    use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
-    use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
-    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-    unsafe {
-        let mut token = HANDLE::default();
-        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).ok()?;
-        let mut size = 0u32;
-        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut size);
-        let mut buffer = vec![0u8; size.max(64) as usize];
-        let read = GetTokenInformation(
-            token,
-            TokenUser,
-            Some(buffer.as_mut_ptr() as *mut _),
-            buffer.len() as u32,
-            &mut size,
-        );
-        let _ = CloseHandle(token);
-        read.ok()?;
-        let user = &*(buffer.as_ptr() as *const TOKEN_USER);
-        let mut text = windows::core::PWSTR::null();
-        ConvertSidToStringSidW(user.User.Sid, &mut text).ok()?;
-        let sid = text.to_string().ok();
-        let _ = LocalFree(Some(HLOCAL(text.0 as *mut _)));
-        sid
-    }
-}
-
 /// The folders whose changes mean the bin changed: this user's folder in
 /// `$Recycle.Bin` on every fixed or removable drive (or `$Recycle.Bin` itself
 /// until that folder exists, so its creation is noticed).
@@ -627,7 +596,7 @@ pub fn ensure_watcher(app: &AppHandle) {
     }
     let app = app.clone();
     std::thread::spawn(move || {
-        let sid = user_sid();
+        let sid = crate::utils::current_user_sid();
         let mut last = query_now();
         loop {
             let shown =

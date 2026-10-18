@@ -122,6 +122,7 @@ pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
     let _ = TASKBAR_MARKER.set(marker.clone());
     // Explorer can be restarting at the same time. Retry briefly, but never
     // act on a marker owned by a replacement Bloom process.
+    let mut popups_restored = false;
     for _ in 0..120 {
         if std::fs::read_to_string(&marker)
             .ok()
@@ -129,6 +130,13 @@ pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
             != Some(parent_pid)
         {
             return;
+        }
+        // Windows' volume, brightness and notification pop-ups too, which a
+        // killed Bloom also left hidden.
+        if !popups_restored {
+            crate::services::set_native_osd_suppressed(false);
+            crate::notifications::repair_leftover();
+            popups_restored = true;
         }
         restore_taskbar_after_crash();
         if !marker.exists() {
@@ -488,6 +496,78 @@ pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) -> bool {
         }
         primary_matches && secondary_matches
     }
+}
+
+/// This user's SID ("S-1-5-21-..."): the name of their folder in each
+/// drive's `$Recycle.Bin`, and who the startup task is for.
+pub fn current_user_sid() -> Option<String> {
+    use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
+    use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    unsafe {
+        let mut token = HANDLE::default();
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).ok()?;
+        let mut size = 0u32;
+        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut size);
+        let mut buffer = vec![0u8; size.max(64) as usize];
+        let read = GetTokenInformation(
+            token,
+            TokenUser,
+            Some(buffer.as_mut_ptr() as *mut _),
+            buffer.len() as u32,
+            &mut size,
+        );
+        let _ = CloseHandle(token);
+        read.ok()?;
+        let user = &*(buffer.as_ptr() as *const TOKEN_USER);
+        let mut text = windows::core::PWSTR::null();
+        ConvertSidToStringSidW(user.User.Sid, &mut text).ok()?;
+        let sid = text.to_string().ok();
+        let _ = LocalFree(Some(HLOCAL(text.0 as *mut _)));
+        sid
+    }
+}
+
+/// Puts Windows back as it was before Bloom, with no Bloom running (the
+/// uninstaller's `--restore-windows`): the taskbar with its own auto-hide
+/// setting and position from the crash marker when one is left, else just
+/// visible and opaque again; Windows' volume and brightness pop-ups; and its
+/// notification pop-ups.
+pub fn restore_windows_now() {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsWindowVisible};
+    if TASKBAR_MARKER.get().is_none() {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            let _ = TASKBAR_MARKER.set(
+                PathBuf::from(appdata)
+                    .join("com.sehaz.bloom")
+                    .join("taskbar_hidden.flag"),
+            );
+        }
+    }
+    if taskbar_marker_exists() {
+        // Explorer may be busy right after Bloom quit; try for a few seconds.
+        for _ in 0..20 {
+            restore_taskbar_after_crash();
+            if !taskbar_marker_exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    } else if let Some(tray) = crate::tray_host::explorer_taskbar() {
+        unsafe {
+            let mut rect = windows::Win32::Foundation::RECT::default();
+            let parked =
+                GetWindowRect(tray, &mut rect).is_ok() && (rect.left <= -9000 || rect.top <= -9000);
+            if !IsWindowVisible(tray).as_bool() || parked {
+                set_taskbar_visibility(true, true);
+            } else {
+                set_taskbar_ghost(tray, false);
+            }
+        }
+    }
+    crate::services::set_native_osd_suppressed(false);
+    crate::notifications::repair_leftover();
 }
 
 /// Makes a taskbar window fully transparent and click-through, or reverts it.

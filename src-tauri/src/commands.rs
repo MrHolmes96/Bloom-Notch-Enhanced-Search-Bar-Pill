@@ -3145,6 +3145,8 @@ pub fn restore_taskbar_and_exit(handle: &AppHandle) {
     set_taskbar_visibility(true, true);
     NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
     crate::services::set_native_osd_suppressed(false);
+    // Windows' own notification pop-ups come back when Bloom's go away.
+    crate::notifications::restore_native_toasts();
     // Destroy all webview windows before exiting so Chromium's UnregisterClass for
     // Chrome_WidgetWin_0 finds no open windows (avoids the harmless Error=1412 log).
     for (_, w) in handle.webview_windows() {
