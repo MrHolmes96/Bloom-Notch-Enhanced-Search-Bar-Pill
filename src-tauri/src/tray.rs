@@ -333,6 +333,91 @@ impl TrayState {
     }
 }
 
+/// The notch's tray icons, one per line, for `tray-icons.txt`.
+fn candidates_summary(icons: Vec<(&str, &str, &str, &str, bool)>) -> String {
+    let mut text =
+        String::from("The icons in the notch's tray and where Bloom knows each from.\n\n");
+    for (source, path, tooltip, guid, hidden) in icons {
+        text.push_str(&format!(
+            "{} | {} | tooltip \"{}\" | named \"{}\" | GUID {} | {}\n",
+            source,
+            path,
+            tooltip,
+            tray_name(path, tooltip),
+            if guid.is_empty() { "-" } else { guid },
+            if hidden {
+                "hidden in Windows' tray"
+            } else {
+                "shown"
+            }
+        ));
+    }
+    text
+}
+
+/// Keeps `tray-icons.txt` in Bloom's settings folder up to date (written only
+/// when the icons change), to see where an icon that looks wrong comes from.
+fn write_icon_list(text: &str) {
+    static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    let Ok(mut last) = LAST.lock() else {
+        return;
+    };
+    if *last == text {
+        return;
+    }
+    if let Some(dir) = crate::tray_host::config_dir() {
+        let _ = std::fs::write(dir.join("tray-icons.txt"), text);
+    }
+    *last = text.to_string();
+}
+
+/// A tray icon's name: its app's name, or, when the icon belongs to an app's
+/// background program ("NVIDIA Container", "… Helper", "… Service"), the
+/// name its own tooltip gives it, which is the app's ("NVIDIA app"), without
+/// a state after it ("Phone Link - Disconnected").
+fn tray_name(path: &str, tooltip: &str) -> String {
+    let name = crate::commands::app_display_name(path, None);
+    let tooltip = tooltip
+        .split(" - ")
+        .next()
+        .unwrap_or_default()
+        .split(" – ")
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if tooltip.is_empty() || tooltip.chars().count() > 40 {
+        return name;
+    }
+    if is_background_program(&name) {
+        tooltip.to_string()
+    } else {
+        name
+    }
+}
+
+/// A name that says the program only works in the background for an app.
+fn is_background_program(name: &str) -> bool {
+    const WORDS: [&str; 14] = [
+        "container",
+        "helper",
+        "service",
+        "host",
+        "agent",
+        "broker",
+        "runtime",
+        "daemon",
+        "background",
+        "tray",
+        "server",
+        "engine",
+        "launcher",
+        "updater",
+    ];
+    name.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|word| WORDS.contains(&word))
+}
+
 fn exe_name(path: &str) -> String {
     std::path::Path::new(path.trim().trim_matches('"'))
         .file_name()
@@ -366,7 +451,7 @@ pub fn tray_state() -> TrayState {
             .iter()
             .map(|icon| {
                 let exe = exe_name(&icon.path);
-                let name = crate::commands::app_display_name(&icon.path, None);
+                let name = tray_name(&icon.path, &icon.tooltip);
                 let guid = normalize_guid(&format!("{:?}", icon.identifier.guidItem));
                 let same_program = per_exe.get(&exe).copied().unwrap_or(1);
                 let facts = IconFacts {
@@ -550,17 +635,34 @@ unsafe fn find_explorer_only() -> Vec<ExplorerIcon> {
         }
         let guid = normalize_guid(&format!("{:?}", icon.identifier.guidItem));
         let hwnd = icon.identifier.hWnd.0 as isize;
-        let known = if !guid.is_empty() {
-            hosted.iter().any(|h| {
-                h.guid.as_deref().map(normalize_guid).as_deref() == Some(guid.as_str())
+        // Bloom's tray already has this app's icons: the app added them to
+        // it, so this is one of them seen again from Explorer's side (by
+        // another name), never a second icon to show.
+        let exe = exe_name(&icon.path);
+        let owners: Vec<u32> = windows
+            .iter()
+            .filter(|(_, path)| path.eq_ignore_ascii_case(&icon.path))
+            .map(|(window, _)| {
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(HWND(*window as *mut _), Some(&mut pid));
+                pid
+            })
+            .collect();
+        let same_app = hosted
+            .iter()
+            .any(|h| owners.contains(&h.pid) || (!h.path.is_empty() && exe_name(&h.path) == exe));
+        let known = same_app
+            || if !guid.is_empty() {
+                hosted.iter().any(|h| {
+                    h.guid.as_deref().map(normalize_guid).as_deref() == Some(guid.as_str())
                     // An icon the host knows by its window and id only.
                     || (h.guid.is_none() && h.path.eq_ignore_ascii_case(&icon.path))
-            })
-        } else {
-            hosted
-                .iter()
-                .any(|h| h.window == hwnd && h.uid == icon.identifier.uID)
-        };
+                })
+            } else {
+                hosted
+                    .iter()
+                    .any(|h| h.window == hwnd && h.uid == icon.identifier.uID)
+            };
         if known {
             continue;
         }
@@ -612,6 +714,10 @@ fn host_state() -> TrayState {
         promoted: bool,
         image: Option<String>,
         hidden: bool,
+        window: isize,
+        uid: u32,
+        /// Where Bloom knows it from: its own tray, or Explorer's.
+        source: &'static str,
     }
     let hosted = crate::tray_host::snapshot();
     let registry = registry_entries();
@@ -643,6 +749,22 @@ fn host_state() -> TrayState {
         if path.is_empty() || is_explorer_hosted_icon(&path) {
             continue;
         }
+        // One icon, however the app named it to Bloom's tray (by its GUID
+        // in one message, by its window and id in another).
+        let same = candidates.iter().position(|seen| {
+            (!guid.is_empty() && seen.guid == guid)
+                || (icon.window != 0 && seen.window == icon.window && seen.uid == icon.uid)
+        });
+        if let Some(index) = same {
+            let seen = &mut candidates[index];
+            if seen.image.is_none() {
+                seen.image = icon.image;
+            }
+            if seen.tooltip.is_empty() {
+                seen.tooltip = icon.tooltip;
+            }
+            continue;
+        }
         candidates.push(Candidate {
             id: icon.id,
             path,
@@ -652,6 +774,9 @@ fn host_state() -> TrayState {
             promoted: entry.is_some_and(|i| registry[i].promoted),
             image: icon.image,
             hidden: icon.hidden,
+            window: icon.window,
+            uid: icon.uid,
+            source: "Bloom's tray",
         });
     }
     for icon in extra {
@@ -665,8 +790,25 @@ fn host_state() -> TrayState {
             promoted: icon.promoted,
             image: None,
             hidden: false,
+            window: 0,
+            uid: 0,
+            source: "Explorer's tray",
         });
     }
+    write_icon_list(&candidates_summary(
+        candidates
+            .iter()
+            .map(|c| {
+                (
+                    c.source,
+                    c.path.as_str(),
+                    c.tooltip.as_str(),
+                    c.guid.as_str(),
+                    c.hidden,
+                )
+            })
+            .collect(),
+    ));
     let mut per_exe: HashMap<String, usize> = HashMap::new();
     for icon in &candidates {
         *per_exe.entry(exe_name(&icon.path)).or_default() += 1;
@@ -676,7 +818,7 @@ fn host_state() -> TrayState {
         .into_iter()
         .map(|icon| {
             let exe = exe_name(&icon.path);
-            let name = crate::commands::app_display_name(&icon.path, None);
+            let name = tray_name(&icon.path, &icon.tooltip);
             let same_program = per_exe.get(&exe).copied().unwrap_or(1);
             let facts = IconFacts {
                 exe: &exe,

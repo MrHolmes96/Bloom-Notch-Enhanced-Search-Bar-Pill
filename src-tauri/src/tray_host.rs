@@ -977,6 +977,12 @@ pub fn snapshot_ids() -> Vec<HostedIcon> {
         .collect()
 }
 
+/// Bloom's settings folder (for the tray's icon list file).
+pub fn config_dir() -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    APP.get()?.path().app_config_dir().ok()
+}
+
 /// Asks the app that owns this window to add its tray icons again.
 pub fn ask_icons_again(hwnd: isize) {
     unsafe { ask_to_add_again(hwnd) }
