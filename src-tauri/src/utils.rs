@@ -227,6 +227,8 @@ pub fn restore_taskbar_after_crash() {
         }
     }
     set_taskbar_visibility(true, true);
+    // Apps' taskbar progress reaches Explorer's taskbar again.
+    crate::taskbar_progress::repair_leftover();
 }
 
 pub fn set_taskbar_visibility(visible: bool, always_on_top: bool) -> bool {

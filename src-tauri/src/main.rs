@@ -48,6 +48,7 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
         NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
         set_native_osd_suppressed(false);
         notifications::restore_native_toasts();
+        taskbar_progress::restore();
     }
     BOOL(0)
 }

@@ -116,17 +116,26 @@ then used, and it is also the fallback before the first icons arrive.
 #### Taskbar progress on dock icons
 
 `ITaskbarList` calls (taskbar progress, overlay icons, thumbnail buttons) go
-to the window named by the `TaskbandHWND` property of the first
-`Shell_TrayWnd`, which is Bloom's. `taskbar_progress.rs` names a message-only
-window of its own there, records `SetProgressValue` (`WM_USER + 64`, 0–65534)
-and `SetProgressState` (`WM_USER + 65`, a `TBPFLAG`) per window, and passes
-every message on to Explorer's task list (its own `TaskbandHWND`). The dock
-gets `taskbar-progress` at most every 250 ms (`get_taskbar_progress` for the
-current state) and draws a bar in place of the item's dots, choosing between
-windows as Windows does. Only Bloom's window carries the property, so if Bloom
-stops, apps reach Explorer's taskbar as before. Each message number's first
-appearance and every state change are noted in `taskbar-progress.log` in
-Bloom's settings folder.
+to the window named by the `TaskbandHWND` property of a `Shell_TrayWnd`.
+`taskbar_progress.rs` makes a hidden window of its own and names it on both
+Bloom's tray host and Explorer's taskbar (checked every 2 s, as Explorer names
+its own list again when it restarts), so the calls reach Bloom whichever
+taskbar an app finds. It records `SetProgressValue` (`WM_USER + 64`, 0–65534)
+and `SetProgressState` (`WM_USER + 65`, a `TBPFLAG`) per window, as
+ManagedShell does, and passes every message on to Explorer's own task list.
+Every quit path gives Explorer its own list back; after a crash the watchdog
+and the next start repair a property naming a window that is gone.
+
+Each window's progress carries its program, the programs that started it from
+the same install (Steam's window belongs to `steamwebhelper.exe`, started by
+`steam.exe`), and the windows of that install's processes (games in
+`steamapps` excluded). The dock gets `taskbar-progress` at most every 250 ms
+(`get_taskbar_progress` for the current state) and draws a bar in place of the
+dots of the item holding the window, else the app's other windows, else the
+one item running its program, choosing between windows as Windows does.
+Millennium's "Taskbar Download progress" plugin reports Steam's downloads
+this way. New windows reporting progress and every state change are noted in
+`taskbar-progress.log` in Bloom's settings folder.
 
 ### Without the live tray
 
