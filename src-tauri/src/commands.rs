@@ -1102,12 +1102,6 @@ pub async fn focus_window(hwnd: isize) {
         let hwnd = HWND(hwnd as *mut _);
         let shown = IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool();
         if shown && crate::foreground::is_active(hwnd) {
-            // Its preview while minimized is how it looks right now.
-            if crate::window_capture::age_ms(hwnd) > 1500
-                && !crate::utils::is_window_fullscreen(hwnd)
-            {
-                let _ = crate::window_capture::take(hwnd, 320, 200);
-            }
             crate::foreground::minimize(hwnd);
         } else {
             crate::foreground::switch_to(hwnd);
@@ -3400,27 +3394,21 @@ pub async fn capture_window_thumbnail(
             }
         }
 
-        // A minimized window can't be taken (and is never restored to take
-        // it): its last snapshot, kept warm while it was in front. A window
-        // with no picture at all still gets its card (an empty picture).
-        if is_minimized {
-            let kept = crate::window_capture::cached(hwnd).map(|(image, _)| image);
-            return Some((kept.unwrap_or_default(), focus_time));
+        // Static previews: the window's one picture, taken when it opened.
+        // Only a window that has none yet (open before Bloom started, or it
+        // gave no picture then) is taken now, once; a minimized one can't
+        // be, and gets its card with an empty picture.
+        if let Some((image, _)) = crate::window_capture::cached(hwnd) {
+            return Some((image, focus_time));
         }
-        let result = match crate::window_capture::take(hwnd, max_width, max_height) {
-            Some(shot) if shot.usable => Some(shot.image),
-            // Nothing drawn yet (just restored): its last real picture.
-            Some(shot) => Some(
-                crate::window_capture::cached(hwnd)
-                    .map(|(image, _)| image)
-                    .unwrap_or(shot.image),
-            ),
-            None => Some(
-                crate::window_capture::cached(hwnd)
-                    .map(|(image, _)| image)
-                    .unwrap_or_default(),
-            ),
-        };
+        if is_minimized {
+            return Some((String::new(), focus_time));
+        }
+        let result = Some(
+            crate::window_capture::take(hwnd, max_width, max_height, true)
+                .map(|shot| shot.image)
+                .unwrap_or_default(),
+        );
         result.map(|img| (img, focus_time))
     })
     .await

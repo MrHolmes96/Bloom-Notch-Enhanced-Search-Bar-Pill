@@ -459,8 +459,20 @@ pub fn setup_thumbnail_capture(_app_handle: AppHandle) {
     unsafe {
         use windows::Win32::UI::Accessibility::SetWinEventHook;
         use windows::Win32::UI::WindowsAndMessaging::{
-            EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT,
+            EVENT_OBJECT_SHOW, EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT,
+            WINEVENT_SKIPOWNPROCESS,
         };
+
+        let shown_hook = SetWinEventHook(
+            EVENT_OBJECT_SHOW,
+            EVENT_OBJECT_SHOW,
+            None,
+            Some(window_shown_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        );
+        Box::leak(Box::new(shown_hook));
 
         let focus_hook = SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
@@ -473,7 +485,6 @@ pub fn setup_thumbnail_capture(_app_handle: AppHandle) {
         );
         Box::leak(Box::new(focus_hook));
     }
-    prepare_capture();
 }
 
 unsafe extern "system" fn focus_event_proc(
@@ -494,15 +505,6 @@ unsafe extern "system" fn focus_event_proc(
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowLongW, IsWindow, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
     };
-
-    // The app window that was in front just lost it, while it is still on
-    // screen: its snapshot is taken now, once, so its preview (behind other
-    // windows or minimized later) is how it last looked. A window is never
-    // taken while it is the one in use, which could disturb a game.
-    let previous = LAST_FRONT.load(Ordering::Relaxed);
-    if previous != 0 && previous != hwnd.0 as isize {
-        std::thread::spawn(move || refresh_snapshot(HWND(previous as *mut _), 2000));
-    }
 
     if !IsWindow(Some(hwnd)).as_bool() {
         return;
@@ -526,20 +528,59 @@ unsafe extern "system" fn focus_event_proc(
             guard.insert(hwnd_raw, crate::utils::get_now_ms());
         }
     }
-
-    // A window with no snapshot at all gets one a moment after it first
-    // comes to the front (once), so it has a preview even if it is
-    // minimized before it ever leaves the front.
-    if crate::window_capture::age_ms(hwnd) == i64::MAX {
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(1500));
-            let hwnd = HWND(hwnd_raw as *mut _);
-            if crate::window_capture::age_ms(hwnd) == i64::MAX {
-                refresh_snapshot(hwnd, i64::MAX);
-            }
-        });
-    }
 }
+
+/// A window was shown: an app window that opens gets its one picture for the
+/// static previews a moment later (once it has drawn itself), and again a
+/// little later should that first one show nothing yet. Never afterwards.
+unsafe extern "system" fn window_shown_proc(
+    _hook: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
+    _event: u32,
+    hwnd: HWND,
+    id_object: i32,
+    id_child: i32,
+    _event_thread: u32,
+    _ms_event_time: u32,
+) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GA_ROOT};
+    // The window itself (not a caret, cursor or child control), top-level.
+    if id_object != 0 || id_child != 0 || hwnd.0.is_null() || GetAncestor(hwnd, GA_ROOT) != hwnd {
+        return;
+    }
+    if crate::window_capture::cached(hwnd).is_some() {
+        return;
+    }
+    let raw = hwnd.0 as isize;
+    let pending = OPENING
+        .lock()
+        .map(|mut list| {
+            if list.contains(&raw) {
+                false
+            } else {
+                list.push(raw);
+                true
+            }
+        })
+        .unwrap_or(false);
+    if !pending {
+        return;
+    }
+    std::thread::spawn(move || {
+        for delay in [1500u64, 3000] {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+            let hwnd = HWND(raw as *mut _);
+            if take_once(hwnd) {
+                break;
+            }
+        }
+        if let Ok(mut list) = OPENING.lock() {
+            list.retain(|&waiting| waiting != raw);
+        }
+    });
+}
+
+/// Windows waiting for their one picture.
+static OPENING: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
 /// The app window last in front (Bloom's own windows aside).
 static LAST_FRONT: AtomicIsize = AtomicIsize::new(0);
@@ -549,65 +590,42 @@ pub fn last_front_window() -> isize {
     LAST_FRONT.load(Ordering::Relaxed)
 }
 
-/// Takes a new snapshot of an app window in front, unless its snapshot is
-/// younger than `fresh_ms`: not minimized, full-screen (games, video:
-/// capturing them can hitch), untitled or one of Bloom's, and one at a time.
-fn refresh_snapshot(hwnd: HWND, fresh_ms: i64) {
+/// Takes a window's one picture for the static previews: an app window
+/// (not minimized, full-screen like a game, untitled or one of Bloom's),
+/// unless it already has one. True when it has a picture now (or never
+/// will, so there is nothing to wait for).
+fn take_once(hwnd: HWND) -> bool {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowLongW, GetWindowTextW, IsIconic, IsWindow, IsWindowVisible, GWL_EXSTYLE,
         WS_EX_TOOLWINDOW,
     };
     unsafe {
-        if hwnd.is_invalid()
-            || !IsWindow(Some(hwnd)).as_bool()
-            || !IsWindowVisible(hwnd).as_bool()
-            || IsIconic(hwnd).as_bool()
-        {
-            return;
+        if hwnd.is_invalid() || !IsWindow(Some(hwnd)).as_bool() {
+            return true;
         }
         if GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0 {
-            return;
+            return true;
         }
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         if pid == std::process::id() {
-            return;
+            return true;
+        }
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return false;
         }
         let mut text = [0u16; 2];
         if GetWindowTextW(hwnd, &mut text) == 0 {
-            return;
+            return false;
         }
     }
+    if crate::window_capture::cached(hwnd).is_some() {
+        return true;
+    }
     if crate::utils::is_window_fullscreen(hwnd) {
-        return;
+        return true;
     }
-    if crate::window_capture::age_ms(hwnd) < fresh_ms {
-        return;
-    }
-    if THUMB_CAPTURE_IN_FLIGHT.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    let _guard = ThumbnailCaptureGuard;
-    let _ = crate::window_capture::take(hwnd, 320, 200);
-}
-
-/// Sets up window capture a moment after start, so the first preview never
-/// waits for it.
-fn prepare_capture() {
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        crate::window_capture::prepare();
-    });
-}
-
-static THUMB_CAPTURE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
-
-struct ThumbnailCaptureGuard;
-
-impl Drop for ThumbnailCaptureGuard {
-    fn drop(&mut self) {
-        THUMB_CAPTURE_IN_FLIGHT.store(false, Ordering::Relaxed);
-    }
+    crate::window_capture::take(hwnd, 320, 200, false).is_some_and(|shot| shot.usable)
 }
 
 unsafe extern "system" fn taskbar_event_proc(

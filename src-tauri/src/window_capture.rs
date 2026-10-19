@@ -1,17 +1,18 @@
-//! Pictures of windows for the dock's previews.
+//! Pictures of windows for the dock's static previews.
 //!
-//! Taken with Windows.Graphics.Capture, the way Windows' own capture tools
-//! take them: the picture is what the compositor shows for the window, so it
-//! is right for apps drawn by the graphics card (browsers, Electron apps,
-//! games) and for windows behind others, and the app is never asked to draw
-//! anything. PrintWindow, which asks the app to draw itself again (and which
-//! browsers answer with an empty or stale picture while they are busy, just
-//! after being restored), is only the fallback, for a window that can't be
-//! taken that way.
+//! A window's picture is taken once: a moment after it opens, or the first
+//! time its preview is wanted when it was already open. It is not taken
+//! again when the window comes to the front, leaves it or is minimized, so
+//! nothing runs in the background while windows are used.
+//!
+//! It is taken with PrintWindow, which costs nothing while it isn't used.
+//! Only for a window that gives no real picture that way (some apps drawn by
+//! the graphics card), and only when its preview is wanted,
+//! Windows.Graphics.Capture is tried, the way Windows' capture tools take
+//! windows.
 //!
 //! A picture that is see-through or all black (an app that hasn't drawn yet)
-//! is never kept as a window's snapshot, so a minimized window's preview stays
-//! its last real picture.
+//! is never kept as a window's snapshot.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -48,10 +49,19 @@ pub struct Snapshot {
 type Pixels = (u32, u32, Vec<u8>);
 
 /// The window's picture, scaled down to fit `max_width` x `max_height`.
-pub fn snapshot(hwnd: HWND, max_width: u32, max_height: u32) -> Option<Snapshot> {
-    let (width, height, pixels) = capture(hwnd).or_else(|| print_window(hwnd))?;
-    let usable = looks_real(&pixels);
-    let image = encode(width, height, pixels, max_width, max_height)?;
+/// `thorough` also tries Windows.Graphics.Capture when PrintWindow gives no
+/// real picture (only when a preview is wanted, never in the background).
+pub fn snapshot(hwnd: HWND, max_width: u32, max_height: u32, thorough: bool) -> Option<Snapshot> {
+    let printed = print_window(hwnd);
+    let pixels = match printed {
+        Some(pixels) if looks_real(&pixels.2) => pixels,
+        printed => match thorough.then(|| capture(hwnd)).flatten() {
+            Some(captured) if looks_real(&captured.2) => captured,
+            _ => printed?,
+        },
+    };
+    let usable = looks_real(&pixels.2);
+    let image = encode(pixels.0, pixels.1, pixels.2, max_width, max_height)?;
     Some(Snapshot { image, usable })
 }
 
@@ -65,11 +75,6 @@ pub fn cached(hwnd: HWND) -> Option<(String, i64)> {
         .ok()?
         .get(&(hwnd.0 as isize))
         .cloned()
-}
-
-/// How long ago the window's snapshot was taken (`i64::MAX` without one).
-pub fn age_ms(hwnd: HWND) -> i64 {
-    cached(hwnd).map_or(i64::MAX, |(_, at)| crate::utils::get_now_ms() - at)
 }
 
 fn keep(hwnd: HWND, image: String) {
@@ -88,12 +93,12 @@ fn keep(hwnd: HWND, image: String) {
 
 /// Takes the window's picture for a preview card and keeps it as its
 /// snapshot when it shows something.
-pub fn take(hwnd: HWND, max_width: u32, max_height: u32) -> Option<Snapshot> {
+pub fn take(hwnd: HWND, max_width: u32, max_height: u32, thorough: bool) -> Option<Snapshot> {
     // A minimized window can't be taken: its snapshot stays as it was.
     if unsafe { windows::Win32::UI::WindowsAndMessaging::IsIconic(hwnd) }.as_bool() {
         return None;
     }
-    let shot = snapshot(hwnd, max_width, max_height)?;
+    let shot = snapshot(hwnd, max_width, max_height, thorough)?;
     if shot.usable {
         keep(hwnd, shot.image.clone());
     }
@@ -170,20 +175,6 @@ fn borderless_allowed() -> bool {
                 .and_then(|request| request.get())
                 .is_ok_and(|status| status == AppCapabilityAccessStatus::Allowed)
     })
-}
-
-/// Asks Windows for frameless capture and sets up the graphics device ahead
-/// of the first preview, so hovering the dock never waits for it.
-pub fn prepare() {
-    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
-    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-    if borderless_allowed() {
-        if let Ok(mut devices) = DEVICES.lock() {
-            if devices.is_none() {
-                *devices = create_devices();
-            }
-        }
-    }
 }
 
 fn capture(hwnd: HWND) -> Option<Pixels> {
