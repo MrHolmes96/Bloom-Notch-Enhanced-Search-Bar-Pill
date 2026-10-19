@@ -137,7 +137,7 @@ fn folder_of(path: &str) -> Option<String> {
 
 /// Whether `parent` belongs to the same install as `child`: its folder holds
 /// the child's (`Steam\steam.exe` and `Steam\bin\cef\...\steamwebhelper.exe`).
-fn same_install(child: &str, parent: &str) -> bool {
+pub(crate) fn same_install(child: &str, parent: &str) -> bool {
     match (folder_of(child), folder_of(parent)) {
         (Some(child), Some(parent)) => {
             // A program in Windows' own folder starts all sorts of things.

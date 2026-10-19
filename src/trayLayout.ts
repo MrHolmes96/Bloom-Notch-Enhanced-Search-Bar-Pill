@@ -28,6 +28,11 @@ export interface TrayIconInfo {
 	hidden_in_windows?: boolean;
 	/** The icon's live picture, as Windows' tray shows it right now. */
 	image?: string | null;
+	/**
+	 * The app shown instead, for an icon a background program shows for its
+	 * app ("NVIDIA Container" for the NVIDIA app): the tile shows its icon.
+	 */
+	icon_path?: string | null;
 }
 
 export interface TrayState {

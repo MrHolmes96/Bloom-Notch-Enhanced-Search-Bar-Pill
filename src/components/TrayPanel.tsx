@@ -80,20 +80,27 @@ function TrayTile({
 	/** Holds the notch open for a right click; call the result if it failed. */
 	onInteract: (id: string) => () => void;
 }) {
+	// An icon shown as its app (a background program's) shows the app's icon.
+	const programPath = icon.icon_path ?? icon.path;
+	const live = icon.icon_path ? null : icon.image;
 	const [programIcon, setProgramIcon] = useState<string | null>(
-		() => iconCache.get(icon.path) ?? null
+		() => iconCache.get(programPath) ?? null
 	);
 
 	useEffect(() => {
-		if (icon.image || iconCache.has(icon.path)) return;
-		void invoke<string | null>("get_app_icon", { path: icon.path })
+		if (iconCache.has(programPath)) {
+			setProgramIcon(iconCache.get(programPath) ?? null);
+			return;
+		}
+		if (live) return;
+		void invoke<string | null>("get_app_icon", { path: programPath })
 			.then((value) => {
-				iconCache.set(icon.path, value ?? null);
+				iconCache.set(programPath, value ?? null);
 				setProgramIcon(value ?? null);
 			})
-			.catch(() => iconCache.set(icon.path, null));
-	}, [icon.path, icon.image]);
-	const image = icon.image ?? programIcon;
+			.catch(() => iconCache.set(programPath, null));
+	}, [programPath, live]);
+	const image = live ?? programIcon;
 
 	const title = editing
 		? label

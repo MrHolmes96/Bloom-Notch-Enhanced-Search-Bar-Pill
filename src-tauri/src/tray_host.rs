@@ -92,6 +92,11 @@ const NIS_HIDDEN: u32 = 0x01;
 /// `NIN_SELECT`: a version 3+ icon was clicked.
 const NIN_SELECT: u32 = WM_USER;
 
+/// Posted to the host to announce a change from another thread (timers
+/// belong to the window's own thread). Above `WM_USER`'s range, which goes
+/// on to Explorer.
+const MSG_ANNOUNCE: u32 = 0x8000 + 0x42;
+
 const TIMER_ZORDER: usize = 1;
 const TIMER_CHANGED: usize = 2;
 const TIMER_RESYNC: usize = 3;
@@ -99,8 +104,6 @@ const TIMER_RESYNC: usize = 3;
 const ZORDER_CHECK_MS: u32 = 2000;
 /// Changes are announced to the notch at most this often.
 const CHANGED_DELAY_MS: u32 = 120;
-/// At most one "add your icons again" broadcast this often after start.
-const RESYNC_MIN_GAP_MS: i64 = 30_000;
 
 /// `NOTIFYICONDATAW` as `Shell_NotifyIcon` sends it to the taskbar: window and
 /// icon handles are 32-bit so 32- and 64-bit programs share one layout.
@@ -211,6 +214,8 @@ pub struct HostedIcon {
     /// Hidden from Windows' tray (`NIS_HIDDEN`), as Tray Icon Manager hides
     /// icons: still running, and shown under the notch's hidden icons.
     pub hidden: bool,
+    /// The app gave it a picture (an icon without one shows nothing).
+    pub has_picture: bool,
 }
 
 static ICONS: Mutex<Vec<Icon>> = Mutex::new(Vec::new());
@@ -223,7 +228,6 @@ static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 const BLOOM_MARK: isize = 0x426C_6F6F;
 /// Explorer's taskbar window as last seen, to notice it being (re)created.
 static EXPLORER_SEEN: AtomicIsize = AtomicIsize::new(0);
-static LAST_RESYNC: AtomicI64 = AtomicI64::new(0);
 /// When apps were last asked to add their icons again.
 static SYNCED_AT: AtomicI64 = AtomicI64::new(0);
 static SERIAL: AtomicU64 = AtomicU64::new(1);
@@ -389,9 +393,10 @@ fn remembered_state(id: &str, hwnd: isize, uid: u32) -> Option<bool> {
     Some(seen.remove(index).hidden)
 }
 
-/// Records what one `Shell_NotifyIcon` call says. Runs while the app waits,
+/// Records what one `Shell_NotifyIcon` call says, given Explorer's answer to
+/// it (`None` when Explorer isn't there to answer). Runs while the app waits,
 /// so it only copies what it needs.
-unsafe fn record(message: u32, nid: &NotifyIconData32) -> bool {
+unsafe fn record(message: u32, nid: &NotifyIconData32, accepted: Option<bool>) -> bool {
     let hwnd = handle(nid.hwnd);
     let guid = (nid.flags & NIF_GUID != 0 && nid.guid != GUID::zeroed()).then_some(nid.guid);
     let id = match &guid {
@@ -432,8 +437,13 @@ unsafe fn record(message: u32, nid: &NotifyIconData32) -> bool {
             let index = match index {
                 Some(index) => index,
                 // A change for an icon Bloom never saw added (it was added
-                // while Explorer's window was in front) still adds it.
-                None if message == NIM_ADD || nid.flags & NIF_ICON != 0 => {
+                // while Explorer's window was in front) still adds it, unless
+                // Explorer turned the change down: then Windows has no such
+                // icon either (an app changing an icon it removed, or trying
+                // a change before adding), and Bloom shows none.
+                None if message == NIM_ADD
+                    || (nid.flags & NIF_ICON != 0 && accepted != Some(false)) =>
+                {
                     let mut pid = 0u32;
                     GetWindowThreadProcessId(HWND(hwnd as *mut _), Some(&mut pid));
                     if pid == std::process::id() {
@@ -616,7 +626,6 @@ unsafe fn request_icons() {
     if message == 0 {
         return;
     }
-    LAST_RESYNC.store(now_ms(), Ordering::Relaxed);
     SYNCED_AT.store(now_ms(), Ordering::Relaxed);
     let _ = SendNotifyMessageW(HWND_BROADCAST, message, WPARAM(0), LPARAM(BLOOM_MARK));
     // A broadcast reaches only ordinary windows; some apps keep their tray
@@ -668,28 +677,33 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     if msg == WM_COPYDATA && lparam.0 != 0 {
         let data = &*(lparam.0 as *const COPYDATASTRUCT);
-        let mut recorded = false;
-        if data.dwData == COPYDATA_TRAY && data.cbData as usize >= 8 && !data.lpData.is_null() {
-            let mut tray: TrayNotifyData = std::mem::zeroed();
-            let length = (data.cbData as usize).min(std::mem::size_of::<TrayNotifyData>());
-            std::ptr::copy_nonoverlapping(
-                data.lpData as *const u8,
-                &mut tray as *mut TrayNotifyData as *mut u8,
-                length,
-            );
-            if tray.signature == SIGNATURE {
-                recorded = record(tray.message, &tray.nid);
-            }
-        }
-        if recorded {
-            announce_change(hwnd);
-        }
         if data.dwData == COPYDATA_APPBAR {
             if let Some(result) = forward_appbar(wparam, data) {
                 return result;
             }
         }
-        return match forward(msg, wparam, lparam) {
+        let mut tray: Option<TrayNotifyData> = None;
+        if data.dwData == COPYDATA_TRAY && data.cbData as usize >= 8 && !data.lpData.is_null() {
+            let mut copy: TrayNotifyData = std::mem::zeroed();
+            let length = (data.cbData as usize).min(std::mem::size_of::<TrayNotifyData>());
+            std::ptr::copy_nonoverlapping(
+                data.lpData as *const u8,
+                &mut copy as *mut TrayNotifyData as *mut u8,
+                length,
+            );
+            if copy.signature == SIGNATURE {
+                tray = Some(copy);
+            }
+        }
+        // Explorer answers first: what it takes is what Windows' tray has,
+        // and Bloom's copy follows that.
+        let answer = forward(msg, wparam, lparam);
+        if let Some(tray) = tray {
+            if record(tray.message, &tray.nid, answer.map(|r| r.0 != 0)) {
+                announce_change(hwnd);
+            }
+        }
+        return match answer {
             Some(result) => result,
             // Explorer isn't there (restarting): the icon is still Bloom's.
             None if data.dwData == COPYDATA_TRAY => LRESULT(1),
@@ -706,6 +720,11 @@ unsafe extern "system" fn window_proc(
             EXPLORER.store(0, Ordering::Relaxed);
             SetTimer(Some(hwnd), TIMER_RESYNC, 1500, None);
         }
+        return LRESULT(0);
+    }
+
+    if msg == MSG_ANNOUNCE {
+        announce_change(hwnd);
         return LRESULT(0);
     }
 
@@ -739,15 +758,17 @@ unsafe extern "system" fn window_proc(
                 let first = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()).unwrap_or_default();
                 if first != hwnd {
                     // Explorer's taskbar came in front (it was shown), so apps
-                    // reached it instead; get back in front and catch up.
+                    // reached it instead: get back in front. What was missed
+                    // meanwhile is caught up icon by icon (`tray::reconcile`),
+                    // not by asking every app to add its icons again, which
+                    // some answer with a second copy of their icon.
                     raise(hwnd);
-                    if now_ms() - LAST_RESYNC.load(Ordering::Relaxed) > RESYNC_MIN_GAP_MS {
-                        request_icons();
-                    }
                 }
                 if prune() {
                     announce_change(hwnd);
                 }
+                // Icons Windows' tray removed or added without Bloom hearing.
+                crate::tray::reconcile_in_background();
             }
             _ => {}
         }
@@ -898,10 +919,7 @@ unsafe fn render(picture: Option<HICON>, source: Option<&IconSource>) -> Option<
 /// from Windows' tray (each says whether it is).
 pub fn snapshot() -> Vec<HostedIcon> {
     if prune() {
-        let host = HWND(HOST.load(Ordering::Relaxed) as *mut _);
-        if !host.is_invalid() {
-            unsafe { announce_change(host) };
-        }
+        announce();
     }
     // Pictures are made outside the lock, from copies, so the host never
     // waits on them; an icon changed meanwhile keeps its newer picture.
@@ -955,6 +973,7 @@ pub fn snapshot() -> Vec<HostedIcon> {
             guid: icon.id.strip_prefix("g:").map(str::to_string),
             window: icon.hwnd,
             hidden: icon.hidden,
+            has_picture: icon.picture.is_some(),
         })
         .collect()
 }
@@ -976,8 +995,25 @@ pub fn snapshot_ids() -> Vec<HostedIcon> {
             guid: icon.id.strip_prefix("g:").map(str::to_string),
             window: icon.hwnd,
             hidden: icon.hidden,
+            has_picture: icon.picture.is_some(),
         })
         .collect()
+}
+
+/// Drops an icon Explorer's tray no longer has (removed while Explorer's
+/// window was in front, so Bloom never heard), as Windows' tray did.
+pub fn forget(id: &str) -> bool {
+    let Ok(mut icons) = ICONS.lock() else {
+        return false;
+    };
+    let before = icons.len();
+    icons.retain(|icon| icon.id != id);
+    let gone = icons.len() != before;
+    drop(icons);
+    if gone {
+        announce();
+    }
+    gone
 }
 
 /// Bloom's settings folder (for the tray's icon list file).
@@ -997,11 +1033,13 @@ pub fn settled() -> bool {
     ready() && now_ms() - SYNCED_AT.load(Ordering::Relaxed) > 5000
 }
 
-/// Tells the notch's tray that its icons changed.
+/// Tells the notch's tray that its icons changed. Any thread.
 pub fn announce() {
     let host = HWND(HOST.load(Ordering::Relaxed) as *mut _);
-    if !host.is_invalid() {
-        unsafe { announce_change(host) };
+    if !host.0.is_null() {
+        unsafe {
+            let _ = PostMessageW(Some(host), MSG_ANNOUNCE, WPARAM(0), LPARAM(0));
+        }
     }
 }
 

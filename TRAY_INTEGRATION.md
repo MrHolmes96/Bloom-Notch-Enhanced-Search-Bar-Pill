@@ -108,6 +108,31 @@ when that is known (`GetIconInfoEx`), so it stays sharp at the notch's size;
 otherwise the app's own picture is used. Changes reach the notch as
 `tray-changed`, at most every 120 ms.
 
+Bloom's tray follows Windows' exactly:
+
+- Every icon message goes to Explorer first and Bloom records what Explorer
+  took: a change Explorer turned down (an app changing an icon it never added
+  or already removed) never makes an icon in Bloom.
+- Every 15 s in the background (5 s while the notch's tray is open) Bloom asks
+  Explorer about each of its icons (`Shell_NotifyIconGetRect`); one Explorer
+  no longer has, two checks in a row, is dropped. Taskbar and overflow icons
+  are judged apart, only while Explorer still finds some of that kind (with
+  the overflow menu turned off it finds none of those).
+- Apps aren't asked to add all their icons again when Explorer's taskbar has
+  been in front, only at start and after Explorer restarts: some apps answer
+  with a second copy of their icon. Icons missed meanwhile are caught by the
+  check above and the Explorer-only scan.
+- Icons Windows doesn't show aren't shown: ones an app hides itself
+  (`NIS_HIDDEN` that Tray Icon Manager's rules don't account for) and blank
+  ones (no picture and no tooltip). Tray Icon Manager's hidden icons stay
+  under the notch's hidden icons.
+- An icon that is the only one of a background program ("NVIDIA Container",
+  "… Helper", "… Service") is shown as the app it works for: the one Start
+  menu app from the same company (`CompanyName`), by that app's name and icon.
+  With several apps from that company, its tooltip names it.
+- `tray-icons.txt` lists every icon Bloom knows, where from, its window and
+  id, whether it has a picture, and what the notch does with it.
+
 Bloom's own code looks Explorer's taskbar up with `explorer_taskbar()`, which
 skips Bloom's window of the same class. Settings > Notch > System Tray > Live
 Tray (`bloom-tray-live`) turns this off; the registry-based reading below is

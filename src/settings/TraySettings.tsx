@@ -167,7 +167,7 @@ export function TraySettings() {
 						<div key={icon.id}>
 							<div className="setting-item">
 								<div className="setting-icon-bg">
-									<AppImage path={icon.path} image={icon.image} />
+									<AppImage path={icon.icon_path ?? icon.path} image={icon.icon_path ? null : icon.image} />
 								</div>
 								<div className="setting-info">
 									<span className="setting-label">{label}</span>
