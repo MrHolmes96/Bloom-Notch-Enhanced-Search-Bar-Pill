@@ -26,6 +26,16 @@ pub async fn set_menu_open(open: bool, rect: Option<IntRect>) {
 #[tauri::command]
 pub async fn set_dock_hovered(hovered: bool) {
     DOCK_IS_HOVERED.store(hovered, Ordering::Relaxed);
+    // Pointing at the dock: the app in front gets a fresh picture, so its
+    // preview (and its picture once minimized) is how it looks now.
+    if hovered {
+        let front = crate::services::last_front_window();
+        if front != 0 {
+            std::thread::spawn(move || {
+                crate::services::refresh_snapshot(HWND(front as *mut _), 3000)
+            });
+        }
+    }
 }
 
 #[tauri::command]
@@ -1102,6 +1112,8 @@ pub async fn focus_window(hwnd: isize) {
         let hwnd = HWND(hwnd as *mut _);
         let shown = IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool();
         if shown && crate::foreground::is_active(hwnd) {
+            // Its picture while minimized is how it looks right now.
+            crate::services::refresh_snapshot(hwnd, 1500);
             crate::foreground::minimize(hwnd);
         } else {
             crate::foreground::switch_to(hwnd);

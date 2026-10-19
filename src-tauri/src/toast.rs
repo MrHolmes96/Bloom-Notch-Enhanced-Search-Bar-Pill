@@ -44,8 +44,8 @@ pub struct ToastInput {
 
 #[derive(Clone, Debug, Default)]
 pub struct ToastContent {
-    launch: String,
-    activation: String,
+    pub launch: String,
+    pub activation: String,
     pub buttons: Vec<ToastButton>,
     pub inputs: Vec<ToastInput>,
 }
@@ -501,15 +501,28 @@ fn run(
     inputs: &[(String, String)],
 ) -> Result<(), String> {
     if activation == "protocol" {
+        crate::notifications::trace("  opening its link");
         return open_link(arguments);
     }
+    // The app's own handler, as Windows calls it for a click: it gets the
+    // notification's arguments and opens what it is about.
     if let Some(clsid) = activator(aumid) {
-        return unsafe { com_activate(&clsid, aumid, arguments, inputs) };
+        let handled = unsafe { com_activate(&clsid, aumid, arguments, inputs) };
+        crate::notifications::trace(&format!(
+            "  app's notification handler {clsid:?}: {handled:?}"
+        ));
+        if handled.is_ok() {
+            return handled;
+        }
+    } else {
+        crate::notifications::trace("  app's notification handler: none registered");
     }
     if aumid.contains('!') {
         return unsafe { activate_package(aumid, arguments) };
     }
+    // A link in its arguments (an app's own address, a web page).
     if looks_like_link(arguments) {
+        crate::notifications::trace("  opening the link in its arguments");
         return open_link(arguments);
     }
     // Windows' own notices ("Windows.SystemToast.…") aren't apps to open.

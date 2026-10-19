@@ -1,9 +1,13 @@
 //! Pictures of windows for the dock's static previews.
 //!
-//! A window's picture is taken once: a moment after it opens, or the first
-//! time its preview is wanted when it was already open. It is not taken
-//! again when the window comes to the front, leaves it or is minimized, so
-//! nothing runs in the background while windows are used.
+//! A window's picture is taken at the moments its look matters, never on a
+//! timer and never while it is being used: a moment after it opens, when it
+//! stops being the window in front (it is still on screen then, so its
+//! preview is how it was left), when its title changes while it is in front
+//! (a browser's tab), when the dock is pointed at, and right before the dock
+//! minimizes it. Each is skipped when the window's picture is only seconds
+//! old, and full-screen windows (games, video) are never taken in the
+//! background.
 //!
 //! It is taken with PrintWindow, which costs nothing while it isn't used.
 //! Only for a window that gives no real picture that way (some apps drawn by
@@ -75,6 +79,11 @@ pub fn cached(hwnd: HWND) -> Option<(String, i64)> {
         .ok()?
         .get(&(hwnd.0 as isize))
         .cloned()
+}
+
+/// How long ago the window's picture was taken (`i64::MAX` without one).
+pub fn age_ms(hwnd: HWND) -> i64 {
+    cached(hwnd).map_or(i64::MAX, |(_, at)| crate::utils::get_now_ms() - at)
 }
 
 fn keep(hwnd: HWND, image: String) {

@@ -506,6 +506,15 @@ unsafe extern "system" fn focus_event_proc(
         GetWindowLongW, IsWindow, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
     };
 
+    // The app window that was in front just left it, while it is still on
+    // screen: its picture is how it was left (skipped when only seconds old).
+    let previous = LAST_FRONT.load(Ordering::Relaxed);
+    if previous != 0 && previous != hwnd.0 as isize {
+        std::thread::spawn(move || {
+            refresh_snapshot(HWND(previous as *mut _), 2000);
+        });
+    }
+
     if !IsWindow(Some(hwnd)).as_bool() {
         return;
     }
@@ -523,6 +532,7 @@ unsafe extern "system" fn focus_event_proc(
 
     let hwnd_raw = hwnd.0 as isize;
     LAST_FRONT.store(hwnd_raw, Ordering::Relaxed);
+    watch_titles_of(pid);
     if let Some(map) = crate::state::FOCUS_TIMESTAMPS.get() {
         if let Ok(mut guard) = map.lock() {
             guard.insert(hwnd_raw, crate::utils::get_now_ms());
@@ -590,11 +600,33 @@ pub fn last_front_window() -> isize {
     LAST_FRONT.load(Ordering::Relaxed)
 }
 
+/// Takes a new picture of a window for the static previews, unless its
+/// picture is younger than `fresh_ms` (see `take_once` for which windows).
+pub fn refresh_snapshot(hwnd: HWND, fresh_ms: i64) {
+    if crate::window_capture::age_ms(hwnd) < fresh_ms {
+        return;
+    }
+    if SNAPSHOT_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let _ = take_picture(hwnd);
+    SNAPSHOT_IN_FLIGHT.store(false, Ordering::Release);
+}
+
+/// One picture is taken at a time.
+static SNAPSHOT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
 /// Takes a window's one picture for the static previews: an app window
 /// (not minimized, full-screen like a game, untitled or one of Bloom's),
 /// unless it already has one. True when it has a picture now (or never
 /// will, so there is nothing to wait for).
 fn take_once(hwnd: HWND) -> bool {
+    crate::window_capture::cached(hwnd).is_some() || take_picture(hwnd)
+}
+
+/// Takes the picture of an app window (not minimized, untitled, full-screen
+/// or one of Bloom's). True when it has one now, or never will.
+fn take_picture(hwnd: HWND) -> bool {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowLongW, GetWindowTextW, IsIconic, IsWindow, IsWindowVisible, GWL_EXSTYLE,
         WS_EX_TOOLWINDOW,
@@ -619,14 +651,82 @@ fn take_once(hwnd: HWND) -> bool {
             return false;
         }
     }
-    if crate::window_capture::cached(hwnd).is_some() {
-        return true;
-    }
     if crate::utils::is_window_fullscreen(hwnd) {
         return true;
     }
     crate::window_capture::take(hwnd, 320, 200, false).is_some_and(|shot| shot.usable)
 }
+
+/// The window in front changed its title (a browser's tab, a document): its
+/// picture is taken a moment later, once the title has settled, and at most
+/// every 15 s.
+unsafe extern "system" fn title_changed_proc(
+    _hook: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
+    _event: u32,
+    hwnd: HWND,
+    id_object: i32,
+    id_child: i32,
+    _event_thread: u32,
+    _ms_event_time: u32,
+) {
+    if id_object != 0 || id_child != 0 || hwnd.0.is_null() {
+        return;
+    }
+    if windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() != hwnd {
+        return;
+    }
+    let raw = hwnd.0 as isize;
+    let serial = TITLE_SERIAL.fetch_add(1, Ordering::Relaxed) + 1;
+    if TITLE_WAITING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    std::thread::spawn(move || {
+        // Until no further change for a second.
+        let mut seen = serial;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            let now = TITLE_SERIAL.load(Ordering::Relaxed);
+            if now == seen {
+                break;
+            }
+            seen = now;
+        }
+        TITLE_WAITING.store(false, Ordering::Release);
+        let hwnd = HWND(raw as *mut _);
+        if windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd {
+            refresh_snapshot(hwnd, 15_000);
+        }
+    });
+}
+
+/// Title changes are only listened to in the app in front (Windows reports
+/// every label change in every app otherwise). Runs on the hooks' thread.
+unsafe fn watch_titles_of(pid: u32) {
+    use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
+    use windows::Win32::UI::WindowsAndMessaging::{EVENT_OBJECT_NAMECHANGE, WINEVENT_OUTOFCONTEXT};
+    if TITLE_HOOK_PROCESS.swap(pid, Ordering::Relaxed) == pid {
+        return;
+    }
+    let old = TITLE_HOOK.swap(0, Ordering::Relaxed);
+    if old != 0 {
+        let _ = UnhookWinEvent(HWINEVENTHOOK(old as *mut _));
+    }
+    let hook = SetWinEventHook(
+        EVENT_OBJECT_NAMECHANGE,
+        EVENT_OBJECT_NAMECHANGE,
+        None,
+        Some(title_changed_proc),
+        pid,
+        0,
+        WINEVENT_OUTOFCONTEXT,
+    );
+    TITLE_HOOK.store(hook.0 as isize, Ordering::Relaxed);
+}
+
+static TITLE_HOOK: AtomicIsize = AtomicIsize::new(0);
+static TITLE_HOOK_PROCESS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static TITLE_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static TITLE_WAITING: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "system" fn taskbar_event_proc(
     _h_win_event_hook: windows::Win32::UI::Accessibility::HWINEVENTHOOK,

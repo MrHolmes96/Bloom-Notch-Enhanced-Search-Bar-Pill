@@ -919,6 +919,40 @@ pub fn notifications_status() -> String {
 
 // ---------------------------------------------------------------- clicking
 
+/// What a notification click did, step by step, kept in
+/// `notification-clicks.log` in Bloom's settings folder (the last few hundred
+/// lines), to see why an app didn't open what a notification is about.
+pub(crate) fn trace(line: &str) {
+    use std::io::Write;
+    let Some(path) = APP
+        .get()
+        .and_then(|app| app.path().app_config_dir().ok())
+        .map(|dir| dir.join("notification-clicks.log"))
+    else {
+        return;
+    };
+    // Kept short: the newer half once it passes 64 KB.
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 64 * 1024) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let half = text.len() / 2;
+            let start = text[half..].find('\n').map_or(half, |i| half + i + 1);
+            let _ = std::fs::write(&path, &text[start..]);
+        }
+    }
+    let time = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    let stamp = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond
+    );
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(file, "{stamp} {line}");
+    }
+}
+
 /// Whether another app's window came to the front within `timeout_ms` of a
 /// click (not Bloom's, not Windows' notification or Start windows).
 fn came_forward(before: HWND, timeout_ms: u64) -> bool {
@@ -996,6 +1030,7 @@ fn click_windows_popup(title: &str, body: &str) -> bool {
         UIA_LegacyIAccessiblePatternId, UIA_TextControlTypeId,
     };
     let Some(hwnd) = find_toast_window() else {
+        trace("  Windows' pop-up: not there any more");
         return false;
     };
     let title = squash(title);
@@ -1016,8 +1051,13 @@ fn click_windows_popup(title: &str, body: &str) -> bool {
             return false;
         };
         let Ok(elements) = root.FindAll(TreeScope_Descendants, &condition) else {
+            trace("  Windows' pop-up: its contents can't be read");
             return false;
         };
+        trace(&format!(
+            "  Windows' pop-up: {} parts",
+            elements.Length().unwrap_or(0)
+        ));
         // The notification itself: the outermost element that names it
         // (its title, and its text when it has some) and can be clicked;
         // never its own buttons (dismiss, settings, its actions).
@@ -1059,7 +1099,28 @@ fn click_windows_popup(title: &str, body: &str) -> bool {
             if !has_title && !has_body {
                 continue;
             }
-            let score = has_title as u8 + has_body as u8;
+            // The toast itself rather than a list item or panel around it.
+            let class = element
+                .CurrentClassName()
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let toast = class.contains("Toast") || id.contains("Toast");
+            let score = has_title as u8 + has_body as u8 + 2 * toast as u8;
+            let invokable = element
+                .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+                .is_ok();
+            trace(&format!(
+                "    part: type {} class \"{}\" id \"{}\" title {} text {} invoke {}",
+                element
+                    .CurrentControlType()
+                    .map(|t| t.0)
+                    .unwrap_or_default(),
+                class,
+                id,
+                has_title,
+                has_body,
+                invokable
+            ));
             if best.as_ref().is_some_and(|(top, _)| *top >= score) {
                 continue;
             }
@@ -1076,6 +1137,7 @@ fn click_windows_popup(title: &str, body: &str) -> bool {
             }
         }
         let Some((_, element)) = best else {
+            trace("  Windows' pop-up: this notification isn't in it");
             return false;
         };
         // The app may bring its window forward, as from Windows' pop-up.
@@ -1084,14 +1146,21 @@ fn click_windows_popup(title: &str, body: &str) -> bool {
             element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
         {
             if pattern.Invoke().is_ok() {
+                trace("  Windows' pop-up: clicked");
                 return true;
             }
         }
-        element
+        let done = element
             .GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
                 UIA_LegacyIAccessiblePatternId,
             )
-            .is_ok_and(|p| p.DoDefaultAction().is_ok())
+            .is_ok_and(|p| p.DoDefaultAction().is_ok());
+        trace(if done {
+            "  Windows' pop-up: clicked (default action)"
+        } else {
+            "  Windows' pop-up: the click didn't go through"
+        });
+        done
     }
 }
 
@@ -1111,15 +1180,26 @@ pub async fn notification_activate(
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         let before = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
         let opens_an_app = !aumid.is_empty() && !aumid.starts_with("Windows.SystemToast.");
+        trace(&format!("click: notification {id} from {aumid}"));
         // Windows' own pop-up first; it counts once something came forward
         // (an app that takes its clicks inside, like Discord, opens the chat).
         let clicked_in_windows =
             texts_of(id).is_some_and(|(title, body)| click_windows_popup(&title, &body));
         let opened_by_windows = clicked_in_windows && came_forward(before, 1800);
+        if clicked_in_windows {
+            trace(&format!("  app came forward: {opened_by_windows}"));
+        }
         let result = if opened_by_windows {
             Ok(())
         } else {
             let content = content_of(id, &aumid, time.unwrap_or_default());
+            match &content {
+                Some(c) => trace(&format!(
+                    "  what clicking does: launch \"{}\" activation \"{}\"",
+                    c.launch, c.activation
+                )),
+                None => trace("  what clicking does: not found in Windows' notification store"),
+            }
             let result = match &content {
                 Some(content) => crate::toast::activate(&aumid, content),
                 None if aumid.is_empty() => {
@@ -1139,6 +1219,7 @@ pub async fn notification_activate(
                 other => other,
             }
         };
+        trace(&format!("  result: {result:?}"));
         // Cleared once it did something, as in Windows; a click that did
         // nothing leaves it in the center.
         if result.is_ok() {
