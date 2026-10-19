@@ -348,6 +348,60 @@ body {
 	position: static;
 }
 
+/* An app's progress (a download, a copy) in place of its dots, as Windows'
+   taskbar draws it along its button: the dots' spot and height, so the dock
+   keeps its size. Green while it runs, yellow paused, red on an error. */
+.dock-progress {
+	--dock-progress-color: #3cc35a;
+	position: absolute;
+	bottom: -4px;
+	width: 24px;
+	height: 4px;
+	border-radius: 2px;
+	overflow: hidden;
+	background: color-mix(in srgb, var(--bloom-text, white) 22%, transparent);
+	pointer-events: none;
+}
+
+.dock-progress--paused {
+	--dock-progress-color: #f2c12e;
+}
+
+.dock-progress--error {
+	--dock-progress-color: #f0524f;
+}
+
+.dock-progress-fill {
+	height: 100%;
+	border-radius: inherit;
+	background: var(--dock-progress-color);
+	transition: width 0.4s ease;
+}
+
+/* Working, with no amount known yet: a short stretch sweeping along. */
+.dock-progress--indeterminate .dock-progress-fill {
+	width: 40%;
+	transition: none;
+	animation: dock-progress-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes dock-progress-sweep {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(250%);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.dock-progress--indeterminate .dock-progress-fill {
+		width: 100%;
+		opacity: 0.6;
+		animation: none;
+	}
+}
+
 .start-icon-inner {
 	display: none;
 }

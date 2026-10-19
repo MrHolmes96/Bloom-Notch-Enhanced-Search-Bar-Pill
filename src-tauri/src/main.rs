@@ -19,6 +19,7 @@ mod shelf;
 mod shelf_preview;
 mod startup;
 mod state;
+mod taskbar_progress;
 mod toast;
 mod tray;
 mod tray_host;
@@ -293,6 +294,7 @@ fn main() {
             integrations::blitzit::blitzit_open,
             integrations::blitzit::blitzit_tools_report,
             notifications::notification_activate,
+            taskbar_progress::get_taskbar_progress,
             notifications::notification_action,
             notifications::notification_center_fit,
             notifications::notifications_allow_typing,

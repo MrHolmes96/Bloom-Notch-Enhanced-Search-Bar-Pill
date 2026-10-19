@@ -773,7 +773,7 @@ pub fn start(app: AppHandle) {
     }
     std::thread::Builder::new()
         .name("bloom-tray-host".into())
-        .spawn(|| unsafe {
+        .spawn(move || unsafe {
             use windows::Win32::System::LibraryLoader::GetModuleHandleW;
             use windows::Win32::UI::WindowsAndMessaging::{
                 ChangeWindowMessageFilterEx, MSGFLT_ALLOW,
@@ -816,6 +816,9 @@ pub fn start(app: AppHandle) {
                 let _ = ChangeWindowMessageFilterEx(hwnd, message, MSGFLT_ALLOW, None);
             }
             raise(hwnd);
+            // Apps' taskbar progress (and the rest of `ITaskbarList`) is sent
+            // to the window this window names, so Bloom names one of its own.
+            crate::taskbar_progress::start(&app, module.into(), hwnd);
             HOST.store(hwnd.0 as isize, Ordering::Relaxed);
             EXPLORER_SEEN.store(
                 explorer_taskbar().map(|h| h.0 as isize).unwrap_or(0),

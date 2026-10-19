@@ -12,6 +12,7 @@ import { reloadIfMirrorWasStale } from "./hooks/settingsMirror";
 import { mergeTrayApps, selectDockTrayApps, type AppInfo, type TrayApp } from "./dockApps";
 import { binDoubleClickAction, removeCustomFolder, type DockExtra } from "./dockExtras";
 import { DockIconImage } from "./dockIcon";
+import { progressByItem, type ShownProgress, type WindowProgress } from "./dockProgress";
 import { fetchJumpList, hasJumpList, openJumpItem, type JumpGroup } from "./jumpList";
 
 // Host processes (Edge/Chrome/Brave/ApplicationFrameHost) run every PWA/UWP
@@ -140,6 +141,26 @@ function WindowDots({ count, background }: { count: number; background?: boolean
 			{Array.from({ length: background ? 1 : Math.min(Math.max(count, 1), 3) }, (_, i) => (
 				<div key={i} className={`active-indicator${background ? " background-indicator" : ""}`} />
 			))}
+		</div>
+	);
+}
+
+// An app's progress (a download, a copy) in place of its dots, as Windows'
+// taskbar draws it along its button: same spot and height, so nothing moves.
+function ProgressBar({ progress }: { progress: ShownProgress }) {
+	const percent = progress.value === null ? undefined : Math.round(progress.value * 100);
+	return (
+		<div
+			className={`dock-progress dock-progress--${progress.state}`}
+			role="progressbar"
+			aria-valuemin={0}
+			aria-valuemax={100}
+			aria-valuenow={percent}
+		>
+			<div
+				className="dock-progress-fill"
+				style={percent === undefined ? undefined : { width: `${progress.value! * 100}%` }}
+			/>
 		</div>
 	);
 }
@@ -1156,6 +1177,23 @@ const Dock = memo(function Dock() {
 	);
 	const unpinnedItems = useMemo(() => dockItems.filter((i) => !i.is_pinned), [dockItems]);
 
+	// Progress apps show on their taskbar button (Steam's downloads, copies),
+	// drawn on their dock icon.
+	const [taskProgress, setTaskProgress] = useState<WindowProgress[]>([]);
+	useEffect(() => {
+		invoke<WindowProgress[]>("get_taskbar_progress")
+			.then(setTaskProgress)
+			.catch(() => {});
+		const unlisten = listen<WindowProgress[]>("taskbar-progress", (event) => setTaskProgress(event.payload));
+		return () => {
+			unlisten.then((f) => f());
+		};
+	}, []);
+	const progressOf = useMemo(
+		() => progressByItem(dockItems, activeApps, taskProgress, itemKey),
+		[dockItems, activeApps, taskProgress]
+	);
+
 	// Latest state for the Win+Number listener, which subscribes only once.
 	useEffect(() => {
 		pinnedItemsRef.current = pinnedItems;
@@ -1636,11 +1674,15 @@ const Dock = memo(function Dock() {
 														);
 													})()}
 												</motion.div>
-												{app.is_running && (
-													<WindowDots
-														count={app.all_hwnds?.length ?? 1}
-														background={app.is_background}
-													/>
+												{progressOf.has(itemKey(app)) ? (
+													<ProgressBar progress={progressOf.get(itemKey(app))!} />
+												) : (
+													app.is_running && (
+														<WindowDots
+															count={app.all_hwnds?.length ?? 1}
+															background={app.is_background}
+														/>
+													)
 												)}
 											</motion.div>
 										</Reorder.Item>
@@ -1797,11 +1839,15 @@ const Dock = memo(function Dock() {
 												);
 											})()}
 										</motion.div>
-										{app.is_running && (
-											<WindowDots
-												count={app.all_hwnds?.length ?? 1}
-												background={app.is_background}
-											/>
+										{progressOf.has(itemKey(app)) ? (
+											<ProgressBar progress={progressOf.get(itemKey(app))!} />
+										) : (
+											app.is_running && (
+												<WindowDots
+													count={app.all_hwnds?.length ?? 1}
+													background={app.is_background}
+												/>
+											)
 										)}
 									</motion.div>
 								))}

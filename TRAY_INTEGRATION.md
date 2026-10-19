@@ -113,6 +113,21 @@ skips Bloom's window of the same class. Settings > Notch > System Tray > Live
 Tray (`bloom-tray-live`) turns this off; the registry-based reading below is
 then used, and it is also the fallback before the first icons arrive.
 
+#### Taskbar progress on dock icons
+
+`ITaskbarList` calls (taskbar progress, overlay icons, thumbnail buttons) go
+to the window named by the `TaskbandHWND` property of the first
+`Shell_TrayWnd`, which is Bloom's. `taskbar_progress.rs` names a message-only
+window of its own there, records `SetProgressValue` (`WM_USER + 64`, 0–65534)
+and `SetProgressState` (`WM_USER + 65`, a `TBPFLAG`) per window, and passes
+every message on to Explorer's task list (its own `TaskbandHWND`). The dock
+gets `taskbar-progress` at most every 250 ms (`get_taskbar_progress` for the
+current state) and draws a bar in place of the item's dots, choosing between
+windows as Windows does. Only Bloom's window carries the property, so if Bloom
+stops, apps reach Explorer's taskbar as before. Each message number's first
+appearance and every state change are noted in `taskbar-progress.log` in
+Bloom's settings folder.
+
 ### Without the live tray
 
 `tray.rs` reads notification-icon candidates from Windows 11's
