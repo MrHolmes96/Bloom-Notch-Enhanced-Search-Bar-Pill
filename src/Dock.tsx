@@ -91,6 +91,12 @@ function readDividerOpacity(value: string | null | undefined): number {
 	return Math.min(100, Math.max(0, Math.round(parsed)));
 }
 
+/** The dividers' width in CSS pixels: a whole number of screen pixels. */
+function dividerWidthForScreen(): number {
+	const ratio = window.devicePixelRatio || 1;
+	return Math.max(1, Math.ceil(ratio - 0.01)) / ratio;
+}
+
 // Resolve the configured start-button icon to a public asset, or to the data
 // URI of a user-uploaded icon (stored with a "custom:" prefix).
 function resolveStartIcon(startIcon: string): string {
@@ -165,6 +171,15 @@ const Dock = memo(function Dock() {
 	const [dividerOpacity, setDividerOpacity] = useState(() =>
 		readDividerOpacity(localStorage.getItem("bloom-dock-divider-opacity"))
 	);
+	// A whole number of screen pixels wide: a line of a fraction of a pixel
+	// is drawn one pixel wide in one place and two in another, so dividers
+	// at different places looked different.
+	const [dividerWidth, setDividerWidth] = useState(dividerWidthForScreen);
+	useEffect(() => {
+		const update = () => setDividerWidth(dividerWidthForScreen());
+		window.addEventListener("resize", update);
+		return () => window.removeEventListener("resize", update);
+	}, []);
 	const [dockAdaptive, setDockAdaptive] = useState(
 		() => localStorage.getItem("bloom-dock-adaptive") === "true"
 	);
@@ -1383,7 +1398,8 @@ const Dock = memo(function Dock() {
 							originX: 0.5,
 							originY: 1,
 							minWidth: 34,
-							"--dock-divider-strength": `${dividerOpacity}%`
+							"--dock-divider-strength": `${dividerOpacity}%`,
+							"--dock-divider-width": `${dividerWidth}px`
 						} as React.CSSProperties & Record<string, string | number>
 					}
 					onContextMenu={(e) => handleContextMenu(e, null)}

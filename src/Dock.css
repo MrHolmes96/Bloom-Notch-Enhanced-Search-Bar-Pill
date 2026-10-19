@@ -247,7 +247,8 @@ body {
 }
 
 .dock-app-divider {
-	width: 1px;
+	/* A whole number of screen pixels, so every divider looks the same. */
+	width: var(--dock-divider-width, 1px);
 	height: 26px;
 	flex: none;
 	margin: 0 2px;

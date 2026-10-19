@@ -73,14 +73,25 @@ export function AboutTab({
 				<h1 className="about-title">Bloom</h1>
 				<p className="about-version">Version {appVersion}</p>
 				<p className="about-credit">
-					Made with <span className="about-heart">❤️</span> by{" "}
+					Architected and Curated by{" "}
 					<button
 						className="about-author"
 						onClick={() => openUrl("https://github.com/MrHolmes96")}
-						title="Kasper (MrHolmes96) on GitHub"
+						title="MrHolmes on GitHub"
 					>
 						<GithubIcon size={12} />
-						<span>Kasper</span>
+						<span>MrHolmes</span>
+					</button>
+				</p>
+				<p className="about-credit about-credit--foundation">
+					Built on the Bloom foundation by{" "}
+					<button
+						className="about-author"
+						onClick={() => openUrl("https://github.com/SehajveerSingh2005")}
+						title="sehaz on GitHub"
+					>
+						<GithubIcon size={12} />
+						<span>sehaz</span>
 					</button>
 				</p>
 			</div>
