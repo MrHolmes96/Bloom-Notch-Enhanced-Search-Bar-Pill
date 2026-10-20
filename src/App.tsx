@@ -33,6 +33,7 @@ import { BluetoothPanel } from "./components/BluetoothPanel";
 import { TrayPanel, trayPanelHeight } from "./components/TrayPanel";
 import { BlitzitPanel, blitzitPanelHeight } from "./components/BlitzitPanel";
 import { PAGE_ORDER_KEY, isNotchPageId, parsePageOrder, type NotchPageId } from "./notchPages";
+import { isoWeek } from "./weekNumber";
 import {
 	NOTES_KEY,
 	NotesPanel,
@@ -2766,6 +2767,14 @@ function App() {
 		!isOpen && isHovered && bloomMode === "status" && settingsMusicModeEnabled &&
 		mediaInfo.has_media && (!musicActivityVisible || !settingsMusicCompactNotch);
 	const showCompactMusicIcons = isMusicMode || showMusicOnStatusHover;
+	// The widgets that show something: the weather only once there is a
+	// reading (a city is picked), so it never leaves an empty space.
+	const widgetShows = (id: string) =>
+		id !== "weather" || (settingsWeatherEnabled && temperature !== null);
+	const shownWidgets = {
+		left: statusWidgets.left.filter(widgetShows),
+		right: statusWidgets.right.filter(widgetShows)
+	};
 	// Status widgets: on hover, or always when "Only Show Widgets on Hover" is
 	// off. A battery or update pulse still takes the collapsed notch while it runs.
 	const showStatusWidgets =
@@ -2785,7 +2794,7 @@ function App() {
 			return 170 + (settingsVisualizerEnabled ? 30 : 0);
 		}
 		if (bloomMode === "status" && showStatusWidgets) {
-			const totalWidgets = statusWidgets.left.length + statusWidgets.right.length;
+			const totalWidgets = shownWidgets.left.length + shownWidgets.right.length;
 			return Math.min(200 + totalWidgets * 50, 380) - clock24hTrim;
 		}
 		if (isMusicMode && isOpen) return mediaLayout === "compact" ? 300 : 340;
@@ -3503,7 +3512,7 @@ function App() {
 																			</motion.div>
 																		)}
 																	</AnimatePresence>
-																) : !showCompactMusicIcons && showStatusWidgets && statusWidgets.left.length > 0 ? (
+																) : !showCompactMusicIcons && showStatusWidgets && shownWidgets.left.length > 0 ? (
 																	<motion.div
 																		key="left-widgets"
 																		className="passive-features-group"
@@ -3512,7 +3521,7 @@ function App() {
 																		exit={{ opacity: 0 }}
 																		transition={{ duration: 0.2 }}
 																	>
-																		{statusWidgets.left.map(renderStatusWidget)}
+																		{shownWidgets.left.map(renderStatusWidget)}
 																	</motion.div>
 																) : null}
 															</div>
@@ -3666,7 +3675,7 @@ function App() {
 																			</button>
 																		</motion.div>
 																	</AnimatePresence>
-																) : !showCompactMusicIcons && showStatusWidgets && statusWidgets.right.length > 0 ? (
+																) : !showCompactMusicIcons && showStatusWidgets && shownWidgets.right.length > 0 ? (
 																	<motion.div
 																		key="right-widgets"
 																		className="passive-features-group"
@@ -3675,7 +3684,7 @@ function App() {
 																		exit={{ opacity: 0 }}
 																		transition={{ duration: 0.2 }}
 																	>
-																		{statusWidgets.right.map(renderStatusWidget)}
+																		{shownWidgets.right.map(renderStatusWidget)}
 																	</motion.div>
 																) : null}
 															</div>
@@ -4361,6 +4370,7 @@ function Calendar() {
 				<span className="month-year">
 					{monthName} {currentYear}
 				</span>
+				<span className="week-number">Week {isoWeek(date)}</span>
 			</div>
 			<div className="calendar-grid">
 				{["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
