@@ -4,6 +4,7 @@ mod app_icon;
 mod bluetooth;
 mod brightness;
 mod commands;
+mod data_folders;
 mod dock_extras;
 mod foreground;
 mod integrations;
@@ -134,6 +135,10 @@ fn main() {
         }
     }
 
+    // Files kept under the original project's name move to Bloom's own,
+    // before anything opens them.
+    data_folders::move_old_data();
+
     if autostart {
         startup::boost_startup();
     }
@@ -144,7 +149,6 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_drag::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),
@@ -247,6 +251,7 @@ fn main() {
             updater::check_for_updates,
             updater::install_update,
             updater::get_update_state,
+            data_folders::open_bloom_folder,
             jumplist::get_jump_list,
             jumplist::open_jump_item,
             launcher::launcher_hotkey_status,
@@ -340,18 +345,6 @@ fn main() {
             if taskbar_marker_exists() {
                 restore_taskbar_after_crash();
                 NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
-            }
-
-            // Update check on startup (non-blocking). Always runs so the UI can
-            // show an update badge; auto-install only happens when the user
-            // enabled it and the release has aged past the rollout gate. Waits
-            // until the notch and dock are up, so it doesn't slow their start.
-            {
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(8)).await;
-                    updater::run_startup_check(app_handle).await;
-                });
             }
 
             let window = app.get_webview_window("main").unwrap();

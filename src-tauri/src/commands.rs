@@ -4169,7 +4169,7 @@ mod pwa_icon_tests {
 
     #[test]
     fn bloom_launch_targets_reuse_the_running_settings_window() {
-        let identifier = "com.sehaz.bloom";
+        let identifier = "com.mrholmes.bloom";
         assert!(is_bloom_launch_target(identifier, identifier));
         assert!(is_bloom_launch_target("bloom-settings", identifier));
         assert!(is_bloom_launch_target(

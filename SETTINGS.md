@@ -1,6 +1,6 @@
 # Bloom Settings Reference
 
-All settings are stored in `settings.json` in the app config directory (`%APPDATA%/bloom/`). The file is a flat JSON object with `bloom-` prefixed keys. Bloom watches this file for external changes and applies them in real-time.
+All settings are stored in `settings.json` in Bloom's data folder (`%APPDATA%\com.mrholmes.bloom\`, opened from Settings > About > Data). The file is a flat JSON object with `bloom-` prefixed keys. Bloom watches this file for external changes and applies them in real-time.
 
 ## Quick Start
 
@@ -117,7 +117,7 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `bloom-window-memory` | `"true"` / `"false"` | `"true"` | Remember each app's window size and position (in `window_positions.json`) and restore it when the app opens again. |
-| `bloom-windows-snap-borders` | `"true"` / `"false"` | `"true"` | Windows snapped by Windows 11 (halves, thirds, quarters, Snap Layouts) lose Windows 11's border, as in Windows 10; it comes back when they are no longer snapped and when Bloom quits. |
+| `bloom-windows-snap-borders` | `"true"` / `"false"` | `"true"` | Windows snapped by Windows 11 (halves, thirds, quarters, Snap Layouts) lose Windows 11's border, as in Windows 10; once they are no longer snapped (and when Bloom quits) they follow Windows' setting: no border, or the accent border when "Show accent colour on title bars and window borders" is on. |
 | `bloom-dock-preview-style` | `"static"` / `"live"` | `"static"` | Dock window previews: a snapshot, or Windows' live preview of the window. |
 | `bloom-notification-center` | `"windows"` / `"bloom"` | `"bloom"` with Bloom cards, else `"windows"` | What the notification button opens: Windows' notification center or Bloom's (top right, as tall as its notifications, scrolling past about six, grouped by app; buttons and replies work as in Windows). |
 
@@ -185,9 +185,6 @@ Example:
 | `bloom-dock-scale` | number `"0.8"`–`"1.3"` | `bloom-scale`, else `"1.0"` | Size of the dock, its icons and its menus (Settings > Appearance > Dock Size). |
 | `bloom-scale`                  | float string         | `"1.0"`   | The one size for everything in older versions. A part without its own size (`bloom-notch-scale`, `bloom-dock-scale`) still uses it; Settings no longer changes it. |
 | `bloom-low-battery-threshold`  | integer string       | `"20"`    | Battery percentage that triggers the low-battery alert pulse (5 to 50, step 5).                      |
-| `bloom-auto-update`            | `"true"` / `"false"` | `"false"` | Check for and download updates automatically on startup.                                             |
-| `bloom-show-update-indicator`  | `"true"` / `"false"` | `"true"`  | Show a green dot on the notch when an update is available.                                           |
-| `bloom-announcement-dismissed` | announcement id      | `""`      | ID of the last dismissed in-app announcement (published via `website/public/announcements.json`).    |
 | `bloom-time-format-24h`        | `"true"` / `"false"` | `"false"` | Use 24-hour clock format in the notch. When `"false"`, displays 12-hour format with AM/PM.           |
 
 ### Internal (Do Not Edit Manually)

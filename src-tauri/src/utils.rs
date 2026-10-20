@@ -540,11 +540,10 @@ pub fn restore_windows_now() {
     use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsWindowVisible};
     if TASKBAR_MARKER.get().is_none() {
         if let Some(appdata) = std::env::var_os("APPDATA") {
-            let _ = TASKBAR_MARKER.set(
-                PathBuf::from(appdata)
-                    .join("com.sehaz.bloom")
-                    .join("taskbar_hidden.flag"),
-            );
+            let marker = PathBuf::from(appdata)
+                .join(crate::data_folders::IDENTIFIER)
+                .join("taskbar_hidden.flag");
+            let _ = TASKBAR_MARKER.set(marker);
         }
     }
     if taskbar_marker_exists() {

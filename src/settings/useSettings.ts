@@ -3,7 +3,6 @@ import { readScale, scaleSyncHandlers, SCALE_KEYS } from "../uiScale";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, emit } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
-import type { UpdateCheckResult } from "../updater";
 import { useSettingsSync } from "../hooks/useSettingsSync";
 import { reloadIfMirrorWasStale } from "../hooks/settingsMirror";
 import { hexToHsl } from "../theme";
@@ -127,14 +126,7 @@ export function useSettings() {
 		return val !== null ? parseInt(val) : 200;
 	});
 	const [lowBatteryThreshold, setLowBatteryThreshold] = useState(20);
-	const [updateStatus, setUpdateStatus] = useState<
-		"idle" | "checking" | "available" | "uptodate" | "error" | "downloading" | "installing"
-	>("idle");
-	const [updateVersion, setUpdateVersion] = useState("");
 	const [appVersion, setAppVersion] = useState("");
-	const [autoUpdate, setAutoUpdate] = useState(
-		() => localStorage.getItem("bloom-auto-update") === "true"
-	);
 	// The notch (with the volume and brightness pop-ups) and the dock each
 	// have their own size.
 	const [notchScale, setNotchScale] = useState(() => readScale("notch"));
@@ -201,7 +193,6 @@ export function useSettings() {
 			apply(getVal("bloom-corners-enabled"), setCornersEnabled, readBool);
 			apply(getVal("bloom-time-format-24h"), setTimeFormat24h, readBool);
 			apply(getVal("bloom-show-update-indicator"), setShowUpdateIndicator, readBool);
-			apply(getVal("bloom-auto-update"), setAutoUpdate, readBool);
 			apply(getVal("bloom-volume-edge-enabled"), setVolumeEdgeEnabled, readBool);
 			apply(getVal("bloom-brightness-edge-enabled"), setBrightnessEdgeEnabled, readBool);
 			apply(getVal("bloom-dock-enabled"), setDockEnabled, readBool);
@@ -262,7 +253,6 @@ export function useSettings() {
 			.then((ver) => setAppVersion(ver || "3.1.2"))
 			.catch(() => setAppVersion("3.1.2"));
 
-		checkForUpdates(false);
 	}, []);
 
 	// ── Sync settings from other windows ──
@@ -302,7 +292,6 @@ export function useSettings() {
 		...scaleSyncHandlers("notch", setNotchScale),
 		...scaleSyncHandlers("dock", setDockScale),
 		"bloom-temp-unit": (v) => setTempUnitFahrenheit(v === "fahrenheit"),
-		"bloom-auto-update": setAutoUpdate,
 		"bloom-volume-overlay-enabled": setVolumeOverlayEnabled,
 		"bloom-volume-edge-enabled": setVolumeEdgeEnabled,
 		"bloom-brightness-overlay-enabled": setBrightnessOverlayEnabled,
@@ -368,59 +357,6 @@ export function useSettings() {
 
 		return () => clearTimeout(timeout);
 	}, [cityName]);
-
-	// ── Update checker ──
-	const checkForUpdates = async (manual = true) => {
-		setUpdateStatus("checking");
-		try {
-			const result = await invoke<UpdateCheckResult>("check_for_updates", { force: manual });
-			if (result.available) {
-				setUpdateStatus("available");
-				setUpdateVersion(result.version ?? "");
-			} else {
-				setUpdateStatus("uptodate");
-			}
-		} catch (e) {
-			console.error("Updater error:", e);
-			setUpdateStatus("error");
-		}
-	};
-
-	const installUpdate = async () => {
-		try {
-			setUpdateStatus("downloading");
-			await invoke("install_update");
-			setUpdateStatus("idle");
-		} catch (e) {
-			console.error(e);
-			setUpdateStatus("error");
-		}
-	};
-
-	// Reflect install progress triggered from any window (including auto-update).
-	useEffect(() => {
-		const unlisten = listen<{ status: string; progress?: number }>(
-			"auto-update-status",
-			(event) => {
-				switch (event.payload.status) {
-					case "downloading":
-						setUpdateStatus("downloading");
-						break;
-					case "installing":
-						setUpdateStatus("installing");
-						break;
-					case "done":
-						setUpdateStatus((prev) =>
-							prev === "downloading" || prev === "installing" ? "idle" : prev
-						);
-						break;
-				}
-			}
-		);
-		return () => {
-			unlisten.then((fn) => fn());
-		};
-	}, []);
 
 	// ── Autostart ──
 	// Bloom starts with Windows through a startup task, so it is up before the
@@ -637,12 +573,6 @@ export function useSettings() {
 		const next = removeCustomFolder(dockExtrasCustomFolders, path);
 		setDockExtrasCustomFolders(next);
 		saveSetting("bloom-dock-extras-custom-folders", next);
-	};
-
-	const toggleAutoUpdate = () => {
-		const next = !autoUpdate;
-		setAutoUpdate(next);
-		saveSetting("bloom-auto-update", String(next));
 	};
 
 	// ── Value setters ──
@@ -862,8 +792,6 @@ export function useSettings() {
 		// System
 		autostart,
 		toggleAutostart,
-		autoUpdate,
-		toggleAutoUpdate,
 		lowBatteryThreshold,
 		handleThresholdChange,
 		timeFormat24h,
@@ -975,12 +903,7 @@ export function useSettings() {
 		brightnessEdgeEnabled,
 		toggleBrightnessEdge,
 
-		// Updates
-		updateStatus,
-		updateVersion,
 		appVersion,
-		checkForUpdates,
-		installUpdate,
 
 		// Import / Export
 		exportStatus,

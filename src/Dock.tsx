@@ -1121,7 +1121,7 @@ const Dock = memo(function Dock() {
 			}
 
 			// A pinned shell id and a visible window can have different paths
-			// (for example com.sehaz.bloom and bloom.exe). Match both visible
+			// (for example com.mrholmes.bloom and bloom.exe). Match both visible
 			// and background apps so the window cannot become a second dock item.
 			const equivalent = activeApps.find(
 				(app) => !matchedRunningKeys.has(itemKey(app)) && isSameApp(p, app)

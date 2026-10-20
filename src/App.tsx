@@ -22,9 +22,7 @@ import { CompactMediaPlayer } from "./CompactMediaPlayer";
 import { useWeather } from "./hooks/useWeather";
 import { useSettingsSync } from "./hooks/useSettingsSync";
 import { useTrailingThrottle } from "./hooks/useTrailingThrottle";
-import { useAnnouncement } from "./hooks/useAnnouncement";
 import { reloadIfMirrorWasStale } from "./hooks/settingsMirror";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import type { WidgetConfig } from "./components/StatusWidgetConfig";
@@ -72,7 +70,6 @@ import {
 	Play,
 	Pause,
 	RotateCcw,
-	Megaphone,
 	Type,
 	X,
 	ChevronLeft,
@@ -487,7 +484,6 @@ type BloomMode =
 	| "music"
 	| "calendar"
 	| "command-center"
-	| "announcement"
 	| "status"
 	| "shelf"
 	| "notes"
@@ -718,17 +714,6 @@ function App() {
 			if (updatePulseTimerRef.current) clearTimeout(updatePulseTimerRef.current);
 		};
 	}, [windowLabel, notchMode, triggerEventPeek]);
-
-	// Remote announcement shown as a persistent notch card until dismissed.
-	const {
-		announcement,
-		dismissed: announcementDismissed,
-		dismiss: dismissAnnouncement
-	} = useAnnouncement();
-	const announcementShownRef = useRef<string | null>(null);
-	const announcementOpen = !!announcement && !announcementDismissed;
-	const announcementOpenRef = useRef(false);
-	announcementOpenRef.current = announcementOpen;
 
 	const [isVisible, setIsVisible] = useState(true);
 	const [isImpacted, setIsImpacted] = useState(false);
@@ -1321,7 +1306,7 @@ function App() {
 		invoke("change_notch_mode", { mode: notchMode });
 	}, [notchMode, windowLabel]);
 
-	// Bloom mode state: 'music', 'calendar', 'command-center', 'announcement', 'shelf', or 'status'
+	// Bloom mode state: 'music', 'calendar', 'command-center', 'shelf', or 'status'
 	const [bloomMode, setBloomMode] = useState<BloomMode>("status");
 
 	// Shelf: files and selected text stashed in the notch via drag-and-drop.
@@ -1825,7 +1810,7 @@ function App() {
 			console.info("[shelf] drag-enter:", event.payload.paths ?? event.payload.text);
 			setIsDragHovering(true);
 			const prev = bloomModeRef.current;
-			if (prev === "announcement" || prev === "shelf") return;
+			if (prev === "shelf") return;
 			shelfPrevModeRef.current = prev;
 			shelfPrevOpenRef.current = isOpenRef.current;
 			shelfDragActiveRef.current = true;
@@ -1852,10 +1837,8 @@ function App() {
 			if (paths.length === 0 && !text) return;
 			if (paths.length > 0) addShelfItems(paths);
 			if (text) addShelfText(text);
-			if (bloomModeRef.current !== "announcement") {
-				setIsOpen(true);
-				setBloomMode("shelf");
-			}
+			setIsOpen(true);
+			setBloomMode("shelf");
 			collapseShelfSoon();
 		};
 
@@ -1880,22 +1863,6 @@ function App() {
 			unlisteners.forEach((fn) => fn());
 		};
 	}, []);
-
-	// Open the notch on an unseen announcement; stays open until dismissed.
-	useEffect(() => {
-		if (!announcement || announcementDismissed) return;
-		if (announcementShownRef.current === announcement.id) return;
-		announcementShownRef.current = announcement.id;
-		setBloomMode("announcement");
-		if (notchMode === "peek") triggerEventPeek(6000);
-	}, [announcement, announcementDismissed, notchMode, triggerEventPeek]);
-
-	// Leave the announcement view once it is dismissed (or gone).
-	useEffect(() => {
-		if (bloomMode === "announcement" && (!announcement || announcementDismissed)) {
-			setBloomMode(mediaInfo.has_media && isPlaying ? "music" : "status");
-		}
-	}, [bloomMode, announcement, announcementDismissed, mediaInfo.has_media, isPlaying]);
 
 	// Window height is now kept constant to prevent rendering layout lag and sharp corners
 
@@ -1965,7 +1932,6 @@ function App() {
 	// Wheel and swipe navigate panels, even from a collapsed live activity.
 	// Music remains an entry point through its activity affordance.
 	const cycleBloomMode = (direction: 1 | -1) => {
-		if (bloomMode === "announcement") return false;
 		const modes = scrollModes();
 		const currentIndex = modes.indexOf(bloomMode);
 		const nextMode = currentIndex === -1
@@ -2173,7 +2139,7 @@ function App() {
 	const collapsedMode = musicActivity && !timerActive ? "music" : "status";
 	const showMusicBubble = musicActivity && timerActive && !isOpen && isVisible && !isHidden;
 	const showShelfBubble =
-		shelfItems.length > 0 && !isOpen && isVisible && !isHidden && bloomMode !== "announcement";
+		shelfItems.length > 0 && !isOpen && isVisible && !isHidden;
 	restingModeRef.current = collapsedMode;
 	bloomModeRef.current = bloomMode;
 
@@ -2197,7 +2163,6 @@ function App() {
 
 	// Expands the notch into a page, or into an activity's own view.
 	const openNotch = (view: NotchPage | "music") => {
-		if (bloomMode === "announcement") return;
 		setIsOpen(true);
 		setBloomMode(view);
 	};
@@ -2271,7 +2236,7 @@ function App() {
 	// session exists, the timer (with music in its bubble) once one is set, and
 	// the clock otherwise. An open notch is left alone.
 	useEffect(() => {
-		if (isOpen || announcementOpenRef.current) return;
+		if (isOpen) return;
 		if ((bloomMode === "status" || bloomMode === "music") && bloomMode !== collapsedMode) {
 			setBloomMode(collapsedMode);
 		}
@@ -2812,7 +2777,6 @@ function App() {
 
 	// Calculate width dynamically based on enabled features
 	const getDynamicWidth = () => {
-		if (bloomMode === "announcement" && announcement && !announcementDismissed) return 380;
 		if (isCalendarMode) return 480;
 		if (bloomMode === "shelf" || bloomMode === "notes" || bloomMode === "blitzit") return 380;
 		if (bloomMode === "command-center" && isOpen) return 350;
@@ -2839,10 +2803,6 @@ function App() {
 	const getDynamicHeight = () => {
 		if (!isExpanded || !isVisible || isHidden) {
 			return isImpacted ? 28.9 : 44.2;
-		}
-		// Announcement card: body is line-clamped, so a fixed size fits both cases.
-		if (bloomMode === "announcement" && announcement && !announcementDismissed) {
-			return announcement.url ? 168 : 148;
 		}
 		// Sized to the calendar's week-row count plus the timer's fixed content.
 		if (bloomMode === "calendar") return calendarMonthRows >= 6 ? 305 : 273;
@@ -3986,49 +3946,6 @@ function App() {
 													<span className="cc-classic-percentage">{currentBrightness}%</span>
 												</div>
 											</div>
-										</motion.div>
-									)}
-								</AnimatePresence>
-
-								{/* Announcement Card */}
-								<AnimatePresence>
-									{bloomMode === "announcement" && announcement && !announcementDismissed && (
-										<motion.div
-											className={`announcement-content severity-${announcement.severity}`}
-											onClick={(e) => e.stopPropagation()}
-											initial={{ opacity: 0 }}
-											animate={{ opacity: 1 }}
-											exit={{
-												opacity: 0,
-												filter: "blur(4px)",
-												transition: { duration: 0.1 }
-											}}
-											transition={{ type: "spring", stiffness: 400, damping: 30 }}
-										>
-											<div className="announcement-header">
-												<div className="announcement-heading">
-													<Megaphone size={14} className="announcement-icon" />
-													<span className="announcement-title">{announcement.title}</span>
-												</div>
-												<button
-													className="announcement-close"
-													onClick={dismissAnnouncement}
-													title="Dismiss"
-												>
-													<X size={13} strokeWidth={2.2} />
-												</button>
-											</div>
-											{announcement.body && (
-												<p className="announcement-body">{announcement.body}</p>
-											)}
-											{announcement.url && (
-												<button
-													className="announcement-link"
-													onClick={() => openUrl(announcement.url!)}
-												>
-													Learn more
-												</button>
-											)}
 										</motion.div>
 									)}
 								</AnimatePresence>

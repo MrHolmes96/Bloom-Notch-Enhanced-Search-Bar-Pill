@@ -1,16 +1,16 @@
-import { Download, RefreshCw, FileDown, Upload } from "lucide-react";
+import { useState } from "react";
+import { Download, FileDown, Upload, FolderOpen, HardDrive } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GithubIcon } from "../icons";
 import { SettingRow } from "./SettingRow";
 
+/** Where this build's new versions are published. */
+const BUILDS_URL =
+	"https://github.com/MrHolmes96/bloom-notch-enhanced-search-bar-pill/releases/tag/personal-build";
+
 interface AboutTabProps {
 	appVersion: string;
-	autoUpdate: boolean;
-	toggleAutoUpdate: () => void;
-	updateStatus: string;
-	updateVersion: string;
-	checkForUpdates: () => void;
-	installUpdate: () => void;
 	exportStatus: string;
 	importStatus: string;
 	handleExportSettings: () => void;
@@ -19,40 +19,16 @@ interface AboutTabProps {
 
 export function AboutTab({
 	appVersion,
-	autoUpdate,
-	toggleAutoUpdate,
-	updateStatus,
-	updateVersion,
-	checkForUpdates,
-	installUpdate,
 	exportStatus,
 	importStatus,
 	handleExportSettings,
 	handleImportSettings
 }: AboutTabProps) {
-	const getUpdateLabel = () => {
-		switch (updateStatus) {
-			case "checking":
-				return "Checking...";
-			case "available":
-				return `Update Available (v${updateVersion})`;
-			case "uptodate":
-				return "Bloom is up to date";
-			case "downloading":
-				return "Downloading Update...";
-			case "installing":
-				return "Installing...";
-			case "error":
-				return "No updates found";
-			default:
-				return "Check for Updates";
-		}
+	const [folderError, setFolderError] = useState("");
+	const openFolder = (kind: "data" | "cache") => {
+		setFolderError("");
+		invoke("open_bloom_folder", { kind }).catch((e) => setFolderError(String(e)));
 	};
-
-	const getUpdateDesc = () =>
-		updateStatus === "available"
-			? "Click to install and restart"
-			: `Currently running v${appVersion}`;
 
 	const getExportLabel = () => {
 		if (exportStatus === "exporting") return "Exporting...";
@@ -96,27 +72,34 @@ export function AboutTab({
 				</p>
 			</div>
 
-			<div className="setting-group-label">Software Updates</div>
+			<div className="setting-group-label">Updates</div>
 			<div className="setting-group">
-				<SettingRow icon={Download} label="Auto Update" desc="Update automatically on startup">
-					<label className="toggle-switch">
-						<input type="checkbox" checked={autoUpdate} onChange={toggleAutoUpdate} />
-						<span className="slider"></span>
-					</label>
-				</SettingRow>
-
 				<SettingRow
-					icon={RefreshCw}
-					label={getUpdateLabel()}
-					desc={getUpdateDesc()}
+					icon={Download}
+					label="Get New Builds"
+					desc={`Running v${appVersion}. Bloom never looks for updates itself; new builds are on your personal-build release`}
 					action
 					divider={false}
-					onClick={() => (updateStatus === "available" ? installUpdate() : checkForUpdates())}
+					onClick={() => openUrl(BUILDS_URL)}
 				/>
 			</div>
 
 			<div className="setting-group-label setting-group-label--spaced">Data</div>
 			<div className="setting-group">
+				<SettingRow
+					icon={FolderOpen}
+					label="Open Data Folder"
+					desc={folderError || "Settings, logs and tray-icons.txt"}
+					action
+					onClick={() => openFolder("data")}
+				/>
+				<SettingRow
+					icon={HardDrive}
+					label="Open Cache Folder"
+					desc="The notch's web storage and caches"
+					action
+					onClick={() => openFolder("cache")}
+				/>
 				<SettingRow
 					icon={FileDown}
 					label={getExportLabel()}
@@ -132,6 +115,13 @@ export function AboutTab({
 					divider={false}
 					onClick={handleImportSettings}
 				/>
+			</div>
+			<div className="setting-group-note">
+				Everything Bloom keeps stays in these two folders on this PC, and nothing is sent anywhere
+				on its own. Bloom only goes online for the weather (Open-Meteo, for the city you set; with
+				no city set, your rough location is looked up from your IP address), search suggestions if
+				you turn them on, Blitzit if you connect it, and LocalSend, which stays on your home
+				network.
 			</div>
 		</div>
 	);

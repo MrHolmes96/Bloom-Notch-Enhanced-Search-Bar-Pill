@@ -1,4 +1,4 @@
-import { Power, Download, Clock, BatteryWarning, RefreshCw, RotateCcw, LogOut } from "lucide-react";
+import { Power, Clock, BatteryWarning, RefreshCw, RotateCcw, LogOut } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 
 /** Settings > General's sub-sections. */
@@ -10,8 +10,6 @@ interface GeneralTabProps {
 	toggleAutostart: () => void;
 	timeFormat24h: boolean;
 	toggleTimeFormat24h: () => void;
-	showUpdateIndicator: boolean;
-	toggleUpdateIndicator: () => void;
 	lowBatteryThreshold: number;
 	handleThresholdChange: (val: number) => void;
 	restartBloom: () => void;
@@ -25,8 +23,6 @@ export function GeneralTab({
 	toggleAutostart,
 	timeFormat24h,
 	toggleTimeFormat24h,
-	showUpdateIndicator,
-	toggleUpdateIndicator,
 	lowBatteryThreshold,
 	handleThresholdChange,
 	restartBloom,
@@ -104,21 +100,14 @@ export function GeneralTab({
 		<>
 			<div className="setting-group-label">Startup</div>
 			<div className="setting-group">
-				<SettingRow icon={Power} label="Launch at Login" desc="Start with Windows, ahead of other startup apps">
-					<label className="toggle-switch">
-						<input type="checkbox" checked={autostart} onChange={toggleAutostart} />
-						<span className="slider"></span>
-					</label>
-				</SettingRow>
-
 				<SettingRow
-					icon={Download}
-					label="Update Indicator"
-					desc="Show green dot when update available"
+					icon={Power}
+					label="Launch at Login"
+					desc="Start with Windows, ahead of other startup apps"
 					divider={false}
 				>
 					<label className="toggle-switch">
-						<input type="checkbox" checked={showUpdateIndicator} onChange={toggleUpdateIndicator} />
+						<input type="checkbox" checked={autostart} onChange={toggleAutostart} />
 						<span className="slider"></span>
 					</label>
 				</SettingRow>

@@ -4,7 +4,6 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Effect } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	X,
 	Settings,
@@ -15,7 +14,6 @@ import {
 	Bell,
 	Search,
 	Info,
-	Megaphone,
 	Blocks,
 	Zap,
 	Power,
@@ -69,7 +67,6 @@ import type {
 	NotificationsSection,
 	SearchBarSection
 } from "./settings/index";
-import { useAnnouncement } from "./hooks/useAnnouncement";
 import { initTheme } from "./theme";
 import "./Settings.css";
 
@@ -239,7 +236,6 @@ function SettingsApp() {
 	};
 	const { category, section } = place;
 	const settings = useSettings();
-	const { announcement, dismissed, dismiss } = useAnnouncement();
 
 	useEffect(() => {
 		return initTheme();
@@ -337,28 +333,6 @@ function SettingsApp() {
 				</div>
 
 				<div className="settings-content">
-					{announcement && !dismissed && (
-						<div className={`announcement-banner severity-${announcement.severity}`}>
-							<Megaphone size={14} className="announcement-banner-icon" />
-							<div className="announcement-banner-text">
-								<span className="announcement-banner-title">{announcement.title}</span>
-								{announcement.body && (
-									<span className="announcement-banner-body">{announcement.body}</span>
-								)}
-							</div>
-							{announcement.url && (
-								<button
-									className="announcement-banner-link"
-									onClick={() => openUrl(announcement.url!)}
-								>
-									Learn more
-								</button>
-							)}
-							<button className="announcement-banner-close" onClick={dismiss} title="Dismiss">
-								<X size={12} strokeWidth={2.2} />
-							</button>
-						</div>
-					)}
 					{category === "general" && (
 						<GeneralTab
 							section={section as GeneralSection}
@@ -366,8 +340,6 @@ function SettingsApp() {
 							toggleAutostart={settings.toggleAutostart}
 							timeFormat24h={settings.timeFormat24h}
 							toggleTimeFormat24h={settings.toggleTimeFormat24h}
-							showUpdateIndicator={settings.showUpdateIndicator}
-							toggleUpdateIndicator={settings.toggleUpdateIndicator}
 							lowBatteryThreshold={settings.lowBatteryThreshold}
 							handleThresholdChange={settings.handleThresholdChange}
 							restartBloom={settings.restartBloom}
@@ -492,12 +464,6 @@ function SettingsApp() {
 					{category === "about" && (
 						<AboutTab
 							appVersion={settings.appVersion}
-							autoUpdate={settings.autoUpdate}
-							toggleAutoUpdate={settings.toggleAutoUpdate}
-							updateStatus={settings.updateStatus}
-							updateVersion={settings.updateVersion}
-							checkForUpdates={settings.checkForUpdates}
-							installUpdate={settings.installUpdate}
 							exportStatus={settings.exportStatus}
 							importStatus={settings.importStatus}
 							handleExportSettings={settings.handleExportSettings}
