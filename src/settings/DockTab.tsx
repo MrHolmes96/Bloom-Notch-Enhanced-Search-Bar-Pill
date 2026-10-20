@@ -48,7 +48,17 @@ const startIconTileStyle = (active: boolean): CSSProperties => ({
 	color: "rgba(255,255,255,0.5)"
 });
 
+/** Settings > Dock's sub-sections. */
+export type DockSection = "behavior" | "look" | "extras";
+
+const SECTION_LABELS: Record<DockSection, string> = {
+	behavior: "Dock",
+	look: "Look",
+	extras: "Extras"
+};
+
 interface DockTabProps {
+	section: DockSection;
 	dockEnabled: boolean;
 	toggleDock: () => void;
 	dockMode: string;
@@ -81,6 +91,7 @@ interface DockTabProps {
 }
 
 export function DockTab({
+	section,
 	dockEnabled,
 	toggleDock,
 	dockMode,
@@ -123,18 +134,28 @@ export function DockTab({
 		e.target.value = "";
 	};
 
+	if (!dockEnabled && section !== "behavior") {
+		return (
+			<div className="setting-group-note">
+				<Monitor size={11} /> The Bloom Dock is off; switch it on under Dock &gt; Behavior.
+			</div>
+		);
+	}
+
 	return (
 		<>
-			<div className="setting-group-label">Dock</div>
+			<div className="setting-group-label">{SECTION_LABELS[section]}</div>
 			<div className="setting-group">
-				<SettingRow icon={Monitor} label="Bloom Dock" desc="Replace Windows taskbar">
-					<label className="toggle-switch">
-						<input type="checkbox" checked={dockEnabled} onChange={toggleDock} />
-						<span className="slider"></span>
-					</label>
-				</SettingRow>
+				{section === "behavior" && (
+					<SettingRow icon={Monitor} label="Bloom Dock" desc="Replace Windows taskbar">
+						<label className="toggle-switch">
+							<input type="checkbox" checked={dockEnabled} onChange={toggleDock} />
+							<span className="slider"></span>
+						</label>
+					</SettingRow>
+				)}
 
-				{dockEnabled && (
+				{dockEnabled && section === "behavior" && (
 					<>
 						<SettingRow
 							icon={dockMode === "fixed" ? EyeOff : Eye}
@@ -174,6 +195,36 @@ export function DockTab({
 							</SettingRow>
 						)}
 
+						<SettingRow
+							icon={Keyboard}
+							label="Win+Number Shortcuts"
+							desc="Open pinned apps with Win+1 through Win+9"
+							divider={dockMode === "fixed"}
+						>
+							<label className="toggle-switch">
+								<input type="checkbox" checked={dockWinNumberEnabled} onChange={toggleDockWinNumber} />
+								<span className="slider"></span>
+							</label>
+						</SettingRow>
+
+						{dockMode === "fixed" && (
+							<SettingRow
+								icon={Maximize2}
+								label="Adaptive Mode"
+								desc="Stretch to full width when a window is maximized"
+								divider={false}
+							>
+								<label className="toggle-switch">
+									<input type="checkbox" checked={dockAdaptive} onChange={toggleDockAdaptive} />
+									<span className="slider"></span>
+								</label>
+							</SettingRow>
+						)}
+					</>
+				)}
+
+				{dockEnabled && section === "look" && (
+					<>
 						<SettingRow icon={Eye} label="Show App Previews" desc="Show window thumbnails on hover">
 							<label className="toggle-switch">
 								<input type="checkbox" checked={dockPreviewEnabled} onChange={toggleDockPreview} />
@@ -190,17 +241,9 @@ export function DockTab({
 							</label>
 						</SettingRow>
 
-						<SettingRow
-							icon={Columns2}
-							label="App Separator"
-							desc="Show a divider before unpinned apps"
-						>
+						<SettingRow icon={Columns2} label="App Separator" desc="Show a divider before unpinned apps">
 							<label className="toggle-switch">
-								<input
-									type="checkbox"
-									checked={dockSeparatorEnabled}
-									onChange={toggleDockSeparator}
-								/>
+								<input type="checkbox" checked={dockSeparatorEnabled} onChange={toggleDockSeparator} />
 								<span className="slider"></span>
 							</label>
 						</SettingRow>
@@ -221,175 +264,6 @@ export function DockTab({
 							/>
 						</SettingRow>
 
-						<SettingRow
-							icon={Keyboard}
-							label="Win+Number Shortcuts"
-							desc="Open pinned apps with Win+1 through Win+9"
-							divider={dockMode === "fixed"}
-						>
-							<label className="toggle-switch">
-								<input
-									type="checkbox"
-									checked={dockWinNumberEnabled}
-									onChange={toggleDockWinNumber}
-								/>
-								<span className="slider"></span>
-							</label>
-						</SettingRow>
-
-						{dockMode === "fixed" && (
-							<SettingRow
-								icon={Maximize2}
-								label="Adaptive Mode"
-								desc="Stretch to full width when a window is maximized"
-								divider={false}
-							>
-								<label className="toggle-switch">
-									<input type="checkbox" checked={dockAdaptive} onChange={toggleDockAdaptive} />
-									<span className="slider"></span>
-								</label>
-							</SettingRow>
-						)}
-
-						<SettingRow
-							icon={Trash2}
-							label="Recycle Bin"
-							desc="In the dock, filling up bar by bar as the bin grows, updated the moment it changes"
-						>
-							<label className="toggle-switch">
-								<input
-									type="checkbox"
-									checked={dockExtrasRecycleBin}
-									onChange={toggleDockExtrasRecycleBin}
-								/>
-								<span className="slider"></span>
-							</label>
-						</SettingRow>
-
-						{dockExtrasRecycleBin && <RecycleBinSettings />}
-
-						<SettingRow
-							icon={LayoutPanelLeft}
-							label="Dock Extras"
-							desc="Show drives and folders beside the apps"
-						>
-							<select
-								className="settings-select"
-								value={dockExtrasPosition}
-								onChange={(e) => handleDockExtrasPositionChange(e.target.value)}
-							>
-								<option value="off">Off</option>
-								<option value="left">Left</option>
-								<option value="right">Right</option>
-							</select>
-						</SettingRow>
-
-						{dockExtrasPosition !== "off" && (
-							<>
-								<SettingRow
-									icon={HardDrive}
-									label="Drives"
-									desc="Fixed, removable and connected network drives"
-								>
-									<label className="toggle-switch">
-										<input
-											type="checkbox"
-											checked={dockExtrasDrives}
-											onChange={toggleDockExtrasDrives}
-										/>
-										<span className="slider"></span>
-									</label>
-								</SettingRow>
-
-								<div
-									className="setting-item"
-									style={{ flexDirection: "column", alignItems: "flex-start", gap: "10px" }}
-								>
-									<div
-										style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}
-									>
-										<div className="setting-icon-bg">
-											<FolderOpen size={14} strokeWidth={1.5} />
-										</div>
-										<div className="setting-info">
-											<span className="setting-label">Special Folders</span>
-											<span className="setting-desc">
-												Pick the folders that appear in the extras
-											</span>
-										</div>
-									</div>
-									<div
-										style={{ display: "flex", gap: "8px", flexWrap: "wrap", paddingLeft: "34px" }}
-									>
-										{KNOWN_FOLDER_OPTIONS.map((folder) => {
-											const active = parseEnabledFolders(dockExtrasFolders).includes(folder.id);
-											return (
-												<button
-													key={folder.id}
-													type="button"
-													className={`folder-chip ${active ? "active" : ""}`}
-													onClick={() => toggleDockExtraFolder(folder.id)}
-												>
-													{folder.label}
-												</button>
-											);
-										})}
-									</div>
-								</div>
-
-								<div
-									className="setting-item"
-									style={{ flexDirection: "column", alignItems: "flex-start", gap: "10px" }}
-								>
-									<div
-										style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}
-									>
-										<div className="setting-icon-bg">
-											<FolderPlus size={14} strokeWidth={1.5} />
-										</div>
-										<div className="setting-info">
-											<span className="setting-label">Custom Folders</span>
-											<span className="setting-desc">Add any folder to the extras section</span>
-										</div>
-									</div>
-									<div
-										style={{
-											display: "flex",
-											flexDirection: "column",
-											gap: "6px",
-											width: "100%",
-											paddingLeft: "34px",
-											boxSizing: "border-box"
-										}}
-									>
-										{parseCustomFolders(dockExtrasCustomFolders).map((folder) => (
-											<div key={folder.path} className="extra-folder-row">
-												<span className="extra-folder-name">{folder.name}</span>
-												<span className="extra-folder-path">{folder.path}</span>
-												<button
-													type="button"
-													className="extra-folder-remove"
-													title="Remove folder"
-													onClick={() => handleRemoveDockExtraFolder(folder.path)}
-												>
-													<X size={14} strokeWidth={2} />
-												</button>
-											</div>
-										))}
-										<button
-											type="button"
-											className="folder-chip add"
-											onClick={handleAddDockExtraFolder}
-										>
-											<Plus size={13} strokeWidth={2} />
-											Add Folder...
-										</button>
-									</div>
-								</div>
-							</>
-						)}
-
-						<div className="setting-divider" />
 						<div
 							className="setting-item"
 							style={{ flexDirection: "column", alignItems: "flex-start", gap: "10px" }}
@@ -458,6 +332,128 @@ export function DockTab({
 								onChange={handleStartIconUpload}
 							/>
 						</div>
+					</>
+				)}
+
+				{dockEnabled && section === "extras" && (
+					<>
+						<SettingRow
+							icon={Trash2}
+							label="Recycle Bin"
+							desc="In the dock, filling up bar by bar as the bin grows, updated the moment it changes"
+						>
+							<label className="toggle-switch">
+								<input type="checkbox" checked={dockExtrasRecycleBin} onChange={toggleDockExtrasRecycleBin} />
+								<span className="slider"></span>
+							</label>
+						</SettingRow>
+
+						{dockExtrasRecycleBin && <RecycleBinSettings />}
+
+						<SettingRow
+							icon={LayoutPanelLeft}
+							label="Dock Extras"
+							desc="Show drives and folders beside the apps"
+						>
+							<select
+								className="settings-select"
+								value={dockExtrasPosition}
+								onChange={(e) => handleDockExtrasPositionChange(e.target.value)}
+							>
+								<option value="off">Off</option>
+								<option value="left">Left</option>
+								<option value="right">Right</option>
+							</select>
+						</SettingRow>
+
+						{dockExtrasPosition !== "off" && (
+							<>
+								<SettingRow
+									icon={HardDrive}
+									label="Drives"
+									desc="Fixed, removable and connected network drives"
+								>
+									<label className="toggle-switch">
+										<input type="checkbox" checked={dockExtrasDrives} onChange={toggleDockExtrasDrives} />
+										<span className="slider"></span>
+									</label>
+								</SettingRow>
+
+								<div
+									className="setting-item"
+									style={{ flexDirection: "column", alignItems: "flex-start", gap: "10px" }}
+								>
+									<div style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}>
+										<div className="setting-icon-bg">
+											<FolderOpen size={14} strokeWidth={1.5} />
+										</div>
+										<div className="setting-info">
+											<span className="setting-label">Special Folders</span>
+											<span className="setting-desc">Pick the folders that appear in the extras</span>
+										</div>
+									</div>
+									<div style={{ display: "flex", gap: "8px", flexWrap: "wrap", paddingLeft: "34px" }}>
+										{KNOWN_FOLDER_OPTIONS.map((folder) => {
+											const active = parseEnabledFolders(dockExtrasFolders).includes(folder.id);
+											return (
+												<button
+													key={folder.id}
+													type="button"
+													className={`folder-chip ${active ? "active" : ""}`}
+													onClick={() => toggleDockExtraFolder(folder.id)}
+												>
+													{folder.label}
+												</button>
+											);
+										})}
+									</div>
+								</div>
+
+								<div
+									className="setting-item"
+									style={{ flexDirection: "column", alignItems: "flex-start", gap: "10px" }}
+								>
+									<div style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}>
+										<div className="setting-icon-bg">
+											<FolderPlus size={14} strokeWidth={1.5} />
+										</div>
+										<div className="setting-info">
+											<span className="setting-label">Custom Folders</span>
+											<span className="setting-desc">Add any folder to the extras section</span>
+										</div>
+									</div>
+									<div
+										style={{
+											display: "flex",
+											flexDirection: "column",
+											gap: "6px",
+											width: "100%",
+											paddingLeft: "34px",
+											boxSizing: "border-box"
+										}}
+									>
+										{parseCustomFolders(dockExtrasCustomFolders).map((folder) => (
+											<div key={folder.path} className="extra-folder-row">
+												<span className="extra-folder-name">{folder.name}</span>
+												<span className="extra-folder-path">{folder.path}</span>
+												<button
+													type="button"
+													className="extra-folder-remove"
+													title="Remove folder"
+													onClick={() => handleRemoveDockExtraFolder(folder.path)}
+												>
+													<X size={14} strokeWidth={2} />
+												</button>
+											</div>
+										))}
+										<button type="button" className="folder-chip add" onClick={handleAddDockExtraFolder}>
+											<Plus size={13} strokeWidth={2} />
+											Add Folder...
+										</button>
+									</div>
+								</div>
+							</>
+						)}
 					</>
 				)}
 			</div>

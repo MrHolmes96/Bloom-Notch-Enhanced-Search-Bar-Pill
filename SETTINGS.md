@@ -80,7 +80,8 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-music-mode-enabled`  | `"true"` / `"false"`              | `"true"` | Enable interactive music media widget.                                                                   |
 | `bloom-music-compact-notch` | `"true"` / `"false"`              | `"true"` | Show compact music display (visualizer + artwork) in collapsed notch.                                    |
 | `bloom-notch-remember-panel` | `"true"` / `"false"` | `"true"` | Click opens the last-used panel when on; when off, click opens `bloom-notch-default-panel`. |
-| `bloom-notch-default-panel` | `"calendar"` / `"command-center"` | `"calendar"` | Fixed panel opened on click when panel memory is off. If calendar is disabled, Command Center opens instead. |
+| `bloom-notch-default-panel` | `"calendar"` / `"command-center"` / `"shelf"` / `"notes"` / `"blitzit"` | `"calendar"` | Page opened on click when panel memory is off (Settings > Notch > Pages > Opens On). If that page is off, Controls opens instead. |
+| `bloom-notch-page-order` | JSON array of page ids | `["calendar","command-center","shelf","notes","blitzit"]` | The order scrolling, swiping and the arrows go through the notch's pages (Settings > Notch > Pages). Pages missing from it go at the end; each page is switched on or off by its own setting. |
 | `bloom-notch-last-panel`    | `"calendar"` / `"command-center"` | (unset)  | Last panel the notch was left on, saved by Bloom while panel memory is on. |
 | `bloom-notch-click-to-open` | `"true"` / `"false"` | (legacy) | Old setting read only when `bloom-notch-remember-panel` is absent; `"false"` now selects fixed-panel behavior. |
 
@@ -89,6 +90,7 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | Key                   | Type                 | Default   | Description                                                                                                    |
 | --------------------- | -------------------- | --------- | -------------------------------------------------------------------------------------------------------------- |
 | `bloom-shelf-persist` | `"true"` / `"false"` | `"false"` | Keep notch shelf items across restarts. Off = items are cleared when Bloom closes. Max 10 items, newest first. |
+| `bloom-shelf-localsend` | `"true"` / `"false"` | `"true"` | A LocalSend button under the shelf's items: it turns picking on, and the picked items go to a nearby LocalSend device (found only while picking). |
 
 ### Music Appearance
 
@@ -115,6 +117,7 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `bloom-window-memory` | `"true"` / `"false"` | `"true"` | Remember each app's window size and position (in `window_positions.json`) and restore it when the app opens again. |
+| `bloom-windows-snap-borders` | `"true"` / `"false"` | `"true"` | Windows snapped by Windows 11 (halves, thirds, quarters, Snap Layouts) lose Windows 11's border, as in Windows 10; it comes back when they are no longer snapped and when Bloom quits. |
 | `bloom-dock-preview-style` | `"static"` / `"live"` | `"static"` | Dock window previews: a snapshot, or Windows' live preview of the window. |
 | `bloom-notification-center` | `"windows"` / `"bloom"` | `"bloom"` with Bloom cards, else `"windows"` | What the notification button opens: Windows' notification center or Bloom's (top right, as tall as its notifications, scrolling past about six, grouped by app; buttons and replies work as in Windows). |
 

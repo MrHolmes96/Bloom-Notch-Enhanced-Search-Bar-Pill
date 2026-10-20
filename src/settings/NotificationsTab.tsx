@@ -13,8 +13,11 @@ import {
 import { SettingRow } from "./SettingRow";
 import { useStoredString } from "./useStoredSetting";
 
+/** Settings > Notifications' sub-sections. */
+export type NotificationsSection = "popups" | "center";
+
 /** Settings > Notifications: where notifications appear and how they look. */
-export function NotificationsTab() {
+export function NotificationsTab({ section }: { section: NotificationsSection }) {
 	const [style, setStyle] = useStoredString("bloom-notify-style", "windows");
 	const [position, setPosition] = useStoredString("bloom-notify-position", "default");
 	const [radius, setRadius] = useStoredString("bloom-notify-radius", "16");
@@ -43,9 +46,38 @@ export function NotificationsTab() {
 				? "Windows won't share notifications with Bloom, so Windows' own pop-ups are kept"
 				: null;
 
+	if (section === "center") {
+		return (
+			<>
+				<div className="setting-group-label">Notification Center</div>
+				<div className="setting-group">
+					<SettingRow
+						icon={PanelRight}
+						label="Notification Center"
+						desc={
+							center === "bloom"
+								? "The bell opens Bloom's own list, in Bloom's look, sized to what's in it, grouped by app"
+								: "The bell opens Windows' notification center"
+						}
+						divider={false}
+					>
+						<select
+							className="settings-select"
+							value={center}
+							onChange={(e) => setCenter(e.target.value)}
+						>
+							<option value="windows">Windows</option>
+							<option value="bloom">Bloom</option>
+						</select>
+					</SettingRow>
+				</div>
+			</>
+		);
+	}
+
 	return (
 		<>
-			<div className="setting-group-label">Notifications</div>
+			<div className="setting-group-label">Pop-ups</div>
 			<div className="setting-group">
 				<SettingRow
 					icon={Bell}
@@ -60,24 +92,6 @@ export function NotificationsTab() {
 						className="settings-select"
 						value={style}
 						onChange={(e) => setStyle(e.target.value)}
-					>
-						<option value="windows">Windows</option>
-						<option value="bloom">Bloom</option>
-					</select>
-				</SettingRow>
-				<SettingRow
-					icon={PanelRight}
-					label="Notification Center"
-					desc={
-						center === "bloom"
-							? "The bell opens Bloom's own list, in Bloom's look, sized to what's in it"
-							: "The bell opens Windows' notification center"
-					}
-				>
-					<select
-						className="settings-select"
-						value={center}
-						onChange={(e) => setCenter(e.target.value)}
 					>
 						<option value="windows">Windows</option>
 						<option value="bloom">Bloom</option>

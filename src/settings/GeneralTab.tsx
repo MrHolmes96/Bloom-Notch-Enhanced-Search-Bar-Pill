@@ -1,20 +1,11 @@
-import {
-	Power,
-	Download,
-	Clock,
-	BatteryWarning,
-	RefreshCw,
-	RotateCcw,
-	LogOut,
-	AppWindow,
-	Eraser
-} from "lucide-react";
-import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { Power, Download, Clock, BatteryWarning, RefreshCw, RotateCcw, LogOut } from "lucide-react";
 import { SettingRow } from "./SettingRow";
-import { useStoredFlag } from "./useStoredSetting";
+
+/** Settings > General's sub-sections. */
+export type GeneralSection = "startup" | "time" | "bloom";
 
 interface GeneralTabProps {
+	section: GeneralSection;
 	autostart: boolean;
 	toggleAutostart: () => void;
 	timeFormat24h: boolean;
@@ -29,6 +20,7 @@ interface GeneralTabProps {
 }
 
 export function GeneralTab({
+	section,
 	autostart,
 	toggleAutostart,
 	timeFormat24h,
@@ -41,11 +33,76 @@ export function GeneralTab({
 	resetToDefaults,
 	quitBloom
 }: GeneralTabProps) {
-	const [windowMemory, setWindowMemory] = useStoredFlag("bloom-window-memory", true);
-	const [forgotten, setForgotten] = useState(false);
+	if (section === "time") {
+		return (
+			<>
+				<div className="setting-group-label">Time</div>
+				<div className="setting-group">
+					<SettingRow icon={Clock} label="24-Hour Time" desc="Use 24-hour clock format" divider={false}>
+						<label className="toggle-switch">
+							<input type="checkbox" checked={timeFormat24h} onChange={toggleTimeFormat24h} />
+							<span className="slider"></span>
+						</label>
+					</SettingRow>
+				</div>
+				<div className="setting-group-label">Battery</div>
+				<div className="setting-group">
+					<SettingRow
+						icon={BatteryWarning}
+						label="Low Battery Alert"
+						desc={`Trigger at ${lowBatteryThreshold}%`}
+						divider={false}
+					>
+						<input
+							type="range"
+							min="5"
+							max="50"
+							step="5"
+							value={lowBatteryThreshold}
+							onChange={(e) => handleThresholdChange(parseInt(e.target.value))}
+							className="settings-slider"
+						/>
+					</SettingRow>
+				</div>
+			</>
+		);
+	}
+	if (section === "bloom") {
+		return (
+			<>
+				<div className="setting-group-label">Bloom</div>
+				<div className="setting-group">
+					<SettingRow
+						icon={RefreshCw}
+						label="Restart Bloom"
+						desc="Reinitialize all components"
+						action
+						onClick={restartBloom}
+					/>
+					<SettingRow
+						icon={RotateCcw}
+						label="Reset to Defaults"
+						desc="Restore all settings and restart Bloom"
+						action
+						danger
+						onClick={resetToDefaults}
+					/>
+					<SettingRow
+						icon={LogOut}
+						label="Quit Bloom"
+						desc="Exit application completely"
+						action
+						danger
+						onClick={quitBloom}
+						divider={false}
+					/>
+				</div>
+			</>
+		);
+	}
 	return (
 		<>
-			<div className="setting-group-label">System</div>
+			<div className="setting-group-label">Startup</div>
 			<div className="setting-group">
 				<SettingRow icon={Power} label="Launch at Login" desc="Start with Windows, ahead of other startup apps">
 					<label className="toggle-switch">
@@ -58,97 +115,13 @@ export function GeneralTab({
 					icon={Download}
 					label="Update Indicator"
 					desc="Show green dot when update available"
+					divider={false}
 				>
 					<label className="toggle-switch">
 						<input type="checkbox" checked={showUpdateIndicator} onChange={toggleUpdateIndicator} />
 						<span className="slider"></span>
 					</label>
 				</SettingRow>
-
-				<SettingRow icon={Clock} label="24-Hour Time" desc="Use 24-hour clock format">
-					<label className="toggle-switch">
-						<input type="checkbox" checked={timeFormat24h} onChange={toggleTimeFormat24h} />
-						<span className="slider"></span>
-					</label>
-				</SettingRow>
-
-				<SettingRow
-					icon={BatteryWarning}
-					label="Low Battery Alert"
-					desc={`Trigger at ${lowBatteryThreshold}%`}
-					divider={false}
-				>
-					<input
-						type="range"
-						min="5"
-						max="50"
-						step="5"
-						value={lowBatteryThreshold}
-						onChange={(e) => handleThresholdChange(parseInt(e.target.value))}
-						className="settings-slider"
-					/>
-				</SettingRow>
-			</div>
-
-			<div className="setting-group-label">Windows</div>
-			<div className="setting-group">
-				<SettingRow
-					icon={AppWindow}
-					label="Remember Window Sizes"
-					desc="Apps open at the size and place you last left them"
-					divider={windowMemory}
-				>
-					<label className="toggle-switch">
-						<input
-							type="checkbox"
-							checked={windowMemory}
-							onChange={() => setWindowMemory(!windowMemory)}
-						/>
-						<span className="slider"></span>
-					</label>
-				</SettingRow>
-				{windowMemory && (
-					<SettingRow
-						icon={Eraser}
-						label="Forget Saved Sizes"
-						desc={forgotten ? "Forgotten" : "Let every app choose its own size again"}
-						action
-						divider={false}
-						onClick={() => {
-							void invoke("forget_window_sizes");
-							setForgotten(true);
-							setTimeout(() => setForgotten(false), 2500);
-						}}
-					/>
-				)}
-			</div>
-
-			<div className="setting-group-label">App</div>
-			<div className="setting-group">
-				<SettingRow
-					icon={RotateCcw}
-					label="Reset to Defaults"
-					desc="Restore all settings and restart Bloom"
-					action
-					danger
-					onClick={resetToDefaults}
-				/>
-				<SettingRow
-					icon={RefreshCw}
-					label="Restart Bloom"
-					desc="Reinitialize all components"
-					action
-					onClick={restartBloom}
-				/>
-				<SettingRow
-					icon={LogOut}
-					label="Quit Bloom"
-					desc="Exit application completely"
-					action
-					danger
-					onClick={quitBloom}
-					divider={false}
-				/>
 			</div>
 		</>
 	);

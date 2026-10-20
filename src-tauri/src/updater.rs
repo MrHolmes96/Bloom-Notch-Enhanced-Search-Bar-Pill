@@ -233,6 +233,7 @@ async fn install_inner(app: &AppHandle) -> Result<(), String> {
             crate::utils::set_taskbar_visibility(true, true);
             crate::services::set_native_osd_suppressed(false);
             crate::taskbar_progress::restore();
+            crate::snap_borders::stop();
             let _ = hook_handle.emit(
                 "auto-update-status",
                 serde_json::json!({ "status": "installing" }),

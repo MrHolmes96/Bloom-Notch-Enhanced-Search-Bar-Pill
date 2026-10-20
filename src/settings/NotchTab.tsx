@@ -11,28 +11,36 @@ import {
 	Timer,
 	Archive,
 	MousePointer2,
-	MoveHorizontal,
-	ListTodo,
+	Send,
 	X
 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { useStoredFlag } from "./useStoredSetting";
 import { ControlCenterSettings } from "./ControlCenterSettings";
 import { TraySettings } from "./TraySettings";
+import { NotchPagesSettings } from "./NotchPagesSettings";
 import { StatusWidgetConfig } from "../components/StatusWidgetConfig";
 import type { WidgetConfig } from "./types";
 
+/** Settings > Notch's sub-sections. */
+export type NotchSection =
+	| "behavior"
+	| "pages"
+	| "calendar"
+	| "music"
+	| "shelf"
+	| "weather"
+	| "widgets"
+	| "controls"
+	| "tray";
+
 interface NotchTabProps {
+	section: NotchSection;
 	notchMode: string;
 	setNotchModeValue: (mode: string) => void;
 	notchEdgeDelay: number;
 	handleNotchEdgeDelayChange: (val: number) => void;
 	calendarEnabled: boolean;
-	toggleCalendar: () => void;
-	notchRememberPanel: boolean;
-	toggleNotchRememberPanel: () => void;
-	notchDefaultPanel: "calendar" | "command-center";
-	changeNotchDefaultPanel: (panel: "calendar" | "command-center") => void;
 	timerSoundEnabled: boolean;
 	toggleTimerSound: () => void;
 	musicModeEnabled: boolean;
@@ -70,16 +78,12 @@ interface NotchTabProps {
 }
 
 export function NotchTab({
+	section,
 	notchMode,
 	setNotchModeValue,
 	notchEdgeDelay,
 	handleNotchEdgeDelayChange,
 	calendarEnabled,
-	toggleCalendar,
-	notchRememberPanel,
-	toggleNotchRememberPanel,
-	notchDefaultPanel,
-	changeNotchDefaultPanel,
 	timerSoundEnabled,
 	toggleTimerSound,
 	musicModeEnabled,
@@ -110,13 +114,286 @@ export function NotchTab({
 	statusWidgets,
 	handleWidgetsChange
 }: NotchTabProps) {
-	const [shelfInScroll, setShelfInScroll] = useStoredFlag("bloom-notch-shelf-in-scroll", true);
-	const [notesInScroll, setNotesInScroll] = useStoredFlag("bloom-notch-notes-in-scroll", true);
+	const [shelfLocalSend, setShelfLocalSend] = useStoredFlag("bloom-shelf-localsend", true);
+
+	if (section === "pages") return <NotchPagesSettings />;
+	if (section === "controls") return <ControlCenterSettings />;
+	if (section === "tray") return <TraySettings />;
+
+	if (section === "calendar") {
+		return (
+			<>
+				<div className="setting-group-label">Timer</div>
+				<div className="setting-group">
+					<SettingRow
+						icon={BellRing}
+						label="Timer Sound"
+						desc="Play a chime when the timer finishes"
+						divider={false}
+					>
+						<label className="toggle-switch">
+							<input type="checkbox" checked={timerSoundEnabled} onChange={toggleTimerSound} />
+							<span className="slider"></span>
+						</label>
+					</SettingRow>
+				</div>
+				{!calendarEnabled && (
+					<div className="setting-group-note">
+						<Calendar size={11} /> The Calendar & Timer page is off; switch it on in Pages.
+					</div>
+				)}
+			</>
+		);
+	}
+
+	if (section === "music") {
+		return (
+			<>
+				<div className="setting-group-label">Music</div>
+				<div className="setting-group">
+					<SettingRow
+						icon={Music}
+						label="Music Mode"
+						desc="Interactive live music widget"
+						divider={musicModeEnabled}
+					>
+						<label className="toggle-switch">
+							<input type="checkbox" checked={musicModeEnabled} onChange={toggleMusicMode} />
+							<span className="slider"></span>
+						</label>
+					</SettingRow>
+
+					{musicModeEnabled && (
+						<>
+							<SettingRow
+								icon={Minimize2}
+								label="Compact Mode"
+								desc="Show visualizer & artwork when collapsed"
+							>
+								<label className="toggle-switch">
+									<input
+										type="checkbox"
+										checked={musicCompactNotch}
+										onChange={toggleMusicCompactNotch}
+									/>
+									<span className="slider"></span>
+								</label>
+							</SettingRow>
+
+							<SettingRow icon={LayoutList} label="Media Layout" desc="Choose expanded player style">
+								<div className="unit-toggle-minimal wide">
+									<span
+										className={mediaLayout === "classic" ? "active" : ""}
+										onClick={() => toggleMediaLayout("classic")}
+									>
+										Classic
+									</span>
+									<span
+										className={mediaLayout === "compact" ? "active" : ""}
+										onClick={() => toggleMediaLayout("compact")}
+									>
+										Compact
+									</span>
+								</div>
+							</SettingRow>
+
+							<SettingRow
+								icon={Sparkles}
+								label="Ambient Glow"
+								desc="Colored glow behind expanded album art"
+							>
+								<label className="toggle-switch">
+									<input type="checkbox" checked={mediaAmbienceEnabled} onChange={toggleAmbience} />
+									<span className="slider"></span>
+								</label>
+							</SettingRow>
+
+							<SettingRow
+								icon={Circle}
+								label="Compact Glow"
+								desc="Glow around collapsed thumbnail"
+								divider={false}
+							>
+								<label className="toggle-switch">
+									<input
+										type="checkbox"
+										checked={mediaCompactGlowEnabled}
+										onChange={toggleCompactGlow}
+									/>
+									<span className="slider"></span>
+								</label>
+							</SettingRow>
+						</>
+					)}
+				</div>
+			</>
+		);
+	}
+
+	if (section === "shelf") {
+		return (
+			<>
+				<div className="setting-group-label">Shelf</div>
+				<div className="setting-group">
+					<SettingRow
+						icon={Archive}
+						label="Keep Items"
+						desc="Keep shelf items after Bloom closes"
+					>
+						<label className="toggle-switch">
+							<input type="checkbox" checked={shelfPersist} onChange={toggleShelfPersist} />
+							<span className="slider"></span>
+						</label>
+					</SettingRow>
+					<SettingRow
+						icon={Send}
+						label="LocalSend"
+						desc={
+							shelfLocalSend
+								? "A LocalSend button under the shelf's items sends the ones you pick to a nearby device"
+								: "No LocalSend button in the shelf"
+						}
+						divider={false}
+					>
+						<label className="toggle-switch">
+							<input
+								type="checkbox"
+								checked={shelfLocalSend}
+								onChange={() => setShelfLocalSend(!shelfLocalSend)}
+							/>
+							<span className="slider"></span>
+						</label>
+					</SettingRow>
+				</div>
+				{shelfLocalSend && (
+					<div className="setting-group-note">
+						Open LocalSend on the other device to see it. Devices are only looked for while
+						you pick files, and nothing needs LocalSend open on this PC.
+					</div>
+				)}
+			</>
+		);
+	}
+
+	if (section === "weather") {
+		return (
+			<>
+				<div className="setting-group-label">Weather</div>
+				<div className="setting-group">
+					<SettingRow
+						icon={CloudSun}
+						label="Weather Status"
+						desc={cityName || "Auto-detect location"}
+						divider={false}
+					>
+						<div className="weather-controls">
+							<div className="unit-toggle-minimal" onClick={toggleTempUnit}>
+								<span className={!tempUnitFahrenheit ? "active" : ""}>C</span>
+								<span className={tempUnitFahrenheit ? "active" : ""}>F</span>
+							</div>
+							<label className="toggle-switch">
+								<input type="checkbox" checked={weatherEnabled} onChange={toggleWeather} />
+								<span className="slider"></span>
+							</label>
+						</div>
+					</SettingRow>
+
+					{weatherEnabled && (
+						<div className="manual-city-input">
+							<div className="city-input-row">
+								<input
+									type="text"
+									placeholder="Search city..."
+									value={cityName}
+									onChange={(e) => setCityName(e.target.value)}
+									onFocus={() => citySearchResults.length > 0 && setShowCityDropdown(true)}
+									onKeyDown={(e) => {
+										if (e.key === "Enter" && citySearchResults.length > 0) {
+											e.preventDefault();
+											selectCity(citySearchResults[0]);
+										}
+										if (e.key === "Escape") {
+											setShowCityDropdown(false);
+										}
+									}}
+									onBlur={() => setTimeout(() => setShowCityDropdown(false), 150)}
+								/>
+								{cityName && (
+									<button
+										className="city-clear-btn"
+										onMouseDown={(e) => {
+											e.preventDefault();
+											handleCityClear();
+										}}
+										title="Clear city"
+									>
+										<X size={10} strokeWidth={2.5} />
+									</button>
+								)}
+							</div>
+							{showCityDropdown && citySearchResults.length > 0 && (
+								<div className="city-dropdown">
+									{citySearchResults.map((city) => (
+										<button
+											key={`${city.name}-${city.latitude}`}
+											className="city-dropdown-item"
+											onMouseDown={(e) => {
+												e.preventDefault();
+												selectCity(city);
+											}}
+										>
+											<span className="city-dropdown-name">{city.name}</span>
+											<span className="city-dropdown-country">{city.country}</span>
+										</button>
+									))}
+								</div>
+							)}
+						</div>
+					)}
+				</div>
+			</>
+		);
+	}
+
+	if (section === "widgets") {
+		return (
+			<>
+				<div className="setting-group-label">Status Widgets</div>
+				<div className="setting-group">
+					<SettingRow
+						icon={MousePointer2}
+						label="Only Show Widgets on Hover"
+						desc={
+							notchWidgetsOnHover
+								? "Widgets appear when you hover the notch"
+								: "Widgets show whenever the notch is visible"
+						}
+					>
+						<label className="toggle-switch">
+							<input
+								type="checkbox"
+								checked={notchWidgetsOnHover}
+								onChange={toggleNotchWidgetsOnHover}
+							/>
+							<span className="slider"></span>
+						</label>
+					</SettingRow>
+					<StatusWidgetConfig value={statusWidgets} onChange={handleWidgetsChange} />
+				</div>
+			</>
+		);
+	}
+
 	return (
 		<>
 			<div className="setting-group-label">Notch</div>
 			<div className="setting-group">
-				<SettingRow icon={PanelTop} label="Notch Behavior" desc="Choose how the notch appears">
+				<SettingRow
+					icon={PanelTop}
+					label="Notch Behavior"
+					desc="Choose how the notch appears"
+					divider={notchMode !== "fixed"}
+				>
 					<select
 						className="settings-select"
 						value={notchMode}
@@ -137,6 +414,7 @@ export function NotchTab({
 								? "Reveal instantly on top-edge contact"
 								: `Rest on the top edge for ${notchEdgeDelay}ms to reveal`
 						}
+						divider={false}
 					>
 						<input
 							type="range"
@@ -149,288 +427,7 @@ export function NotchTab({
 						/>
 					</SettingRow>
 				)}
-
-				<SettingRow
-					icon={PanelTop}
-					label="Remember Last Panel"
-					desc="Reopen the panel you last used; turn off to choose a fixed default"
-				>
-					<label className="toggle-switch">
-						<input
-							type="checkbox"
-							checked={notchRememberPanel}
-							onChange={toggleNotchRememberPanel}
-						/>
-						<span className="slider"></span>
-					</label>
-				</SettingRow>
-
-				{!notchRememberPanel && (
-					<SettingRow
-						icon={PanelTop}
-						label="Default Panel"
-						desc="Open this panel when you click the notch"
-					>
-						<select
-							className="settings-select"
-							value={calendarEnabled ? notchDefaultPanel : "command-center"}
-							onChange={(e) =>
-								changeNotchDefaultPanel(e.target.value as "calendar" | "command-center")
-							}
-						>
-							<option value="calendar" disabled={!calendarEnabled}>
-								Calendar
-							</option>
-							<option value="command-center">Command Center</option>
-						</select>
-					</SettingRow>
-				)}
-
-				<SettingRow icon={Calendar} label="Calendar & Timer" desc="Enable productivity split-view">
-					<label className="toggle-switch">
-						<input type="checkbox" checked={calendarEnabled} onChange={toggleCalendar} />
-						<span className="slider"></span>
-					</label>
-				</SettingRow>
-
-				{calendarEnabled && (
-					<SettingRow
-						icon={BellRing}
-						label="Timer Sound"
-						desc="Play a chime when the timer finishes"
-					>
-						<label className="toggle-switch">
-							<input type="checkbox" checked={timerSoundEnabled} onChange={toggleTimerSound} />
-							<span className="slider"></span>
-						</label>
-					</SettingRow>
-				)}
-
-				<SettingRow icon={Music} label="Music Mode" desc="Interactive live music widget">
-					<label className="toggle-switch">
-						<input type="checkbox" checked={musicModeEnabled} onChange={toggleMusicMode} />
-						<span className="slider"></span>
-					</label>
-				</SettingRow>
-
-				{musicModeEnabled && (
-					<>
-						<SettingRow
-							icon={Minimize2}
-							label="Compact Mode"
-							desc="Show visualizer & artwork when collapsed"
-						>
-							<label className="toggle-switch">
-								<input
-									type="checkbox"
-									checked={musicCompactNotch}
-									onChange={toggleMusicCompactNotch}
-								/>
-								<span className="slider"></span>
-							</label>
-						</SettingRow>
-
-						<SettingRow icon={LayoutList} label="Media Layout" desc="Choose expanded player style">
-							<div className="unit-toggle-minimal wide">
-								<span
-									className={mediaLayout === "classic" ? "active" : ""}
-									onClick={() => toggleMediaLayout("classic")}
-								>
-									Classic
-								</span>
-								<span
-									className={mediaLayout === "compact" ? "active" : ""}
-									onClick={() => toggleMediaLayout("compact")}
-								>
-									Compact
-								</span>
-							</div>
-						</SettingRow>
-
-						<SettingRow
-							icon={Sparkles}
-							label="Ambient Glow"
-							desc="Colored glow behind expanded album art"
-						>
-							<label className="toggle-switch">
-								<input type="checkbox" checked={mediaAmbienceEnabled} onChange={toggleAmbience} />
-								<span className="slider"></span>
-							</label>
-						</SettingRow>
-
-						<SettingRow
-							icon={Circle}
-							label="Compact Glow"
-							desc="Glow around collapsed thumbnail"
-							divider={false}
-						>
-							<label className="toggle-switch">
-								<input
-									type="checkbox"
-									checked={mediaCompactGlowEnabled}
-									onChange={toggleCompactGlow}
-								/>
-								<span className="slider"></span>
-							</label>
-						</SettingRow>
-					</>
-				)}
 			</div>
-
-			<div className="setting-group-label">Shelf</div>
-			<div className="setting-group">
-				<SettingRow
-					icon={MoveHorizontal}
-					label="Shelf in Scroll Menu"
-					desc={
-						shelfInScroll
-							? "Scroll or swipe on the notch to reach the shelf, even when it's empty"
-							: "The shelf only opens when files are dropped on it"
-					}
-				>
-					<label className="toggle-switch">
-						<input
-							type="checkbox"
-							checked={shelfInScroll}
-							onChange={() => setShelfInScroll(!shelfInScroll)}
-						/>
-						<span className="slider"></span>
-					</label>
-				</SettingRow>
-				<SettingRow
-					icon={Archive}
-					label="Keep Items"
-					desc="Keep shelf items after Bloom closes"
-					divider={false}
-				>
-					<label className="toggle-switch">
-						<input type="checkbox" checked={shelfPersist} onChange={toggleShelfPersist} />
-						<span className="slider"></span>
-					</label>
-				</SettingRow>
-			</div>
-
-			<div className="setting-group-label">Notes</div>
-			<div className="setting-group">
-				<SettingRow
-					icon={ListTodo}
-					label="Notes in Scroll Menu"
-					desc={
-						notesInScroll
-							? "Scroll or swipe on the notch to reach your quick notes and to-dos"
-							: "The notes panel is hidden; your notes are kept"
-					}
-					divider={false}
-				>
-					<label className="toggle-switch">
-						<input
-							type="checkbox"
-							checked={notesInScroll}
-							onChange={() => setNotesInScroll(!notesInScroll)}
-						/>
-						<span className="slider"></span>
-					</label>
-				</SettingRow>
-			</div>
-
-			<div className="setting-group-label">Weather</div>
-			<div className="setting-group">
-				<SettingRow
-					icon={CloudSun}
-					label="Weather Status"
-					desc={cityName || "Auto-detect location"}
-				>
-					<div className="weather-controls">
-						<div className="unit-toggle-minimal" onClick={toggleTempUnit}>
-							<span className={!tempUnitFahrenheit ? "active" : ""}>C</span>
-							<span className={tempUnitFahrenheit ? "active" : ""}>F</span>
-						</div>
-						<label className="toggle-switch">
-							<input type="checkbox" checked={weatherEnabled} onChange={toggleWeather} />
-							<span className="slider"></span>
-						</label>
-					</div>
-				</SettingRow>
-
-				{weatherEnabled && (
-					<div className="manual-city-input">
-						<div className="city-input-row">
-							<input
-								type="text"
-								placeholder="Search city..."
-								value={cityName}
-								onChange={(e) => setCityName(e.target.value)}
-								onFocus={() => citySearchResults.length > 0 && setShowCityDropdown(true)}
-								onKeyDown={(e) => {
-									if (e.key === "Enter" && citySearchResults.length > 0) {
-										e.preventDefault();
-										selectCity(citySearchResults[0]);
-									}
-									if (e.key === "Escape") {
-										setShowCityDropdown(false);
-									}
-								}}
-								onBlur={() => setTimeout(() => setShowCityDropdown(false), 150)}
-							/>
-							{cityName && (
-								<button
-									className="city-clear-btn"
-									onMouseDown={(e) => {
-										e.preventDefault();
-										handleCityClear();
-									}}
-									title="Clear city"
-								>
-									<X size={10} strokeWidth={2.5} />
-								</button>
-							)}
-						</div>
-						{showCityDropdown && citySearchResults.length > 0 && (
-							<div className="city-dropdown">
-								{citySearchResults.map((city) => (
-									<button
-										key={`${city.name}-${city.latitude}`}
-										className="city-dropdown-item"
-										onMouseDown={(e) => {
-											e.preventDefault();
-											selectCity(city);
-										}}
-									>
-										<span className="city-dropdown-name">{city.name}</span>
-										<span className="city-dropdown-country">{city.country}</span>
-									</button>
-								))}
-							</div>
-						)}
-					</div>
-				)}
-			</div>
-
-			<div className="setting-group-label">Widgets</div>
-			<div className="setting-group">
-				<SettingRow
-					icon={MousePointer2}
-					label="Only Show Widgets on Hover"
-					desc={
-						notchWidgetsOnHover
-							? "Widgets appear when you hover the notch"
-							: "Widgets show whenever the notch is visible"
-					}
-				>
-					<label className="toggle-switch">
-						<input
-							type="checkbox"
-							checked={notchWidgetsOnHover}
-							onChange={toggleNotchWidgetsOnHover}
-						/>
-						<span className="slider"></span>
-					</label>
-				</SettingRow>
-				<StatusWidgetConfig value={statusWidgets} onChange={handleWidgetsChange} />
-			</div>
-
-			<ControlCenterSettings />
-			<TraySettings />
 		</>
 	);
 }

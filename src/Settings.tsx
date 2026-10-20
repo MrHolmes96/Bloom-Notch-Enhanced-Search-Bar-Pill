@@ -17,7 +17,32 @@ import {
 	Info,
 	Megaphone,
 	Blocks,
-	Zap
+	Zap,
+	Power,
+	Clock,
+	RefreshCw,
+	Droplets,
+	Maximize2,
+	ListOrdered,
+	Calendar,
+	Music,
+	Inbox,
+	CloudSun,
+	Gauge,
+	LayoutGrid,
+	PanelRightDashed,
+	Eye,
+	Sparkles,
+	HardDrive,
+	AppWindow,
+	LayoutPanelLeft,
+	Volume2,
+	Sun,
+	PanelRight,
+	Globe,
+	Puzzle,
+	FolderSearch,
+	SlidersHorizontal
 } from "lucide-react";
 import {
 	useSettings,
@@ -30,40 +55,189 @@ import {
 	NotificationsTab,
 	IntegrationsTab,
 	BlitzitSettings,
-	AboutTab
+	AboutTab,
+	WindowsTab
 } from "./settings/index";
-import type { SettingsTab } from "./settings/index";
+import type {
+	SettingsTab,
+	GeneralSection,
+	AppearanceSection,
+	NotchSection,
+	DockSection,
+	WindowsSection,
+	OverlaysSection,
+	NotificationsSection,
+	SearchBarSection
+} from "./settings/index";
 import { useAnnouncement } from "./hooks/useAnnouncement";
 import { initTheme } from "./theme";
 import "./Settings.css";
 
 const appWindow = getCurrentWebviewWindow();
 
-const TABS: {
-	id: SettingsTab;
+type Icon = typeof Settings;
+
+/**
+ * The sidebar: Bloom's main categories, as before, and under the open one its
+ * sub-sections, each a short page of the options that belong together.
+ */
+const CATEGORIES: {
+	id: string;
 	label: string;
-	icon: typeof Settings;
-	/** Tabs shown under this one, such as each integrated app. */
-	children?: { id: SettingsTab; label: string; icon: typeof Settings }[];
+	icon: Icon;
+	sections: { id: string; label: string; icon: Icon }[];
 }[] = [
-	{ id: "general", label: "General", icon: Settings },
-	{ id: "appearance", label: "Appearance", icon: Palette },
-	{ id: "notch", label: "Notch", icon: PanelTop },
-	{ id: "dock", label: "Dock", icon: Monitor },
-	{ id: "overlays", label: "Overlays", icon: Layers },
-	{ id: "notifications", label: "Notifications", icon: Bell },
-	{ id: "search-bar", label: "Search Bar Pill", icon: Search },
+	{
+		id: "general",
+		label: "General",
+		icon: Settings,
+		sections: [
+			{ id: "startup", label: "Startup", icon: Power },
+			{ id: "time", label: "Time & Battery", icon: Clock },
+			{ id: "bloom", label: "Restart & Reset", icon: RefreshCw }
+		]
+	},
+	{
+		id: "appearance",
+		label: "Appearance",
+		icon: Palette,
+		sections: [
+			{ id: "theme", label: "Theme", icon: Palette },
+			{ id: "colors", label: "Colors", icon: Droplets },
+			{ id: "size", label: "Size & Corners", icon: Maximize2 }
+		]
+	},
+	{
+		id: "notch",
+		label: "Notch",
+		icon: PanelTop,
+		sections: [
+			{ id: "behavior", label: "Behavior", icon: PanelTop },
+			{ id: "pages", label: "Pages", icon: ListOrdered },
+			{ id: "calendar", label: "Calendar", icon: Calendar },
+			{ id: "music", label: "Music", icon: Music },
+			{ id: "shelf", label: "Shelf", icon: Inbox },
+			{ id: "weather", label: "Weather", icon: CloudSun },
+			{ id: "widgets", label: "Status Widgets", icon: Gauge },
+			{ id: "controls", label: "Controls", icon: LayoutGrid },
+			{ id: "tray", label: "System Tray", icon: PanelRightDashed }
+		]
+	},
+	{
+		id: "dock",
+		label: "Dock",
+		icon: Monitor,
+		sections: [
+			{ id: "behavior", label: "Behavior", icon: Eye },
+			{ id: "look", label: "Look", icon: Sparkles },
+			{ id: "extras", label: "Extras", icon: HardDrive }
+		]
+	},
+	{
+		id: "windows",
+		label: "Windows",
+		icon: AppWindow,
+		sections: [
+			{ id: "borders", label: "Borders", icon: LayoutPanelLeft },
+			{ id: "sizes", label: "Window Sizes", icon: AppWindow }
+		]
+	},
+	{
+		id: "overlays",
+		label: "Overlays",
+		icon: Layers,
+		sections: [
+			{ id: "volume", label: "Volume", icon: Volume2 },
+			{ id: "brightness", label: "Brightness", icon: Sun }
+		]
+	},
+	{
+		id: "notifications",
+		label: "Notifications",
+		icon: Bell,
+		sections: [
+			{ id: "popups", label: "Pop-ups", icon: Bell },
+			{ id: "center", label: "Center", icon: PanelRight }
+		]
+	},
+	{
+		id: "search-bar",
+		label: "Search Bar Pill",
+		icon: Search,
+		sections: [
+			{ id: "general", label: "General", icon: Search },
+			{ id: "look", label: "Look", icon: Palette },
+			{ id: "engines", label: "Engines", icon: Globe },
+			{ id: "plugins", label: "Plugins", icon: Puzzle },
+			{ id: "apps", label: "Apps & Files", icon: FolderSearch },
+			{ id: "advanced", label: "Advanced", icon: SlidersHorizontal }
+		]
+	},
 	{
 		id: "integrations",
 		label: "Integrations",
 		icon: Blocks,
-		children: [{ id: "integration-blitzit", label: "Blitzit", icon: Zap }]
+		sections: [
+			{ id: "apps", label: "Apps", icon: Blocks },
+			{ id: "blitzit", label: "Blitzit", icon: Zap }
+		]
 	},
-	{ id: "about", label: "About", icon: Info }
+	{ id: "about", label: "About", icon: Info, sections: [] }
 ];
 
+/** Where the settings window is: a category and one of its sub-sections. */
+interface Place {
+	category: string;
+	section: string;
+}
+
+const SECTIONS_KEY = "bloom-settings-sections";
+
+/** Each category's last-open sub-section, to come back to it. */
+function readRemembered(): Record<string, string> {
+	try {
+		const parsed: unknown = JSON.parse(localStorage.getItem(SECTIONS_KEY) ?? "{}");
+		return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+	} catch {
+		return {};
+	}
+}
+
+/**
+ * A page asked for by name ("notch", "notch/pages", or an older name such
+ * as "integration-blitzit"), with its remembered sub-section when none is
+ * named.
+ */
+function placeFor(tab: string, remembered: Record<string, string>): Place {
+	if (tab === "integration-blitzit") return { category: "integrations", section: "blitzit" };
+	const [categoryId, sectionId] = tab.split("/");
+	const category = CATEGORIES.find((c) => c.id === categoryId) ?? CATEGORIES[0];
+	const has = (id: string | undefined) => !!id && category.sections.some((s) => s.id === id);
+	const section = has(sectionId)
+		? sectionId
+		: has(remembered[category.id])
+			? remembered[category.id]
+			: (category.sections[0]?.id ?? "");
+	return { category: category.id, section };
+}
+
 function SettingsApp() {
-	const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+	const [place, setPlace] = useState<Place>(() => placeFor("general", readRemembered()));
+	// Read fresh each time: the page-opening listener below is set up once.
+	const go = (tab: string) => {
+		const remembered = readRemembered();
+		const next = placeFor(tab, remembered);
+		setPlace(next);
+		if (next.section) {
+			try {
+				localStorage.setItem(
+					SECTIONS_KEY,
+					JSON.stringify({ ...remembered, [next.category]: next.section })
+				);
+			} catch {}
+		}
+	};
+	const { category, section } = place;
 	const settings = useSettings();
 	const { announcement, dismissed, dismiss } = useAnnouncement();
 
@@ -72,15 +246,15 @@ function SettingsApp() {
 	}, []);
 
 	useEffect(() => {
-		const unlisten = listen<SettingsTab>("settings-open-tab", (e) => {
-			setActiveTab(e.payload);
+		const unlisten = listen<SettingsTab | string>("settings-open-tab", (e) => {
+			go(e.payload);
 			void invoke("settings_take_tab").catch(() => {});
 		});
 		// Opened on a page before this window was ready (it is made a moment
 		// after Bloom starts): that page.
-		void invoke<SettingsTab | null>("settings_take_tab")
+		void invoke<string | null>("settings_take_tab")
 			.then((tab) => {
-				if (tab) setActiveTab(tab);
+				if (tab) go(tab);
 			})
 			.catch(() => {});
 		return () => {
@@ -133,29 +307,31 @@ function SettingsApp() {
 
 			<div className="settings-body">
 				<div className="settings-sidebar">
-					{TABS.map(({ id, label, icon: Icon, children }) => (
+					{CATEGORIES.map(({ id, label, icon: CategoryIcon, sections }) => (
 						<div key={id} className="sidebar-tab-group">
 							<button
-								className={`sidebar-tab ${activeTab === id ? "active" : ""}`}
-								onClick={() => setActiveTab(id)}
+								className={`sidebar-tab ${category === id ? "active" : ""}`}
+								aria-expanded={sections.length > 0 ? category === id : undefined}
+								onClick={() => go(id)}
 							>
 								<div className="sidebar-tab-icon">
-									<Icon size={14} strokeWidth={1.5} />
+									<CategoryIcon size={14} strokeWidth={1.5} />
 								</div>
 								<span>{label}</span>
 							</button>
-							{children?.map(({ id: childId, label: childLabel, icon: ChildIcon }) => (
-								<button
-									key={childId}
-									className={`sidebar-tab sidebar-subtab ${activeTab === childId ? "active" : ""}`}
-									onClick={() => setActiveTab(childId)}
-								>
-									<div className="sidebar-tab-icon">
-										<ChildIcon size={12} strokeWidth={1.5} />
-									</div>
-									<span>{childLabel}</span>
-								</button>
-							))}
+							{category === id &&
+								sections.map(({ id: sectionId, label: sectionLabel, icon: SectionIcon }) => (
+									<button
+										key={sectionId}
+										className={`sidebar-tab sidebar-subtab ${section === sectionId ? "active" : ""}`}
+										onClick={() => go(`${id}/${sectionId}`)}
+									>
+										<div className="sidebar-tab-icon">
+											<SectionIcon size={12} strokeWidth={1.5} />
+										</div>
+										<span>{sectionLabel}</span>
+									</button>
+								))}
 						</div>
 					))}
 				</div>
@@ -183,8 +359,9 @@ function SettingsApp() {
 							</button>
 						</div>
 					)}
-					{activeTab === "general" && (
+					{category === "general" && (
 						<GeneralTab
+							section={section as GeneralSection}
 							autostart={settings.autostart}
 							toggleAutostart={settings.toggleAutostart}
 							timeFormat24h={settings.timeFormat24h}
@@ -198,8 +375,9 @@ function SettingsApp() {
 							quitBloom={settings.quitBloom}
 						/>
 					)}
-					{activeTab === "appearance" && (
+					{category === "appearance" && (
 						<AppearanceTab
+							section={section as AppearanceSection}
 							themeMode={settings.themeMode}
 							handleThemeModeChange={settings.handleThemeModeChange}
 							themeColor={settings.themeColor}
@@ -218,18 +396,14 @@ function SettingsApp() {
 							handleDockScaleChange={settings.handleDockScaleChange}
 						/>
 					)}
-					{activeTab === "notch" && (
+					{category === "notch" && (
 						<NotchTab
+							section={section as NotchSection}
 							notchMode={settings.notchMode}
 							setNotchModeValue={settings.setNotchModeValue}
 							notchEdgeDelay={settings.notchEdgeDelay}
 							handleNotchEdgeDelayChange={settings.handleNotchEdgeDelayChange}
 							calendarEnabled={settings.calendarEnabled}
-							toggleCalendar={settings.toggleCalendar}
-							notchRememberPanel={settings.notchRememberPanel}
-							toggleNotchRememberPanel={settings.toggleNotchRememberPanel}
-							notchDefaultPanel={settings.notchDefaultPanel}
-							changeNotchDefaultPanel={settings.changeNotchDefaultPanel}
 							timerSoundEnabled={settings.timerSoundEnabled}
 							toggleTimerSound={settings.toggleTimerSound}
 							musicModeEnabled={settings.musicModeEnabled}
@@ -261,8 +435,9 @@ function SettingsApp() {
 							handleWidgetsChange={settings.handleWidgetsChange}
 						/>
 					)}
-					{activeTab === "dock" && (
+					{category === "dock" && (
 						<DockTab
+							section={section as DockSection}
 							dockEnabled={settings.dockEnabled}
 							toggleDock={settings.toggleDock}
 							dockMode={settings.dockMode}
@@ -294,8 +469,10 @@ function SettingsApp() {
 							handleStartIconChange={settings.handleStartIconChange}
 						/>
 					)}
-					{activeTab === "overlays" && (
+					{category === "windows" && <WindowsTab section={section as WindowsSection} />}
+					{category === "overlays" && (
 						<OverlaysTab
+							section={section as OverlaysSection}
 							volumeOverlayEnabled={settings.volumeOverlayEnabled}
 							toggleVolumeOverlay={settings.toggleVolumeOverlay}
 							volumeEdgeEnabled={settings.volumeEdgeEnabled}
@@ -306,11 +483,13 @@ function SettingsApp() {
 							toggleBrightnessEdge={settings.toggleBrightnessEdge}
 						/>
 					)}
-					{activeTab === "notifications" && <NotificationsTab />}
-					{activeTab === "search-bar" && <SearchBarTab />}
-					{activeTab === "integrations" && <IntegrationsTab openTab={setActiveTab} />}
-					{activeTab === "integration-blitzit" && <BlitzitSettings />}
-					{activeTab === "about" && (
+					{category === "notifications" && (
+						<NotificationsTab section={section as NotificationsSection} />
+					)}
+					{category === "search-bar" && <SearchBarTab section={section as SearchBarSection} />}
+					{category === "integrations" && section === "apps" && <IntegrationsTab openTab={go} />}
+					{category === "integrations" && section === "blitzit" && <BlitzitSettings />}
+					{category === "about" && (
 						<AboutTab
 							appVersion={settings.appVersion}
 							autoUpdate={settings.autoUpdate}

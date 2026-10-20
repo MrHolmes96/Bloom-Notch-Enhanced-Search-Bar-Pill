@@ -1632,6 +1632,221 @@ img {
 	opacity: 1;
 }
 
+/* LocalSend in the shelf: a row below the tiles with its button, which turns
+   picking on; then the picker (what is picked, nearby devices, progress). */
+.shelf-actions {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: 6px;
+	height: 22px;
+	flex: none;
+}
+
+.shelf-action {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	height: 22px;
+	padding: 0 10px;
+	border: none;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--bloom-text, white) 9%, transparent);
+	color: var(--bloom-text, white);
+	font: inherit;
+	font-size: 11px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: background 0.12s ease;
+}
+
+.shelf-action:hover {
+	background: color-mix(in srgb, var(--bloom-text, white) 16%, transparent);
+}
+
+.shelf-tile.is-picking .shelf-tile-remove {
+	display: none;
+}
+
+.shelf-tile-pick {
+	position: absolute;
+	top: 9px;
+	right: 9px;
+	width: 16px;
+	height: 16px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 50%;
+	border: 1.5px solid rgba(255, 255, 255, 0.85);
+	background: rgba(0, 0, 0, 0.35);
+	color: #fff;
+	box-sizing: border-box;
+	pointer-events: none;
+}
+
+.shelf-tile.is-picked {
+	background: color-mix(in srgb, var(--bloom-accent, #0a84ff) 26%, transparent);
+	box-shadow: inset 0 0 0 1.5px var(--bloom-accent, #0a84ff);
+}
+
+.shelf-tile.is-picked .shelf-tile-pick {
+	border-color: var(--bloom-accent, #0a84ff);
+	background: var(--bloom-accent, #0a84ff);
+}
+
+.localsend-bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 8px;
+	height: 32px;
+	flex: none;
+	padding: 0 4px 0 10px;
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--bloom-text, white) 7%, transparent);
+	font-size: 11px;
+	min-width: 0;
+}
+
+.localsend-head {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	flex: none;
+	font-weight: 600;
+	opacity: 0.85;
+	white-space: nowrap;
+}
+
+.localsend-devices {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+
+.localsend-device,
+.localsend-retry {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	flex: none;
+	height: 22px;
+	padding: 0 9px;
+	border: none;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--bloom-text, white) 12%, transparent);
+	color: var(--bloom-text, white);
+	font: inherit;
+	font-size: 11px;
+	font-weight: 600;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.localsend-device:hover:not(:disabled) {
+	background: var(--bloom-accent, #0a84ff);
+	color: #fff;
+}
+
+.localsend-device:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+.localsend-retry {
+	background: transparent;
+	font-weight: 500;
+	opacity: 0.75;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.localsend-retry:hover {
+	opacity: 1;
+}
+
+.localsend-looking {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	opacity: 0.6;
+	white-space: nowrap;
+}
+
+.localsend-status {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.localsend-meter {
+	position: relative;
+	flex: 1;
+	max-width: 140px;
+	height: 4px;
+	border-radius: 2px;
+	overflow: hidden;
+	background: color-mix(in srgb, var(--bloom-text, white) 18%, transparent);
+}
+
+.localsend-meter > span {
+	position: absolute;
+	inset: 0 auto 0 0;
+	border-radius: inherit;
+	background: var(--bloom-accent, #0a84ff);
+	transition: width 0.25s ease;
+}
+
+.localsend-done {
+	color: #3cc35a;
+	font-weight: 600;
+}
+
+.localsend-failed {
+	color: #ff6b6b;
+	display: block;
+}
+
+.localsend-close {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	border: none;
+	border-radius: 50%;
+	background: transparent;
+	color: var(--bloom-text, white);
+	opacity: 0.7;
+	cursor: pointer;
+}
+
+.localsend-close:hover {
+	opacity: 1;
+	background: color-mix(in srgb, var(--bloom-text, white) 12%, transparent);
+}
+
+.localsend-spin {
+	animation: localsend-spin 0.9s linear infinite;
+}
+
+@keyframes localsend-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
 /* Announcement card */
 .announcement-content {
 	position: absolute;

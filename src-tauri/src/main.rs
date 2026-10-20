@@ -11,12 +11,14 @@ mod jumplist;
 mod later_windows;
 mod launcher;
 mod live_preview;
+mod localsend;
 mod notifications;
 mod quick_settings;
 mod recycle_bin;
 mod services;
 mod shelf;
 mod shelf_preview;
+mod snap_borders;
 mod startup;
 mod state;
 mod taskbar_progress;
@@ -49,6 +51,7 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
         set_native_osd_suppressed(false);
         notifications::restore_native_toasts();
         taskbar_progress::restore();
+        snap_borders::stop();
     }
     BOOL(0)
 }
@@ -296,6 +299,10 @@ fn main() {
             integrations::blitzit::blitzit_tools_report,
             notifications::notification_activate,
             taskbar_progress::get_taskbar_progress,
+            localsend::localsend_find_devices,
+            localsend::localsend_stop_finding,
+            localsend::localsend_send,
+            localsend::localsend_cancel,
             notifications::notification_action,
             notifications::notification_center_fit,
             notifications::notifications_allow_typing,
@@ -456,6 +463,7 @@ fn main() {
             launcher::start_hotkey_listener(app.handle().clone());
             notifications::start(app.handle().clone());
             tray_host::start(app.handle().clone());
+            snap_borders::apply(app.handle());
             startup::listen_for_quit(app.handle().clone());
             startup::migrate(app.handle());
             window_memory::start(app.handle().clone());

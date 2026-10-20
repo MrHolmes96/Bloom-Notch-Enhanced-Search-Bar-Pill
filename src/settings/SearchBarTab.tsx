@@ -61,8 +61,10 @@ import {
 import { ENGINE_CATEGORIES, type EngineCategory } from "../launcher/engines";
 
 /** The page's sections, so it isn't one long list. */
-type Section = "general" | "look" | "engines" | "plugins" | "apps" | "advanced";
-const SECTIONS: [Section, string][] = [
+/** Settings > Search Bar Pill's sub-sections. */
+export type SearchBarSection = "general" | "look" | "engines" | "plugins" | "apps" | "advanced";
+type Section = SearchBarSection;
+export const SEARCH_BAR_SECTIONS: [Section, string][] = [
 	["general", "General"],
 	["look", "Look"],
 	["engines", "Search Engines"],
@@ -542,7 +544,7 @@ function readFlag(key: string, fallback: boolean) {
 	return v === null ? fallback : v === "true";
 }
 
-export function SearchBarTab() {
+export function SearchBarTab({ section }: { section: SearchBarSection }) {
 	const [config, setConfigState] = useState<LauncherConfig>(loadConfig);
 	const [enabled, setEnabled] = useState(() => readFlag(BACKEND_KEYS.enabled, true));
 	const [hotkey, setHotkey] = useState(
@@ -592,31 +594,14 @@ export function SearchBarTab() {
 	};
 
 	const setBackend = (key: string, value: string) => saveBackendSetting(key, value);
-	const [section, setSectionState] = useState<Section>(() => {
-		const saved = localStorage.getItem("bloom-launcher-settings-section") as Section | null;
-		return saved && SECTIONS.some(([id]) => id === saved) ? saved : "general";
-	});
-	const setSection = (next: Section) => {
-		setSectionState(next);
-		localStorage.setItem("bloom-launcher-settings-section", next);
-	};
 	return (
 		<>
-			{enabled && (
-				<div className="sb-tabs">
-					{SECTIONS.map(([id, label]) => (
-						<button
-							key={id}
-							type="button"
-							className={`sb-tab ${section === id ? "active" : ""}`}
-							onClick={() => setSection(id)}
-						>
-							{label}
-						</button>
-					))}
+			{!enabled && section !== "general" && (
+				<div className="setting-group-note">
+					The Search Bar Pill is off; switch it on under Search Bar Pill &gt; General.
 				</div>
 			)}
-			{(section === "general" || !enabled) && (
+			{section === "general" && (
 				<>
 					<div className="setting-group-label">Search Bar Pill</div>
 					<div className="setting-group">

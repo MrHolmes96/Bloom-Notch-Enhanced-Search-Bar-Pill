@@ -1406,3 +1406,75 @@ input:checked + .slider:before {
 	overflow-y: auto;
 	scrollbar-width: none;
 }
+
+/* Settings > Notch > Pages: the pages in the order scrolling goes through them. */
+.page-order-list {
+	display: flex;
+	flex-direction: column;
+}
+
+.page-order-item {
+	position: relative;
+	background: var(--group-bg);
+}
+
+.page-order-item + .page-order-item {
+	border-top: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.05));
+}
+
+.page-order-item.is-off .setting-info,
+.page-order-item.is-off .setting-icon-bg {
+	opacity: 0.45;
+}
+
+.page-order-item .setting-item {
+	padding-left: 6px;
+}
+
+.page-order-grip {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 28px;
+	margin-right: 4px;
+	padding: 0;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.4));
+	cursor: grab;
+	touch-action: none;
+}
+
+.page-order-grip:hover {
+	color: var(--text-color, white);
+	background: rgba(255, 255, 255, 0.06);
+}
+
+.page-order-grip:active {
+	cursor: grabbing;
+}
+
+.light-mode .page-order-grip:hover {
+	color: var(--text-color, #1d1d1f);
+	background: rgba(0, 0, 0, 0.05);
+}
+
+.toggle-switch.is-locked {
+	opacity: 0.5;
+	cursor: default;
+}
+
+/* A group's last row draws no line under it. */
+.setting-group > .setting-divider:last-child {
+	display: none;
+}
+
+/* Sub-sections stay on one line in the narrow sidebar. */
+.sidebar-tab.sidebar-subtab span {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}

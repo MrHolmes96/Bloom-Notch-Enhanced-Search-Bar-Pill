@@ -34,6 +34,7 @@ import { WifiPanel } from "./components/WifiPanel";
 import { BluetoothPanel } from "./components/BluetoothPanel";
 import { TrayPanel, trayPanelHeight } from "./components/TrayPanel";
 import { BlitzitPanel, blitzitPanelHeight } from "./components/BlitzitPanel";
+import { PAGE_ORDER_KEY, isNotchPageId, parsePageOrder, type NotchPageId } from "./notchPages";
 import {
 	NOTES_KEY,
 	NotesPanel,
@@ -77,8 +78,11 @@ import {
 	ChevronLeft,
 	ChevronRight,
 	Inbox,
-	Music
+	Music,
+	Send,
+	Check
 } from "lucide-react";
+import { LocalSendBar, useLocalSend, type LocalSendDevice } from "./components/LocalSendBar";
 
 /**
  * The notch has two kinds of content:
@@ -92,13 +96,12 @@ import {
  */
 type NotchPanel = "calendar" | "command-center";
 const NOTCH_PANELS: readonly NotchPanel[] = ["calendar", "command-center"];
-const asNotchPanel = (value: unknown): NotchPanel | null =>
-	NOTCH_PANELS.includes(value as NotchPanel) ? (value as NotchPanel) : null;
 
 /**
  * Every page the open notch can be left on and reopened at: the tool panels,
  * the scroll-menu pages (shelf, notes, Blitzit) and the control center's own
- * pages (tray, Wi-Fi, Bluetooth). Only the panels can be the fixed default.
+ * pages (tray, Wi-Fi, Bluetooth). Any page scrolling reaches can be the fixed
+ * default, and their order is chosen in Settings > Notch > Pages.
  */
 type NotchPage = NotchPanel | "shelf" | "notes" | "blitzit" | "tray" | "wifi" | "bluetooth";
 const NOTCH_PAGES: readonly NotchPage[] = [
@@ -956,8 +959,15 @@ function App() {
 	);
 	const rememberPanelEnabledRef = useRef(rememberPanelEnabled);
 	rememberPanelEnabledRef.current = rememberPanelEnabled;
-	const [defaultPanel, setDefaultPanel] = useState<NotchPanel>(() =>
-		asNotchPanel(localStorage.getItem("bloom-notch-default-panel")) ?? "calendar"
+	// The page a click opens when panel memory is off (any page that scrolling
+	// reaches), and the order scrolling goes through them (Settings > Notch >
+	// Pages).
+	const [defaultPanel, setDefaultPanel] = useState<NotchPageId>(() => {
+		const saved = localStorage.getItem("bloom-notch-default-panel");
+		return isNotchPageId(saved) ? saved : "calendar";
+	});
+	const [pageOrder, setPageOrder] = useState<NotchPageId[]>(() =>
+		parsePageOrder(localStorage.getItem(PAGE_ORDER_KEY))
 	);
 	// The panel the open notch was last left on. Opening the notch returns to it,
 	// across restarts too (bloom-notch-last-panel).
@@ -974,6 +984,10 @@ function App() {
 	);
 	const [shelfPersist, setShelfPersist] = useState(
 		() => localStorage.getItem("bloom-shelf-persist") === "true"
+	);
+	// LocalSend in the shelf (Settings > Notch > Shelf).
+	const [shelfLocalSend, setShelfLocalSend] = useState(
+		() => localStorage.getItem("bloom-shelf-localsend") !== "false"
 	);
 	// On: scrolling or swiping on the notch also reaches the shelf, which then
 	// shows even when it is empty.
@@ -1054,8 +1068,13 @@ function App() {
 				setRememberPanelEnabled(
 					(getVal("bloom-notch-remember-panel") ?? getVal("bloom-notch-click-to-open", "true")) !== "false"
 				);
-				setDefaultPanel(asNotchPanel(getVal("bloom-notch-default-panel")) ?? "calendar");
+				{
+					const saved = getVal("bloom-notch-default-panel");
+					setDefaultPanel(isNotchPageId(saved) ? saved : "calendar");
+				}
+				setPageOrder(parsePageOrder(getVal(PAGE_ORDER_KEY)));
 				setShelfPersist(getVal("bloom-shelf-persist", "false") === "true");
+				setShelfLocalSend(getVal("bloom-shelf-localsend", "true") !== "false");
 				setShelfInScroll(getVal("bloom-notch-shelf-in-scroll", "true") !== "false");
 				setCcButtons(parseCCButtons(getVal(CC_KEY)));
 				setNotes(parseNotes(getVal(NOTES_KEY)));
@@ -1228,8 +1247,10 @@ function App() {
 			"bloom-music-mode-enabled": setSettingsMusicModeEnabled,
 			"bloom-notch-remember-panel": setRememberPanelEnabled,
 			"bloom-notch-default-panel": (v: unknown) =>
-				setDefaultPanel(asNotchPanel(v) ?? "calendar"),
+				setDefaultPanel(isNotchPageId(v) ? v : "calendar"),
+			[PAGE_ORDER_KEY]: (v: unknown) => setPageOrder(parsePageOrder(v)),
 			"bloom-shelf-persist": setShelfPersist,
+			"bloom-shelf-localsend": setShelfLocalSend,
 			"bloom-notch-shelf-in-scroll": setShelfInScroll,
 			[CC_KEY]: (v: unknown) => setCcButtons(parseCCButtons(v)),
 			[NOTES_KEY]: (v: unknown) => setNotes(parseNotes(v)),
@@ -1473,6 +1494,10 @@ function App() {
 		// Only this tile's own drag suppresses the click; a stale flag from a
 		// previous tile's drag-out must not swallow it.
 		if (st && st.id === item.id && st.dragging) return;
+		if (sendMode) {
+			togglePicked(item.id);
+			return;
+		}
 		openShelfItem(item);
 	};
 
@@ -1637,6 +1662,52 @@ function App() {
 	// the current list.
 	const shelfItemsRef = useRef<ShelfItem[]>(shelfItems);
 	shelfItemsRef.current = shelfItems;
+
+	// LocalSend from the shelf: its button turns picking on, a click on a tile
+	// then picks it (dragging works as always), and nearby devices are looked
+	// for only while picking in the open shelf. A send goes on when the notch
+	// closes; picking ends then.
+	const [sendMode, setSendMode] = useState(false);
+	const [picked, setPicked] = useState<Set<string>>(() => new Set());
+	const localSend = useLocalSend(sendMode && isOpen && bloomMode === "shelf");
+	const sendBusy =
+		localSend.progress?.state === "waiting" || localSend.progress?.state === "sending";
+	const endSending = () => {
+		setSendMode(false);
+		setPicked(new Set());
+		localSend.clearProgress();
+	};
+	const closeSendMode = () => {
+		if (!sendBusy) endSending();
+	};
+	const togglePicked = (id: string) =>
+		setPicked((current) => {
+			const next = new Set(current);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	// Picked items that left the shelf are no longer picked.
+	useEffect(() => {
+		setPicked((current) => {
+			const ids = new Set(shelfItems.map((i) => i.id));
+			const next = new Set([...current].filter((id) => ids.has(id)));
+			return next.size === current.size ? current : next;
+		});
+	}, [shelfItems]);
+	useEffect(() => {
+		if (!isOpen && !sendBusy) endSending();
+		// Only when the notch opens or closes.
+	}, [isOpen]);
+	const sendTo = (device: LocalSendDevice) => {
+		const items = shelfItems
+			.filter((i) => picked.has(i.id))
+			.map((i) => (i.type === "text" ? { text: i.text } : { path: i.path }));
+		if (items.length === 0) return;
+		void localSend.send(device, items).then((ok) => {
+			if (ok) window.setTimeout(endSending, 2500);
+		});
+	};
 	// Tiles that were just added get an entrance animation; ones restored when
 	// the panel reopens do not (the panel itself already fades in).
 	const shelfNewIdsRef = useRef<Set<string>>(new Set());
@@ -1887,19 +1958,9 @@ function App() {
 		if (cycleBloomMode(direction)) gesture.turned = true;
 	};
 
-	function panelAvailable(panel: NotchPanel) {
-		if (panel === "calendar") return settingsCalendarEnabled;
-		return true;
-	}
-
-	// What the wheel, swipe and arrows step through: the tool panels, then the
-	// shelf when "Shelf in Scroll Menu" is on.
-	const scrollModes = (): BloomMode[] => [
-		...NOTCH_PANELS.filter(panelAvailable),
-		...(shelfInScroll ? (["shelf"] as const) : []),
-		...(notesInScroll ? (["notes"] as const) : []),
-		...(blitzitInScroll ? (["blitzit"] as const) : [])
-	];
+	// What the wheel, swipe and arrows step through: the pages that are on, in
+	// the order chosen in Settings > Notch > Pages.
+	const scrollModes = (): BloomMode[] => pageOrder.filter((page) => pageAvailable(page));
 
 	// Wheel and swipe navigate panels, even from a collapsed live activity.
 	// Music remains an entry point through its activity affordance.
@@ -2131,7 +2192,7 @@ function App() {
 	// available as a fallback.
 	const openingPanel = (): NotchPage => {
 		if (rememberPanelEnabled && lastPanel && pageAvailable(lastPanel)) return lastPanel;
-		return panelAvailable(defaultPanel) ? defaultPanel : "command-center";
+		return pageAvailable(defaultPanel) ? defaultPanel : "command-center";
 	};
 
 	// Expands the notch into a page, or into an activity's own view.
@@ -2790,7 +2851,9 @@ function App() {
 		// plus room for the scrollbar once the tiles overflow it.
 		if (bloomMode === "shelf") {
 			if (shelfItems.length === 0) return 130;
-			return shelfOverflowing ? 190 : 176;
+			// The LocalSend row below the tiles: its button, or the picker.
+			const actions = shelfLocalSend ? (sendMode ? 46 : 28) : 0;
+			return (shelfOverflowing ? 190 : 176) + actions;
 		}
 		if (bloomMode === "notes") return 36 + notesPanelHeight(notes);
 		if (bloomMode === "blitzit") return 36 + blitzitHeight;
@@ -4163,7 +4226,7 @@ function App() {
 																		damping: 38,
 																		mass: 0.7
 																	}}
-																	className={`shelf-tile ${item.type === "text" || (!thumb && preview?.text) ? "is-text" : ""}`}
+																	className={`shelf-tile ${item.type === "text" || (!thumb && preview?.text) ? "is-text" : ""}${sendMode ? " is-picking" : ""}${picked.has(item.id) ? " is-picked" : ""}`}
 																	title={
 																		item.type === "text" ? item.text?.slice(0, 1000) : item.path
 																	}
@@ -4214,6 +4277,11 @@ function App() {
 																			? `Text · ${item.text?.length ?? 0} chars`
 																			: item.name}
 																	</span>
+																	{sendMode && (
+																		<span className="shelf-tile-pick" aria-hidden="true">
+																			{picked.has(item.id) && <Check size={11} strokeWidth={3} />}
+																		</span>
+																	)}
 																	<button
 																		className="shelf-tile-remove"
 																		title="Remove from shelf"
@@ -4230,6 +4298,35 @@ function App() {
 													</AnimatePresence>
 												</div>
 											)}
+											{shelfLocalSend && shelfItems.length > 0 &&
+												(sendMode ? (
+													<LocalSendBar
+														picked={picked.size}
+														devices={localSend.devices}
+														looking={localSend.looking}
+														progress={localSend.progress}
+														error={localSend.error}
+														onSend={sendTo}
+														onRetry={localSend.find}
+														onCancel={localSend.cancel}
+														onClose={closeSendMode}
+													/>
+												) : (
+													<div className="shelf-actions">
+														<button
+															type="button"
+															className="shelf-action"
+															title="Send files from the shelf to a nearby device with LocalSend"
+															onClick={(e) => {
+																e.stopPropagation();
+																setSendMode(true);
+															}}
+														>
+															<Send size={11} strokeWidth={2.4} />
+															LocalSend
+														</button>
+													</div>
+												))}
 										</motion.div>
 									)}
 								</AnimatePresence>

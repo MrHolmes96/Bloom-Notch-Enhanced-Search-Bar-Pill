@@ -3248,6 +3248,7 @@ pub fn restore_taskbar_and_exit(handle: &AppHandle) {
     // Windows' own notification pop-ups come back when Bloom's go away.
     crate::notifications::restore_native_toasts();
     crate::taskbar_progress::restore();
+    crate::snap_borders::stop();
     // Destroy all webview windows before exiting so Chromium's UnregisterClass for
     // Chrome_WidgetWin_0 finds no open windows (avoids the harmless Error=1412 log).
     for (_, w) in handle.webview_windows() {
@@ -3278,6 +3279,7 @@ pub async fn restart_bloom(handle: AppHandle) {
     crate::services::set_native_osd_suppressed(false);
     crate::notifications::restore_native_toasts();
     crate::taskbar_progress::restore();
+    crate::snap_borders::stop();
     close_single_instance_handles();
     handle.restart();
 }
@@ -3352,6 +3354,9 @@ pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Re
     }
     if key.starts_with("bloom-notify-") {
         crate::notifications::settings_changed();
+    }
+    if key == "bloom-windows-snap-borders" {
+        crate::snap_borders::apply(&app);
     }
     Ok(())
 }
