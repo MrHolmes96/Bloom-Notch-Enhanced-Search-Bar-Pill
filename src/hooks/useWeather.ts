@@ -47,8 +47,6 @@ const WMO_CODES: Record<number, string> = {
 	99: "Stormy"
 };
 
-const DELHI_LAT = 28.6139;
-const DELHI_LON = 77.209;
 const REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
 interface WeatherState {
@@ -122,56 +120,36 @@ async function fetchWeatherForCoords(
 	};
 }
 
-async function resolveLocation(): Promise<ResolvedLocation> {
-	// 1. Check saved coordinates from settings or localStorage
-	try {
-		const settings = (await invoke("load_settings").catch(() => ({}))) as Record<string, any>;
-		const savedLat = settings["bloom-weather-lat"] || localStorage.getItem("bloom-weather-lat");
-		const savedLon = settings["bloom-weather-lon"] || localStorage.getItem("bloom-weather-lon");
-		const savedCity = settings["bloom-weather-city"] || localStorage.getItem("bloom-weather-city");
-
-		if (savedLat && savedLon) {
-			return {
-				lat: parseFloat(savedLat),
-				lon: parseFloat(savedLon),
-				city: savedCity || undefined
-			};
-		}
-	} catch {
-		// continue to IP geolocation
+/**
+ * The city picked in Settings > Notch > Weather. Bloom never looks up where
+ * this PC is: with no city picked there is no weather. A city name without
+ * coordinates can only be one older builds guessed from the IP address, so
+ * it is dropped and a city has to be picked.
+ */
+async function resolveLocation(): Promise<ResolvedLocation | null> {
+	const settings = (await invoke("load_settings").catch(() => ({}))) as Record<string, any>;
+	const savedLat = settings["bloom-weather-lat"] || localStorage.getItem("bloom-weather-lat");
+	const savedLon = settings["bloom-weather-lon"] || localStorage.getItem("bloom-weather-lon");
+	const savedCity = settings["bloom-weather-city"] || localStorage.getItem("bloom-weather-city");
+	const lat = parseFloat(savedLat);
+	const lon = parseFloat(savedLon);
+	if (Number.isFinite(lat) && Number.isFinite(lon)) {
+		return { lat, lon, city: savedCity || undefined };
 	}
-
-	// 2. Try IP-based geolocation
-	try {
-		const res = await fetch("https://ipapi.co/json/");
-		if (res.ok) {
-			const data = await res.json();
-			const lat = data.latitude || data.lat;
-			const lon = data.longitude || data.lon;
-			if (lat && lon) {
-				return { lat, lon, city: data.city || undefined };
-			}
-		}
-	} catch {
-		// try fallback
+	if (savedCity) {
+		localStorage.removeItem("bloom-weather-city");
+		invoke("save_setting", { key: "bloom-weather-city", value: null }).catch(() => {});
 	}
+	return null;
+}
 
-	// 3. Fallback IP geolocation. ip-api.com's free tier is HTTP-only: the
-	// https:// endpoint answers 403 unless the request carries a paid key.
-	try {
-		const res = await fetch("http://ip-api.com/json/?fields=status,lat,lon,city,country");
-		if (res.ok) {
-			const data = await res.json();
-			if (data.lat && data.lon) {
-				return { lat: data.lat, lon: data.lon, city: data.city || undefined };
-			}
-		}
-	} catch {
-		// fall through to default
+/** No city picked: nothing to show, and no old reading kept around. */
+function forgetWeather(): void {
+	localStorage.removeItem("bloom-weather-cached-temp");
+	localStorage.removeItem("bloom-weather-cached-condition");
+	for (const key of ["bloom-weather-cached-temp", "bloom-weather-cached-condition"]) {
+		invoke("save_setting", { key, value: null }).catch(() => {});
 	}
-
-	// 4. Default to Delhi
-	return { lat: DELHI_LAT, lon: DELHI_LON, city: "Delhi" };
 }
 
 async function persistWeather(temp: number | null, condition: string): Promise<void> {
@@ -218,21 +196,19 @@ export function useWeather(enabled: boolean) {
 
 			try {
 				const location = coords ? { ...coords, city: undefined } : await resolveLocation();
+				if (!location) {
+					setTemperature(null);
+					setWeatherCondition("");
+					setCityName("");
+					forgetWeather();
+					return;
+				}
 				const result = await fetchWeatherForCoords(location.lat, location.lon, tempUnitRef.current);
 
 				setTemperature(result.temperature);
 				setWeatherCondition(result.weatherCondition);
 				setWeatherIcon(() => result.weatherIcon);
 				persistWeather(result.temperature, result.weatherCondition);
-
-				// Update city name if resolved from IP geolocation
-				if (location.city) {
-					setCityName(location.city);
-					localStorage.setItem("bloom-weather-city", location.city);
-					invoke("save_setting", { key: "bloom-weather-city", value: location.city }).catch(
-						() => {}
-					);
-				}
 			} catch (e) {
 				console.warn("Weather fetch failed:", e);
 				if (!showStaleOnError && import.meta.env.DEV) {

@@ -283,7 +283,7 @@ export function NotchTab({
 					<SettingRow
 						icon={CloudSun}
 						label="Weather Status"
-						desc={cityName || "Auto-detect location"}
+						desc={cityName || "Pick your city below"}
 						divider={false}
 					>
 						<div className="weather-controls">

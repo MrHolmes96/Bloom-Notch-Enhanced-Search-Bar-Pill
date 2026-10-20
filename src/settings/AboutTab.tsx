@@ -118,10 +118,9 @@ export function AboutTab({
 			</div>
 			<div className="setting-group-note">
 				Everything Bloom keeps stays in these two folders on this PC, and nothing is sent anywhere
-				on its own. Bloom only goes online for the weather (Open-Meteo, for the city you set; with
-				no city set, your rough location is looked up from your IP address), search suggestions if
-				you turn them on, Blitzit if you connect it, and LocalSend, which stays on your home
-				network.
+				on its own. Bloom only goes online, always encrypted, for the weather (Open-Meteo, for the
+				city you pick; it never looks up where you are), search suggestions if you turn them on,
+				and Blitzit if you connect it. LocalSend stays on your home network.
 			</div>
 		</div>
 	);
