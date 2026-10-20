@@ -3,7 +3,7 @@
 //! (Obsidian, Msty) can follow the same pattern with their own notch page.
 
 pub mod blitzit;
-mod http;
+pub(crate) mod http;
 mod mcp;
 mod oauth;
 mod secret;
