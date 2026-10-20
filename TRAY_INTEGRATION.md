@@ -130,6 +130,11 @@ Bloom's tray follows Windows' exactly:
   "… Helper", "… Service") is shown as the app it works for: the one Start
   menu app from the same company (`CompanyName`), by that app's name and icon.
   With several apps from that company, its tooltip names it.
+- Two icons that would look the same in the notch are shown once: a
+  company's background programs that both stand for its one app, or one
+  program's icon known twice with the same tooltip. The one kept is the one
+  Windows shows most plainly (not hidden, on the taskbar, live in Bloom's
+  tray, with a picture and a tooltip).
 - `tray-icons.txt` lists every icon Bloom knows, where from, its window and
   id, whether it has a picture, and what the notch does with it.
 

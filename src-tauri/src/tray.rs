@@ -956,7 +956,8 @@ unsafe fn find_explorer_only() -> Vec<ExplorerIcon> {
 /// plus any icon only Explorer's tray has. Icons Windows' tray doesn't show
 /// aren't shown either: ones an app hides itself, and blank ones (no picture
 /// and no tooltip). An icon a background program shows for its app is shown
-/// as that app.
+/// as that app, and an app's icon is shown once however many ways Bloom knows
+/// it.
 fn host_state() -> TrayState {
     use crate::tray_manager::{hides, normalize_guid, IconFacts};
     struct Candidate {
@@ -1100,6 +1101,62 @@ fn host_state() -> TrayState {
                         "left out: the app hides it from Windows' tray"
                     };
             }
+        }
+    }
+    // One tile per icon of an app, as Windows' tray shows it: two icons that
+    // would look the same in the notch (a company's background programs that
+    // both stand for its one app, or one program's icon known twice with the
+    // same tooltip) are shown once. The one kept is the one Windows shows
+    // most plainly: not hidden, on the taskbar, live in Bloom's tray, with a
+    // picture and a tooltip.
+    {
+        let kept: Vec<&Candidate> = candidates
+            .iter()
+            .zip(&outcome)
+            .filter(|(_, outcome)| !outcome.starts_with("left out"))
+            .map(|(icon, _)| icon)
+            .collect();
+        let per_exe = count_programs(&kept[..]);
+        let looks_like = |icon: &Candidate| -> Option<String> {
+            let exe = exe_name(&icon.path);
+            let same_program = per_exe.get(&exe).copied().unwrap_or(1);
+            let program = crate::commands::app_display_name(&icon.path, None);
+            if same_program <= 1 && is_background_program(&program) {
+                if let Some((_, app)) = company_app(&icon.path) {
+                    return Some(format!("app {}", app.to_lowercase()));
+                }
+            }
+            let tooltip = icon.tooltip.trim().to_lowercase();
+            (!tooltip.is_empty()).then(|| format!("{exe} {tooltip}"))
+        };
+        let rank = |icon: &Candidate| {
+            (
+                icon.hidden,
+                !icon.promoted,
+                icon.source != "Bloom's tray",
+                !icon.picture,
+                icon.tooltip.trim().is_empty(),
+            )
+        };
+        let mut first: HashMap<String, usize> = HashMap::new();
+        for index in 0..candidates.len() {
+            if outcome[index].starts_with("left out") {
+                continue;
+            }
+            let Some(look) = looks_like(&candidates[index]) else {
+                continue;
+            };
+            let Some(&other) = first.get(&look) else {
+                first.insert(look, index);
+                continue;
+            };
+            let (keep, drop) = if rank(&candidates[index]) < rank(&candidates[other]) {
+                (index, other)
+            } else {
+                (other, index)
+            };
+            outcome[drop] = "left out: the same app's icon is already shown";
+            first.insert(look, keep);
         }
     }
     let kept: Vec<&Candidate> = candidates
