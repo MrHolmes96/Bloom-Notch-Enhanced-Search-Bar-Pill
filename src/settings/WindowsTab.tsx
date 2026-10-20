@@ -77,7 +77,8 @@ export function WindowsTab({ section }: { section: WindowsSection }) {
 				</SettingRow>
 			</div>
 			<div className="setting-group-note">
-				The border comes back as soon as a window is no longer snapped, and when Bloom quits.
+				A window that's no longer snapped looks as Windows' own setting says: no border, or the
+				accent border when "Show accent colour on title bars and window borders" is on.
 			</div>
 		</>
 	);
