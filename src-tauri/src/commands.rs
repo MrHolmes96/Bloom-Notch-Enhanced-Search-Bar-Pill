@@ -26,13 +26,21 @@ pub async fn set_menu_open(open: bool, rect: Option<IntRect>) {
 #[tauri::command]
 pub async fn set_dock_hovered(hovered: bool) {
     DOCK_IS_HOVERED.store(hovered, Ordering::Relaxed);
-    // Pointing at the dock: the app in front gets a fresh picture, so its
-    // preview (and its picture once minimized) is how it looks now.
+    // Resting on the dock: the app in front gets a fresh picture, so its
+    // preview (and its picture once minimized) is how it looks now. Not at
+    // once: the pointer passing over the dock on its way to a click must not
+    // make the app draw itself while it handles that click.
     if hovered {
         let front = crate::services::last_front_window();
         if front != 0 {
             std::thread::spawn(move || {
-                crate::services::refresh_snapshot(HWND(front as *mut _), 3000)
+                std::thread::sleep(std::time::Duration::from_millis(600));
+                let still_there = DOCK_IS_HOVERED.load(Ordering::Relaxed)
+                    && crate::services::last_front_window() == front
+                    && crate::services::idle_ms() >= 400;
+                if still_there {
+                    crate::services::refresh_snapshot(HWND(front as *mut _), 15_000);
+                }
             });
         }
     }
@@ -3355,7 +3363,7 @@ pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Re
     if key.starts_with("bloom-notify-") {
         crate::notifications::settings_changed();
     }
-    if key == "bloom-windows-snap-borders" {
+    if key.starts_with("bloom-windows-snap-border") {
         crate::snap_borders::apply(&app);
     }
     Ok(())

@@ -133,11 +133,16 @@ unsafe fn in_front(hwnd: HWND) -> bool {
 
 /// Shows, restores and activates a window, like clicking its taskbar button.
 pub fn bring_to_front(hwnd: HWND) -> bool {
+    bring_to_front_how(hwnd).0
+}
+
+/// `bring_to_front`, and the way that did it (for `focus.log`).
+fn bring_to_front_how(hwnd: HWND) -> (bool, &'static str) {
     use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows::Win32::UI::WindowsAndMessaging::SwitchToThisWindow;
     unsafe {
         if hwnd.is_invalid() {
-            return false;
+            return (false, "no window");
         }
         if !IsWindowVisible(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_SHOW);
@@ -148,12 +153,12 @@ pub fn bring_to_front(hwnd: HWND) -> bool {
         let target = active_part(hwnd);
         grant_to(process_of(target));
         if SetForegroundWindow(target).as_bool() && in_front(target) {
-            return true;
+            return (true, "SetForegroundWindow");
         }
         // What Alt+Tab uses to switch.
         SwitchToThisWindow(target, true);
         if in_front(target) {
-            return true;
+            return (true, "SwitchToThisWindow");
         }
         // Windows still refused (a full-screen app holding the foreground):
         // share the foreground thread's input for a moment, which it accepts.
@@ -168,7 +173,8 @@ pub fn bring_to_front(hwnd: HWND) -> bool {
         if attached {
             let _ = AttachThreadInput(own_thread, foreground_thread, false);
         }
-        done || in_front(target)
+        let done = done || in_front(target);
+        (done, if done { "shared input" } else { "refused" })
     }
 }
 
@@ -259,11 +265,14 @@ pub fn switch_to(hwnd: HWND) -> bool {
         return false;
     }
     let this = SWITCHES.fetch_add(1, Ordering::SeqCst) + 1;
+    let started = std::time::Instant::now();
     leave_start_menu();
     let before = unsafe { GetForegroundWindow() };
-    let done = bring_to_front(hwnd);
+    let (done, how) = bring_to_front_how(hwnd);
+    let took = started.elapsed().as_millis();
     std::thread::sleep(std::time::Duration::from_millis(150));
     if SWITCHES.load(Ordering::SeqCst) != this {
+        note(hwnd, &format!("{how} in {took} ms"));
         return done;
     }
     let now = unsafe { GetForegroundWindow() };
@@ -271,7 +280,48 @@ pub fn switch_to(hwnd: HWND) -> bool {
         && process_of(before) != process_of(hwnd)
         && (now == before || start_menu_open());
     if taken_back {
-        return bring_to_front(hwnd);
+        let (again, how_again) = bring_to_front_how(hwnd);
+        note(
+            hwnd,
+            &format!("{how} in {took} ms, taken back by the window before, then {how_again}"),
+        );
+        return again;
     }
-    done || unsafe { in_front(hwnd) }
+    let done = done || unsafe { in_front(hwnd) };
+    note(
+        hwnd,
+        &format!(
+            "{how} in {took} ms{}",
+            if done { "" } else { ", not in front" }
+        ),
+    );
+    done
+}
+
+/// One line in `focus.log` (Bloom's data folder) per switch from the dock:
+/// the app, the way Windows let it come forward and how long that took, to
+/// see why an app that was slow to come forward was.
+fn note(hwnd: HWND, what: &str) {
+    use std::io::Write;
+    let Some(path) = crate::tray_host::config_dir().map(|dir| dir.join("focus.log")) else {
+        return;
+    };
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 64 * 1024) {
+        let _ = std::fs::remove_file(&path);
+    }
+    let program = unsafe { crate::commands::any_process_path(process_of(hwnd)) }
+        .and_then(|path| path.rsplit('\\').next().map(str::to_string))
+        .unwrap_or_default();
+    let time = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(
+            file,
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02} {program}: {what}",
+            time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond
+        );
+    }
 }

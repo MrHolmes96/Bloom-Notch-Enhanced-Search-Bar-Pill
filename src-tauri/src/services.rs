@@ -38,20 +38,46 @@ static KEYBOARD_HOOK: AtomicIsize = AtomicIsize::new(0);
 /// the resulting changes instead. The hook only exists while Win+1-9 is in use
 /// (the dock replaces the taskbar and the setting is on); the rest of the time
 /// Bloom doesn't see the keyboard at all.
+///
+/// The hook has a thread of its own, which does nothing but answer it: every
+/// key press anywhere waits for a low-level hook, so it must never wait for
+/// Bloom's windows (on the main thread, busy with the notch and the dock),
+/// or typing in every app would stall whenever Bloom is busy.
 pub fn setup_keyboard_hook(app_handle: AppHandle) {
-    let _ = KEYBOARD_HOOK_APP_HANDLE.set(app_handle.clone());
-    std::thread::spawn(move || {
-        // Exiting removes the hook with the process; never touch it mid-shutdown.
-        while !SHUTTING_DOWN.load(Ordering::Relaxed) {
-            let wanted = NATIVE_TASKBAR_HIDDEN.load(Ordering::Relaxed) && dock_win_number_enabled();
-            if wanted != (KEYBOARD_HOOK.load(Ordering::Relaxed) != 0) {
-                // A low-level hook runs on the thread that installed it, which
-                // needs a message loop, so install and remove it on the main thread.
-                let _ = app_handle.run_on_main_thread(move || set_keyboard_hook(wanted));
+    let _ = KEYBOARD_HOOK_APP_HANDLE.set(app_handle);
+    let _ = std::thread::Builder::new()
+        .name("bloom-keyboard-hook".into())
+        .spawn(|| unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                DispatchMessageW, GetMessageW, KillTimer, PeekMessageW, SetTimer, TranslateMessage,
+                MSG, PM_NOREMOVE, WM_TIMER,
+            };
+            let mut message = MSG::default();
+            // The thread's message queue, before the timer and the hook.
+            let _ = PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE);
+            // Wakes the thread to see whether the hook is still wanted.
+            let timer = SetTimer(None, 0, 500, None);
+            loop {
+                // Exiting removes the hook with the process; never touch it
+                // mid-shutdown.
+                if SHUTTING_DOWN.load(Ordering::Relaxed) {
+                    break;
+                }
+                set_keyboard_hook(
+                    NATIVE_TASKBAR_HIDDEN.load(Ordering::Relaxed) && dock_win_number_enabled(),
+                );
+                if GetMessageW(&mut message, None, 0, 0).0 <= 0 {
+                    break;
+                }
+                if message.message != WM_TIMER {
+                    let _ = TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
             }
-            std::thread::sleep(Duration::from_millis(500));
-        }
-    });
+            if timer != 0 {
+                let _ = KillTimer(None, timer);
+            }
+        });
 }
 
 fn set_keyboard_hook(enabled: bool) {
@@ -508,10 +534,17 @@ unsafe extern "system" fn focus_event_proc(
 
     // The app window that was in front just left it, while it is still on
     // screen: its picture is how it was left (skipped when only seconds old).
+    // Taken once the switch has settled, and only if it stayed in the
+    // background: a picture asks the app to draw itself, which must never
+    // compete with it (or the app now in front) handling the switch.
     let previous = LAST_FRONT.load(Ordering::Relaxed);
     if previous != 0 && previous != hwnd.0 as isize {
         std::thread::spawn(move || {
-            refresh_snapshot(HWND(previous as *mut _), 2000);
+            std::thread::sleep(std::time::Duration::from_millis(SETTLE_MS));
+            let window = HWND(previous as *mut _);
+            if windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() != window {
+                refresh_snapshot(window, 2000);
+            }
         });
     }
 
@@ -654,12 +687,32 @@ fn take_picture(hwnd: HWND) -> bool {
     if crate::utils::is_window_fullscreen(hwnd) {
         return true;
     }
-    crate::window_capture::take(hwnd, 320, 200, false).is_some_and(|shot| shot.usable)
+    let size = crate::window_capture::PREVIEW_BOX;
+    crate::window_capture::take(hwnd, size, size, false).is_some_and(|shot| shot.usable)
+}
+
+/// How long after a switch of the window in front its pictures wait.
+const SETTLE_MS: u64 = 1500;
+
+/// How long since the last key press or mouse input, in milliseconds.
+pub fn idle_ms() -> u64 {
+    use windows::Win32::System::SystemInformation::GetTickCount;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    let mut info = LASTINPUTINFO {
+        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    unsafe {
+        if !GetLastInputInfo(&mut info).as_bool() {
+            return 0;
+        }
+        GetTickCount().wrapping_sub(info.dwTime) as u64
+    }
 }
 
 /// The window in front changed its title (a browser's tab, a document): its
-/// picture is taken a moment later, once the title has settled, and at most
-/// every 15 s.
+/// picture is taken once the title has settled and nothing has been typed or
+/// clicked for a moment (never while it's being used), at most every 15 s.
 unsafe extern "system" fn title_changed_proc(
     _hook: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
     _event: u32,
@@ -691,11 +744,20 @@ unsafe extern "system" fn title_changed_proc(
             }
             seen = now;
         }
-        TITLE_WAITING.store(false, Ordering::Release);
         let hwnd = HWND(raw as *mut _);
-        if windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd {
-            refresh_snapshot(hwnd, 15_000);
+        // Up to 20 s for a pause in typing and clicking; once it is no longer
+        // in front, the switch takes its picture instead.
+        for _ in 0..20 {
+            if windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() != hwnd {
+                break;
+            }
+            if idle_ms() >= SETTLE_MS {
+                refresh_snapshot(hwnd, 15_000);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1000));
         }
+        TITLE_WAITING.store(false, Ordering::Release);
     });
 }
 
