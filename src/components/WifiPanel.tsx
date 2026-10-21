@@ -5,7 +5,6 @@ import {
 	ChevronLeft,
 	LoaderCircle,
 	Lock,
-	Plus,
 	RefreshCw,
 	Wifi,
 	WifiHigh,
@@ -24,8 +23,7 @@ interface WifiNetwork {
 
 interface WifiNetworkList {
 	networks: WifiNetwork[];
-	/** Windows won't list the networks around to Bloom (no location access):
-	 * `networks` are the saved ones. */
+	/** Windows won't list the networks around to Bloom (no location access). */
 	location_denied: boolean;
 }
 
@@ -94,14 +92,17 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 		}
 	}, []);
 
-	// Without location access Windows doesn't say which networks are around
-	// (and isn't asked): the view lists the saved ones, which connect the same
-	// way, and Windows' own list is one click away for a new network.
-	const savedOnly = !!list?.location_denied;
+	// The notch's Wi-Fi button opens Windows' own list while Windows won't
+	// list the networks around to Bloom. Reached anyway (the notch reopening
+	// on its last page), this view steps back to the controls, popping
+	// nothing up.
+	const onBackRef = useRef(onBack);
+	onBackRef.current = onBack;
 	useEffect(() => {
 		if (!enabled) return;
 		void refresh().then((now) => {
-			if (!now.location_denied) void scan();
+			if (now.location_denied) onBackRef.current();
+			else void scan();
 		});
 	}, [enabled, refresh, scan]);
 
@@ -256,16 +257,13 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 				</div>
 			);
 		}
-		if (list.networks.length === 0 && !savedOnly) {
+		if (list.networks.length === 0) {
 			return (
 				<div className="qp-empty">{scanning ? "Looking for networks…" : "No networks found"}</div>
 			);
 		}
 		return (
 			<ul className="qp-list">
-				{savedOnly && list.networks.length === 0 && (
-					<li className="qp-empty">No saved networks</li>
-				)}
 				{list.networks.map((n) => {
 					const expanded = selected === n.ssid;
 					return (
@@ -279,7 +277,7 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 								aria-expanded={expanded}
 							>
 								<span className="qp-row-icon">
-									{savedOnly ? <Wifi /> : <SignalIcon signal={n.signal} />}
+									<SignalIcon signal={n.signal} />
 								</span>
 								<span className="qp-row-text">
 									<span className="qp-row-name">{n.ssid}</span>
@@ -292,19 +290,6 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 						</li>
 					);
 				})}
-				{savedOnly && (
-					<li className="qp-row">
-						<button className="qp-row-main" onClick={() => invoke("open_wifi_settings")}>
-							<span className="qp-row-icon">
-								<Plus />
-							</span>
-							<span className="qp-row-text">
-								<span className="qp-row-name">Other networks</span>
-								<span className="qp-row-sub">Windows' list</span>
-							</span>
-						</button>
-					</li>
-				)}
 			</ul>
 		);
 	};
@@ -316,16 +301,14 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 					<ChevronLeft />
 				</button>
 				<span className="qp-title">Wi-Fi</span>
-				{!savedOnly && (
-					<button
-						className="qp-icon-btn"
-						onClick={() => void scan()}
-						disabled={!enabled || scanning}
-						aria-label="Scan for networks"
-					>
-						<RefreshCw className={scanning ? "qp-spin" : ""} />
-					</button>
-				)}
+				<button
+					className="qp-icon-btn"
+					onClick={() => void scan()}
+					disabled={!enabled || scanning}
+					aria-label="Scan for networks"
+				>
+					<RefreshCw className={scanning ? "qp-spin" : ""} />
+				</button>
 				<button
 					className={`qp-switch ${enabled ? "on" : ""}`}
 					role="switch"

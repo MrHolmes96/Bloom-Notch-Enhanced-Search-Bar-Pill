@@ -338,6 +338,7 @@ fn main() {
             notifications::notification_remove,
             notifications::notification_clear_all,
             notifications::notification_center_hide,
+            wifi::wifi_lists_nearby,
             wifi::wifi_list_networks,
             wifi::wifi_scan,
             wifi::wifi_connect,

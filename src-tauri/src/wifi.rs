@@ -4,12 +4,11 @@
 //! scan finishes or the connection changes, so the view never has to poll.
 //!
 //! Since Windows 11 24H2 Windows lists the networks around only to apps
-//! allowed precise location. Without that the view lists the networks Windows
-//! has saved (this PC's own list, which Windows gives any app) and connects to
-//! them the same way, and Windows' own list is one click away for a new one.
-//! Bloom never asks for location, and while it isn't allowed it doesn't touch
-//! the parts Windows keeps behind it (so no prompt, and Bloom never shows as
-//! using the location).
+//! allowed precise location. Without that, the notch's Wi-Fi button opens
+//! Windows' own list instead (`open_wifi_settings`). Bloom never asks for
+//! location, and while it isn't allowed it doesn't touch the parts Windows
+//! keeps behind it (so no prompt, and Bloom never shows as using the
+//! location).
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -28,13 +27,13 @@ use windows::Win32::NetworkManagement::WiFi::{
     wlan_notification_acm_scan_complete, wlan_notification_acm_scan_fail,
     wlan_notification_acm_scan_list_refresh, WlanCloseHandle, WlanConnect, WlanDeleteProfile,
     WlanDisconnect, WlanEnumInterfaces, WlanFreeMemory, WlanGetAvailableNetworkList,
-    WlanGetProfile, WlanGetProfileList, WlanOpenHandle, WlanQueryInterface,
-    WlanRegisterNotification, WlanScan, WlanSetProfile, DOT11_CIPHER_ALGO_TKIP, DOT11_SSID,
-    L2_NOTIFICATION_DATA, WLAN_AVAILABLE_NETWORK, WLAN_AVAILABLE_NETWORK_CONNECTED,
-    WLAN_AVAILABLE_NETWORK_HAS_PROFILE, WLAN_AVAILABLE_NETWORK_LIST, WLAN_CONNECTION_ATTRIBUTES,
-    WLAN_CONNECTION_NOTIFICATION_DATA, WLAN_CONNECTION_PARAMETERS, WLAN_INTERFACE_INFO_LIST,
-    WLAN_INTERFACE_STATE, WLAN_NOTIFICATION_SOURCE_ACM, WLAN_PROFILE_INFO, WLAN_PROFILE_INFO_LIST,
-    WLAN_REASON_CODE_MSMSEC_BASE, WLAN_REASON_CODE_MSMSEC_PSK_MISMATCH_SUSPECTED,
+    WlanGetProfile, WlanOpenHandle, WlanQueryInterface, WlanRegisterNotification, WlanScan,
+    WlanSetProfile, DOT11_CIPHER_ALGO_TKIP, DOT11_SSID, L2_NOTIFICATION_DATA,
+    WLAN_AVAILABLE_NETWORK, WLAN_AVAILABLE_NETWORK_CONNECTED, WLAN_AVAILABLE_NETWORK_HAS_PROFILE,
+    WLAN_AVAILABLE_NETWORK_LIST, WLAN_CONNECTION_ATTRIBUTES, WLAN_CONNECTION_NOTIFICATION_DATA,
+    WLAN_CONNECTION_PARAMETERS, WLAN_INTERFACE_INFO_LIST, WLAN_INTERFACE_STATE,
+    WLAN_NOTIFICATION_SOURCE_ACM, WLAN_REASON_CODE_MSMSEC_BASE,
+    WLAN_REASON_CODE_MSMSEC_PSK_MISMATCH_SUSPECTED,
 };
 
 /// How long to wait for Windows to report the outcome of a connection attempt.
@@ -56,7 +55,7 @@ pub struct WifiNetwork {
 pub struct WifiNetworkList {
     pub networks: Vec<WifiNetwork>,
     /// Windows won't list the networks around to Bloom (location access is
-    /// off for it), so `networks` are the saved ones.
+    /// off for it).
     pub location_denied: bool,
 }
 
@@ -224,63 +223,10 @@ fn find_candidate(client: &Client, iface: &GUID, ssid: &str) -> Result<Candidate
                 .ok_or_else(|| "not-found".to_string());
         }
     }
-    // Windows won't say what's around: a saved network, by its name.
-    saved_candidate(client, iface, ssid).ok_or_else(|| "not-found".to_string())
+    Err("location-denied".into())
 }
 
-// ── Saved networks ───────────────────────────────────────────────────────────
-
-/// The text of the first `<tag>…</tag>` in a profile's XML.
-fn xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{tag}>");
-    let start = xml.find(&open)? + open.len();
-    let end = xml[start..].find(&format!("</{tag}>"))? + start;
-    Some(xml[start..end].trim())
-}
-
-fn unescape_xml(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
-}
-
-/// A saved profile's security, labelled the way the view labels networks.
-fn profile_security(xml: &str) -> &'static str {
-    let auth = xml_tag(xml, "authentication")
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let encryption = xml_tag(xml, "encryption")
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    match auth.as_str() {
-        "open" if encryption == "none" => "open",
-        "open" | "shared" => "wep",
-        "wpapsk" => "wpa",
-        "wpa2psk" => "wpa2",
-        "wpa3sae" => "wpa3",
-        "owe" => "owe",
-        "wpa" | "wpa2" | "wpa3" | "wpa3ent" | "wpa3ent192" => "enterprise",
-        _ => "other",
-    }
-}
-
-/// A saved profile's network name as bytes: its hex form when it has one
-/// (which keeps every byte exactly), else its name.
-fn profile_ssid(xml: &str) -> Option<Vec<u8>> {
-    let ssid = xml_tag(xml, "SSID")?;
-    if let Some(hex) = xml_tag(ssid, "hex").filter(|h| !h.is_empty() && h.len() % 2 == 0) {
-        let bytes: Option<Vec<u8>> = (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
-            .collect();
-        if bytes.is_some() {
-            return bytes;
-        }
-    }
-    xml_tag(ssid, "name").map(|name| unescape_xml(name).into_bytes())
-}
+// ── Connection ───────────────────────────────────────────────────────────────
 
 /// Whether Windows lets Bloom see the networks around. Asked without touching
 /// the list, so Windows never shows a prompt for Bloom. Windows that can't
@@ -401,68 +347,6 @@ fn connection(client: &Client, iface: &GUID) -> Option<Connection> {
     Some(Connection {
         name: profile.clone(),
         profile,
-    })
-}
-
-/// The networks Windows has saved, in the order Windows tries them, the one
-/// in use first.
-fn saved_networks(client: &Client, iface: &GUID) -> Vec<WifiNetwork> {
-    let mut list: *mut WLAN_PROFILE_INFO_LIST = std::ptr::null_mut();
-    let rc = unsafe { WlanGetProfileList(client.0, iface, None, &mut list) };
-    if rc != 0 {
-        return Vec::new();
-    }
-    let mut names = Vec::new();
-    unsafe {
-        if let Some(header) = list.as_ref() {
-            let count = header.dwNumberOfItems as usize;
-            // The same flexible-array pattern as the network list.
-            if count > 0 && count <= 1024 {
-                let entries: &[WLAN_PROFILE_INFO] =
-                    std::slice::from_raw_parts(header.ProfileInfo.as_ptr(), count);
-                names.extend(
-                    entries
-                        .iter()
-                        .map(|entry| wide_to_string(&entry.strProfileName)),
-                );
-            }
-        }
-        WlanFreeMemory(list as *const _);
-    }
-    let in_use = connection(client, iface).and_then(|c| c.profile);
-    let mut networks: Vec<WifiNetwork> = names
-        .into_iter()
-        .filter(|name| !name.is_empty())
-        .filter_map(|name| {
-            let xml = get_profile_xml(client, iface, &name).unwrap_or_default();
-            // Ad hoc networks aren't managed.
-            if xml_tag(&xml, "connectionType").is_some_and(|t| t.eq_ignore_ascii_case("IBSS")) {
-                return None;
-            }
-            Some(WifiNetwork {
-                connected: in_use
-                    .as_deref()
-                    .is_some_and(|profile| profile.eq_ignore_ascii_case(&name)),
-                security: profile_security(&xml),
-                signal: 0,
-                saved: true,
-                ssid: name,
-            })
-        })
-        .collect();
-    // Stable: the one in use first, the rest in Windows' order.
-    networks.sort_by_key(|network| !network.connected);
-    networks
-}
-
-/// A saved network as the connect path needs it, from its profile.
-fn saved_candidate(client: &Client, iface: &GUID, name: &str) -> Option<Candidate> {
-    let xml = get_profile_xml(client, iface, name)?;
-    Some(Candidate {
-        ssid_bytes: profile_ssid(&xml).unwrap_or_else(|| name.as_bytes().to_vec()),
-        profile: Some(name.to_string()),
-        security: profile_security(&xml),
-        tkip: xml_tag(&xml, "encryption").is_some_and(|e| e.eq_ignore_ascii_case("TKIP")),
     })
 }
 
@@ -598,10 +482,9 @@ fn set_profile_xml(client: &Client, iface: &GUID, xml: &str) -> Result<(), Strin
 // ── Notifications ────────────────────────────────────────────────────────────
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
-/// The network a connect call is waiting on, and where to send its reason code.
+/// The SSID a connect call is waiting on, and where to send its reason code.
 struct Pending {
     ssid: Vec<u8>,
-    profile: String,
     reply: Sender<u32>,
 }
 static PENDING_CONNECT: Mutex<Option<Pending>> = Mutex::new(None);
@@ -624,14 +507,9 @@ unsafe extern "system" fn on_notification(
         let info = unsafe { (data.pData as *const WLAN_CONNECTION_NOTIFICATION_DATA).as_ref() };
         if let Some(info) = info {
             if let Ok(mut pending) = PENDING_CONNECT.lock() {
-                // By name too: without location access Windows may leave the
-                // SSID out.
-                let matches = pending.as_ref().is_some_and(|waiting| {
-                    (!waiting.ssid.is_empty()
-                        && waiting.ssid.as_slice() == ssid_bytes(&info.dot11Ssid))
-                        || (!waiting.profile.is_empty()
-                            && waiting.profile == wide_to_string(&info.strProfileName))
-                });
+                let matches = pending
+                    .as_ref()
+                    .is_some_and(|waiting| waiting.ssid.as_slice() == ssid_bytes(&info.dot11Ssid));
                 if matches {
                     if let Some(waiting) = pending.take() {
                         let _ = waiting.reply.send(info.wlanReasonCode);
@@ -735,13 +613,21 @@ fn list_sync() -> Result<WifiNetworkList, String> {
         }
     }
     Ok(WifiNetworkList {
-        networks: saved_networks(&client, &iface),
+        networks: Vec::new(),
         location_denied: true,
     })
 }
 
-/// Networks Windows can currently see, from its last scan, or the saved ones
-/// when Windows won't list them to Bloom.
+/// Whether the notch can show the networks around itself; when not, its
+/// Wi-Fi button opens Windows' own list.
+#[tauri::command]
+pub async fn wifi_lists_nearby() -> bool {
+    tauri::async_runtime::spawn_blocking(may_list_nearby)
+        .await
+        .unwrap_or(false)
+}
+
+/// Networks Windows can currently see, from its last scan.
 #[tauri::command]
 pub async fn wifi_list_networks() -> Result<WifiNetworkList, String> {
     tauri::async_runtime::spawn_blocking(list_sync)
@@ -820,7 +706,6 @@ fn connect_sync(ssid: &str, password: Option<&str>) -> Result<(), String> {
     if let Ok(mut pending) = PENDING_CONNECT.lock() {
         *pending = Some(Pending {
             ssid: candidate.ssid_bytes.clone(),
-            profile: profile.clone(),
             reply: tx,
         });
     }
@@ -874,11 +759,11 @@ fn is_key_mismatch(reason: u32) -> bool {
         || (WLAN_REASON_CODE_MSMSEC_BASE..WLAN_REASON_CODE_MSMSEC_BASE + 0x10000).contains(&reason)
 }
 
-/// Connects to a visible network (or a saved one, by name, while Windows
-/// won't list them to Bloom). Saved and open networks need no password; a new
-/// personal network needs one. Errors are short codes the view maps to
+/// Connects to a visible network. Saved and open networks need no password;
+/// a new personal network needs one. Errors are short codes the view maps to
 /// messages ("wrong-password", "password-required", "password-length",
-/// "unsupported", "not-found", "timeout", "no-adapter") or Windows' own text.
+/// "unsupported", "not-found", "timeout", "location-denied", "no-adapter") or
+/// Windows' own text.
 #[tauri::command]
 pub async fn wifi_connect(ssid: String, password: Option<String>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || connect_sync(&ssid, password.as_deref()))
@@ -901,8 +786,8 @@ pub async fn wifi_disconnect() -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Deletes a network's saved profile, disconnecting from it if it's the
-/// current one.
+/// Deletes the saved profile of a visible network, disconnecting from it if
+/// it's the current one.
 #[tauri::command]
 pub async fn wifi_forget(ssid: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -990,39 +875,6 @@ mod tests {
 
         let wpa3 = profile_xml("Home", b"Home", "wpa3", false, Some("password1"));
         assert!(wpa3.contains("WPA3SAE") && wpa3.contains("transitionMode"));
-    }
-
-    #[test]
-    fn reads_saved_profiles() {
-        let xml = profile_xml("Café & <Home>", "Café".as_bytes(), "wpa2", true, None);
-        assert_eq!(profile_security(&xml), "wpa2");
-        assert_eq!(profile_ssid(&xml).as_deref(), Some("Café".as_bytes()));
-        assert_eq!(xml_tag(&xml, "encryption"), Some("TKIP"));
-        assert_eq!(
-            profile_security(&profile_xml("G", b"G", "open", false, None)),
-            "open"
-        );
-        assert_eq!(
-            profile_security(&profile_xml("H", b"H", "wpa3", false, None)),
-            "wpa3"
-        );
-
-        // A profile Windows wrote, without the hex form.
-        let windows = r#"<?xml version="1.0"?><WLANProfile xmlns="x"><name>Work</name><SSIDConfig><SSID><name>Tom &amp; Co</name></SSID></SSIDConfig><connectionType>ESS</connectionType><MSM><security><authEncryption><authentication>WPA2</authentication><encryption>AES</encryption><useOneX>true</useOneX></authEncryption></security></MSM></WLANProfile>"#;
-        assert_eq!(
-            profile_ssid(windows).as_deref(),
-            Some("Tom & Co".as_bytes())
-        );
-        assert_eq!(profile_security(windows), "enterprise");
-        assert_eq!(xml_tag(windows, "connectionType"), Some("ESS"));
-        assert_eq!(
-            profile_security("<authentication>open</authentication><encryption>WEP</encryption>"),
-            "wep"
-        );
-        assert_eq!(
-            profile_ssid("<SSID><hex>zz</hex><name>x</name></SSID>").as_deref(),
-            Some(&b"x"[..])
-        );
     }
 
     #[test]

@@ -2656,12 +2656,27 @@ function App() {
 		}
 	}, []);
 
-	// Right-click opens the tile's own view, the same as its › button.
-	const handleWifiRightClick = useCallback((e: React.MouseEvent) => {
-		e.preventDefault();
-		e.stopPropagation();
-		setBloomMode("wifi");
+	// The Wi-Fi tile's view: the networks around in the notch when Windows
+	// lists them to Bloom, else Windows' own list (Windows keeps the list
+	// behind location access since 24H2, and Bloom doesn't ask for it).
+	const openWifiView = useCallback(() => {
+		void invoke<boolean>("wifi_lists_nearby")
+			.catch(() => true)
+			.then((inNotch) => {
+				if (inNotch) setBloomMode("wifi");
+				else void invoke("open_wifi_settings");
+			});
 	}, []);
+
+	// Right-click opens the tile's own view, the same as its › button.
+	const handleWifiRightClick = useCallback(
+		(e: React.MouseEvent) => {
+			e.preventDefault();
+			e.stopPropagation();
+			openWifiView();
+		},
+		[openWifiView]
+	);
 
 	const toggleDockModeSetting = useCallback(
 		async (e: React.MouseEvent) => {
@@ -3825,7 +3840,7 @@ function App() {
 														title="Wi-Fi networks"
 														onClick={(e) => {
 															e.stopPropagation();
-															setBloomMode("wifi");
+															openWifiView();
 														}}
 													>
 														<ChevronRight />
