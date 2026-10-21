@@ -235,3 +235,84 @@ export function LocalSendBar({
 		</div>
 	);
 }
+
+/** Receiving into the shelf (see `localsend_receive.rs`). */
+export interface LocalSendReceiveStatus {
+	on: boolean;
+	/** When it turns itself off, in ms since 1970; 0 for never. */
+	until: number;
+	error: string | null;
+}
+
+/**
+ * Receiving with LocalSend into the shelf: whether it's on, for how much
+ * longer, and turning it on or off. It is off whenever Bloom starts and turns
+ * itself off after a while without a transfer.
+ */
+export function useLocalSendReceive() {
+	const [status, setStatus] = useState<LocalSendReceiveStatus>({ on: false, until: 0, error: null });
+	const [busy, setBusy] = useState(false);
+	const [now, setNow] = useState(() => Date.now());
+
+	useEffect(() => {
+		void invoke<LocalSendReceiveStatus>("localsend_receive_status")
+			.then(setStatus)
+			.catch(() => {});
+		const unlisten = listen<LocalSendReceiveStatus>("localsend-receive", (e) => setStatus(e.payload));
+		return () => {
+			void unlisten.then((fn) => fn());
+		};
+	}, []);
+
+	// The minutes left, while on.
+	useEffect(() => {
+		if (!status.on || !status.until) return;
+		setNow(Date.now());
+		const timer = window.setInterval(() => setNow(Date.now()), 15_000);
+		return () => window.clearInterval(timer);
+	}, [status.on, status.until]);
+
+	const toggle = useCallback(() => {
+		setBusy(true);
+		void invoke<LocalSendReceiveStatus>("localsend_receive", { on: !status.on })
+			.then(setStatus)
+			.catch((e) => setStatus({ on: false, until: 0, error: String(e) }))
+			.finally(() => setBusy(false));
+	}, [status.on]);
+
+	const minutesLeft =
+		status.on && status.until ? Math.max(1, Math.ceil((status.until - now) / 60_000)) : null;
+	return { ...status, busy, toggle, minutesLeft };
+}
+
+/** The shelf's button that turns receiving on and off and shows its state. */
+export function LocalSendReceiveButton({
+	receive
+}: {
+	receive: ReturnType<typeof useLocalSendReceive>;
+}) {
+	const { on, error, busy, toggle, minutesLeft } = receive;
+	const label = on ? "LocalSend: Enabled" : "LocalSend: Disabled";
+	const title = error
+		? error
+		: on
+			? `Files and text sent to this PC with LocalSend come into the shelf (saved in Downloads)${minutesLeft ? `. Turns off after ${minutesLeft} more min without a transfer` : ""}. Click to turn off`
+			: "Click to receive files from your phone or another device with LocalSend";
+	return (
+		<button
+			type="button"
+			className={`shelf-action localsend-receive ${on ? "is-on" : ""} ${error ? "has-error" : ""}`}
+			title={title}
+			disabled={busy}
+			onClick={(e) => {
+				e.stopPropagation();
+				toggle();
+			}}
+		>
+			<span className="localsend-receive-dot" aria-hidden="true" />
+			{label}
+			{on && minutesLeft !== null && <span className="localsend-receive-time">{minutesLeft} min</span>}
+			{!on && error && <span className="localsend-receive-time">Couldn't turn on</span>}
+		</button>
+	);
+}

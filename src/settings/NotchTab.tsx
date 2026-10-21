@@ -15,7 +15,7 @@ import {
 	X
 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
-import { useStoredFlag } from "./useStoredSetting";
+import { useStoredFlag, useStoredString } from "./useStoredSetting";
 import { ControlCenterSettings } from "./ControlCenterSettings";
 import { TraySettings } from "./TraySettings";
 import { NotchPagesSettings } from "./NotchPagesSettings";
@@ -115,6 +115,10 @@ export function NotchTab({
 	handleWidgetsChange
 }: NotchTabProps) {
 	const [shelfLocalSend, setShelfLocalSend] = useStoredFlag("bloom-shelf-localsend", true);
+	const [receiveMinutes, setReceiveMinutes] = useStoredString(
+		"bloom-shelf-localsend-receive-minutes",
+		"10"
+	);
 
 	if (section === "pages") return <NotchPagesSettings />;
 	if (section === "controls") return <ControlCenterSettings />;
@@ -250,10 +254,10 @@ export function NotchTab({
 						label="LocalSend"
 						desc={
 							shelfLocalSend
-								? "A LocalSend button under the shelf's items sends the ones you pick to a nearby device"
-								: "No LocalSend button in the shelf"
+								? "Under the shelf: Send sends the items you pick to a nearby device, and the LocalSend button turns receiving into the shelf on and off"
+								: "No LocalSend buttons in the shelf"
 						}
-						divider={false}
+						divider={shelfLocalSend}
 					>
 						<label className="toggle-switch">
 							<input
@@ -264,11 +268,35 @@ export function NotchTab({
 							<span className="slider"></span>
 						</label>
 					</SettingRow>
+					{shelfLocalSend && (
+						<SettingRow
+							icon={Timer}
+							label="Receiving Turns Off"
+							desc="After this long without anything sent to the PC (and always when Bloom restarts)"
+							divider={false}
+						>
+							<select
+								className="settings-select"
+								value={receiveMinutes}
+								onChange={(e) => setReceiveMinutes(e.target.value)}
+							>
+								<option value="5">After 5 minutes</option>
+								<option value="10">After 10 minutes</option>
+								<option value="15">After 15 minutes</option>
+								<option value="30">After 30 minutes</option>
+								<option value="60">After 1 hour</option>
+								<option value="0">Only when turned off</option>
+							</select>
+						</SettingRow>
+					)}
 				</div>
 				{shelfLocalSend && (
 					<div className="setting-group-note">
-						Open LocalSend on the other device to see it. Devices are only looked for while
-						you pick files, and nothing needs LocalSend open on this PC.
+						Sending: open LocalSend on the other device to see it; devices are only looked for
+						while you pick files. Receiving: while it's on, files sent to this PC are saved in
+						Downloads and come into the shelf, and text comes in as text, all over LocalSend's
+						encrypted connection. The first time, Windows asks whether Bloom may be reached on
+						your network: allow it on private networks. Nothing listens while it's off.
 					</div>
 				)}
 			</>

@@ -80,7 +80,13 @@ import {
 	Send,
 	Check
 } from "lucide-react";
-import { LocalSendBar, useLocalSend, type LocalSendDevice } from "./components/LocalSendBar";
+import {
+	LocalSendBar,
+	LocalSendReceiveButton,
+	useLocalSend,
+	useLocalSendReceive,
+	type LocalSendDevice
+} from "./components/LocalSendBar";
 
 /**
  * The notch has two kinds of content:
@@ -1656,6 +1662,8 @@ function App() {
 	const [sendMode, setSendMode] = useState(false);
 	const [picked, setPicked] = useState<Set<string>>(() => new Set());
 	const localSend = useLocalSend(sendMode && isOpen && bloomMode === "shelf");
+	// Receiving into the shelf, while turned on with its button.
+	const localSendReceive = useLocalSendReceive();
 	const sendBusy =
 		localSend.progress?.state === "waiting" || localSend.progress?.state === "sending";
 	const endSending = () => {
@@ -1744,6 +1752,24 @@ function App() {
 		markShelfNew(added.map((i) => i.id));
 		setShelfItems([...added, ...prev]);
 	};
+
+	// Files and text another device sent with LocalSend come into the shelf.
+	const receivedRef = useRef<(paths: string[], texts: string[], from: string) => void>(() => {});
+	receivedRef.current = (paths, texts, from) => {
+		addShelfItems(paths);
+		for (const text of texts) addShelfText(text);
+		const count = paths.length + texts.length;
+		if (count > 0) showShelfNotice(`Received ${count === 1 ? "1 item" : `${count} items`} from ${from}`);
+	};
+	useEffect(() => {
+		const unlisten = listen<{ paths: string[]; texts: string[]; from: string }>(
+			"localsend-received",
+			(e) => receivedRef.current(e.payload.paths, e.payload.texts, e.payload.from)
+		);
+		return () => {
+			void unlisten.then((fn) => fn());
+		};
+	}, []);
 
 	const addShelfText = (text: string) => {
 		const prev = shelfItemsRef.current;
@@ -2819,8 +2845,8 @@ function App() {
 		// hover during an OS drag) and is sized to exactly one row of tiles,
 		// plus room for the scrollbar once the tiles overflow it.
 		if (bloomMode === "shelf") {
-			if (shelfItems.length === 0) return 130;
-			// The LocalSend row below the tiles: its button, or the picker.
+			// The LocalSend row below the tiles: its buttons, or the picker.
+			if (shelfItems.length === 0) return 130 + (shelfLocalSend ? 28 : 0);
 			const actions = shelfLocalSend ? (sendMode ? 46 : 28) : 0;
 			return (shelfOverflowing ? 190 : 176) + actions;
 		}
@@ -4109,7 +4135,7 @@ function App() {
 								<AnimatePresence>
 									{bloomMode === "shelf" && (
 										<motion.div
-											className="shelf-content"
+											className={`shelf-content${shelfLocalSend ? " has-actions" : ""}`}
 											onClick={(e) => e.stopPropagation()}
 											onWheel={handleShelfWheel}
 											initial={{ opacity: 0 }}
@@ -4224,8 +4250,8 @@ function App() {
 													</AnimatePresence>
 												</div>
 											)}
-											{shelfLocalSend && shelfItems.length > 0 &&
-												(sendMode ? (
+											{shelfLocalSend &&
+												(sendMode && shelfItems.length > 0 ? (
 													<LocalSendBar
 														picked={picked.size}
 														devices={localSend.devices}
@@ -4239,18 +4265,21 @@ function App() {
 													/>
 												) : (
 													<div className="shelf-actions">
-														<button
-															type="button"
-															className="shelf-action"
-															title="Send files from the shelf to a nearby device with LocalSend"
-															onClick={(e) => {
-																e.stopPropagation();
-																setSendMode(true);
-															}}
-														>
-															<Send size={11} strokeWidth={2.4} />
-															LocalSend
-														</button>
+														<LocalSendReceiveButton receive={localSendReceive} />
+														{shelfItems.length > 0 && (
+															<button
+																type="button"
+																className="shelf-action"
+																title="Send files from the shelf to a nearby device with LocalSend"
+																onClick={(e) => {
+																	e.stopPropagation();
+																	setSendMode(true);
+																}}
+															>
+																<Send size={11} strokeWidth={2.4} />
+																Send
+															</button>
+														)}
 													</div>
 												))}
 										</motion.div>

@@ -2,14 +2,14 @@
 //! a nearby device running LocalSend, without opening the LocalSend app.
 //!
 //! This follows LocalSend's protocol (v2, github.com/localsend/protocol), as
-//! the sending side only, so Bloom never listens on the network:
+//! the sending side (receiving is `localsend_receive.rs`, only while turned
+//! on):
 //!
 //! - Finding devices: while the shelf's LocalSend picker is open, Bloom asks
 //!   every address of the home network (the /24 of the PC's own address) at
 //!   LocalSend's port, `POST /api/localsend/v2/register`, which is LocalSend's
 //!   own fallback discovery. Devices answer with their name and kind. Nothing
-//!   runs when the picker is closed, and asking only goes out, so Windows'
-//!   firewall has nothing to ask about.
+//!   runs when the picker is closed.
 //! - Sending: `prepare-upload` with the files' names and sizes (the other
 //!   device asks its user to accept), then one `upload` per file with its
 //!   contents, `cancel` when stopped. LocalSend's own self-signed HTTPS (or
@@ -82,6 +82,40 @@ static FINGERPRINT: OnceLock<String> = OnceLock::new();
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// The PC's LocalSend identity (its certificate's fingerprint), the same
+/// when sending as when receiving, so other devices know it as one device.
+fn remember_identity(app: &AppHandle) {
+    if let Some(identity) = crate::localsend_receive::our_identity(app) {
+        let _ = FINGERPRINT.set(identity.fingerprint.clone());
+    }
+}
+
+/// Tells a device that announced itself that this PC is here: LocalSend's
+/// answer to an announcement, over the device's own port.
+pub(crate) fn register_with(ip: &str, port: u16, https: bool, info: &Value) -> bool {
+    let Ok(body) = serde_json::to_vec(info) else {
+        return false;
+    };
+    unsafe {
+        let Some(session) = session(1500, 3000) else {
+            return false;
+        };
+        matches!(
+            request(
+                &session,
+                ip,
+                port,
+                https,
+                &format!("{API}/register"),
+                Some(&body),
+                None,
+                false,
+            ),
+            Ok(answer) if (200..300).contains(&answer.status)
+        )
+    }
 }
 
 /// Bloom as LocalSend shows it to the other device: the PC's name.
@@ -387,6 +421,7 @@ unsafe fn ask(session: &Handle, ip: Ipv4Addr) -> Option<Device> {
 /// search as `localsend-search-done`.
 #[tauri::command]
 pub fn localsend_find_devices(app: AppHandle) -> Vec<Device> {
+    remember_identity(&app);
     let found = FOUND.lock().map(|f| f.clone()).unwrap_or_default();
     if SEARCHING.swap(true, Ordering::AcqRel) {
         return found;
@@ -642,6 +677,7 @@ pub async fn localsend_send(
 }
 
 fn send_now(app: &AppHandle, device: &Device, items: &[SendItem]) -> Result<(), String> {
+    remember_identity(app);
     CANCELLED.store(false, Ordering::Release);
     let files = outgoing(items)?;
     if files.is_empty() {

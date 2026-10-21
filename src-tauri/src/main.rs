@@ -13,6 +13,7 @@ mod later_windows;
 mod launcher;
 mod live_preview;
 mod localsend;
+mod localsend_receive;
 mod notifications;
 mod quick_settings;
 mod recycle_bin;
@@ -307,6 +308,8 @@ fn main() {
             localsend::localsend_find_devices,
             localsend::localsend_stop_finding,
             localsend::localsend_send,
+            localsend_receive::localsend_receive,
+            localsend_receive::localsend_receive_status,
             localsend::localsend_cancel,
             notifications::notification_action,
             notifications::notification_center_fit,

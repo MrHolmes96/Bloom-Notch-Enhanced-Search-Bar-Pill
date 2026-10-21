@@ -91,6 +91,7 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | --------------------- | -------------------- | --------- | -------------------------------------------------------------------------------------------------------------- |
 | `bloom-shelf-persist` | `"true"` / `"false"` | `"false"` | Keep notch shelf items across restarts. Off = items are cleared when Bloom closes. Max 10 items, newest first. |
 | `bloom-shelf-localsend` | `"true"` / `"false"` | `"true"` | A LocalSend button under the shelf's items: it turns picking on, and the picked items go to a nearby LocalSend device (found only while picking). |
+| `bloom-shelf-localsend-receive-minutes` | number string | `"10"` | Receiving with LocalSend into the shelf (the shelf's "LocalSend: Enabled/Disabled" button) turns itself off after this many minutes without a transfer; `0` only when turned off. It is always off when Bloom starts. Received files are saved in Downloads. |
 
 ### Music Appearance
 
@@ -117,7 +118,9 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `bloom-window-memory` | `"true"` / `"false"` | `"true"` | Remember each app's window size and position (in `window_positions.json`) and restore it when the app opens again. |
-| `bloom-windows-snap-borders` | `"true"` / `"false"` | `"true"` | Windows snapped by Windows 11 (halves, thirds, quarters, Snap Layouts) lose Windows 11's border, as in Windows 10; once they are no longer snapped (and when Bloom quits) they follow Windows' setting: no border, or the accent border when "Show accent colour on title bars and window borders" is on. |
+| `bloom-windows-snap-borders` | `"true"` / `"false"` | `"true"` | Windows snapped by Windows 11 (halves, thirds, quarters, Snap Layouts) lose Windows 11's border and get Bloom's own (below) instead; once they are no longer snapped (and when Bloom quits) they follow Windows' setting: no border, or the accent border when "Show accent colour on title bars and window borders" is on. Settings > Appearance > Window Borders. |
+| `bloom-windows-snap-border-color` | `"#RRGGBB"` | `"#808080"` | Colour of Bloom's own border on snapped windows: one screen pixel wide along each edge. |
+| `bloom-windows-snap-border-opacity` | number `"0"`–`"100"` | `"0"` | Opacity of that border in percent; `0` draws no border at all. |
 | `bloom-dock-preview-style` | `"static"` / `"live"` | `"static"` | Dock window previews: a snapshot, or Windows' live preview of the window. |
 | `bloom-notification-center` | `"windows"` / `"bloom"` | `"bloom"` with Bloom cards, else `"windows"` | What the notification button opens: Windows' notification center or Bloom's (top right, as tall as its notifications, scrolling past about six, grouped by app; buttons and replies work as in Windows). |
 

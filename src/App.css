@@ -1470,6 +1470,11 @@ img {
 	animation: shelf-notice-in 0.15s ease;
 }
 
+/* Above the LocalSend buttons when they are there. */
+.shelf-content.has-actions .shelf-notice {
+	bottom: 38px;
+}
+
 @keyframes shelf-notice-in {
 	from {
 		opacity: 0;
@@ -1648,10 +1653,50 @@ img {
    picking on; then the picker (what is picked, nearby devices, progress). */
 .shelf-actions {
 	display: flex;
-	justify-content: flex-end;
+	justify-content: space-between;
+	gap: 8px;
 	margin-top: 6px;
 	height: 22px;
 	flex: none;
+}
+
+/* Receiving with LocalSend: a dot that is green while on, and the minutes
+   until it turns itself off. */
+.localsend-receive-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	flex: none;
+	background: color-mix(in srgb, var(--bloom-text, white) 35%, transparent);
+	transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.shelf-action.localsend-receive.is-on {
+	background: color-mix(in srgb, #30d158 18%, transparent);
+}
+
+.shelf-action.localsend-receive.is-on:hover {
+	background: color-mix(in srgb, #30d158 26%, transparent);
+}
+
+.localsend-receive.is-on .localsend-receive-dot {
+	background: #30d158;
+	box-shadow: 0 0 6px color-mix(in srgb, #30d158 70%, transparent);
+}
+
+.localsend-receive.has-error:not(.is-on) .localsend-receive-dot {
+	background: #ff9f0a;
+}
+
+.localsend-receive-time {
+	font-weight: 500;
+	opacity: 0.65;
+	font-variant-numeric: tabular-nums;
+}
+
+.shelf-action:disabled {
+	opacity: 0.6;
+	cursor: default;
 }
 
 .shelf-action {

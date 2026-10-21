@@ -110,6 +110,11 @@ image = "0.25"
 # Reads the thumbnail or text inside Office files for shelf previews.
 zip = { version = "4.6", default-features = false, features = ["deflate-flate2"] }
 tauri-plugin-drag = "2.1.1"
+# LocalSend receiving into the shelf: its HTTPS (TLS with a certificate of
+# Bloom's own), only while receiving is turned on.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+ring = "0.17"
 tauri-plugin-dialog = "2"
 rustfft = "6"
 
