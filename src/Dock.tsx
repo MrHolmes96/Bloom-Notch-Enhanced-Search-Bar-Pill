@@ -119,6 +119,10 @@ const ITEM_INITIAL = { opacity: 0, scale: 0 };
 const ITEM_ANIMATE = { opacity: 1, scale: 1 };
 const ITEM_EXIT = { opacity: 0, scale: 0 };
 
+/** The square a preview's picture is fitted into, in pixels (as the backend's
+ *  window_capture::PREVIEW_BOX): its longer side fills it, as in Windows. */
+const PREVIEW_BOX = 360;
+
 /** A preview card for a window Bloom has no picture of yet: the app's icon. */
 function PreviewPlaceholder({ hwnd, icon }: { hwnd: number; icon?: string }) {
 	return (
@@ -1267,8 +1271,8 @@ const Dock = memo(function Dock() {
 								try {
 									const res = await invoke<[string, number] | null>("capture_window_thumbnail", {
 										hwnd,
-										maxWidth: 320,
-										maxHeight: 200
+										maxWidth: PREVIEW_BOX,
+										maxHeight: PREVIEW_BOX
 									});
 									if (res) {
 										const [image, lastFocused] = res;

@@ -67,7 +67,9 @@ body {
 	flex-direction: column;
 	align-items: center;
 	gap: 8px;
-	box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5);
+	/* Ends above the dock's icons: reaching down onto the dock, the card's
+	   shadow darkened the dock and its dividers while a preview was open. */
+	box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
 	pointer-events: auto;
 	z-index: 100;
 	min-width: 160px;
@@ -176,11 +178,19 @@ body {
 	border-color: rgba(59, 130, 246, 0.9);
 }
 
+/* Like Windows' taskbar thumbnails: the window in its own shape, its longer
+   side filling a 200-point square, so a window snapped to half the screen
+   gets as big a preview as a full one. Pictures of different shapes sit
+   centred, with the titles in one line below. */
 .preview-item img {
-	max-width: 220px;
-	max-height: 130px;
+	display: block;
+	max-width: 200px;
+	max-height: 200px;
+	width: auto;
+	height: auto;
+	margin-block: auto;
 	border-radius: 6px;
-	object-fit: cover;
+	object-fit: contain;
 	background: rgba(0, 0, 0, 0.5);
 	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
@@ -188,7 +198,8 @@ body {
 /* A window with no picture yet: its app's icon on the card. */
 .preview-placeholder {
 	width: 200px;
-	height: 120px;
+	height: 125px;
+	margin-block: auto;
 	border-radius: 6px;
 	background: rgba(0, 0, 0, 0.5) center / 40px 40px no-repeat;
 	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);

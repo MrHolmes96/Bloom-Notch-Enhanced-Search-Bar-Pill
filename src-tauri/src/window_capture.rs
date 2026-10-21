@@ -27,7 +27,7 @@ use windows::Graphics::Capture::{
 };
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
-use windows::Win32::Foundation::{HMODULE, HWND};
+use windows::Win32::Foundation::{HMODULE, HWND, RECT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
@@ -39,6 +39,12 @@ use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
 };
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
+
+/// The square a preview's picture is fitted into, in pixels: like Windows'
+/// taskbar thumbnails, a window's longer side fills it, so a window snapped
+/// to half the screen gets as big a preview as a full one, in its own shape.
+/// Big enough to stay sharp on the dock's 200-point cards at up to 180 %.
+pub const PREVIEW_BOX: u32 = 360;
 
 /// One picture of a window, ready for a preview card.
 pub struct Snapshot {
@@ -324,7 +330,6 @@ fn read_frame(
 
 fn print_window(hwnd: HWND) -> Option<Pixels> {
     unsafe {
-        use windows::Win32::Foundation::RECT;
         use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
         use windows::Win32::Graphics::Gdi::{
             CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
@@ -341,34 +346,41 @@ fn print_window(hwnd: HWND) -> Option<Pixels> {
         if !IsWindow(Some(hwnd)).as_bool() {
             return None;
         }
-        let mut rect = RECT::default();
-        if DwmGetWindowAttribute(
-            hwnd,
-            DWMWA_EXTENDED_FRAME_BOUNDS,
-            &mut rect as *mut _ as *mut _,
-            std::mem::size_of::<RECT>() as u32,
-        )
-        .is_err()
-            && GetWindowRect(hwnd, &mut rect).is_err()
-        {
+        // PrintWindow draws the whole window, invisible resize borders
+        // included; the picture is the part Windows shows (its frame), as in
+        // Windows' own thumbnails, so it has no dark strips at the sides and
+        // nothing cut off.
+        let mut window = RECT::default();
+        if GetWindowRect(hwnd, &mut window).is_err() {
             return None;
         }
-        let width = rect.right - rect.left;
-        let height = rect.bottom - rect.top;
-        if width <= 100 || height <= 100 || width > 7680 || height > 4320 {
+        let mut frame = window;
+        let _ = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut frame as *mut _ as *mut _,
+            std::mem::size_of::<RECT>() as u32,
+        );
+        let full_width = window.right - window.left;
+        let full_height = window.bottom - window.top;
+        if full_width <= 100 || full_height <= 100 || full_width > 7680 || full_height > 4320 {
+            return None;
+        }
+        let (crop_left, crop_top, width, height) = visible_part(window, frame);
+        if width <= 100 || height <= 100 {
             return None;
         }
         let screen = GetDC(None);
         let memory = CreateCompatibleDC(Some(screen));
-        let bitmap = CreateCompatibleBitmap(screen, width, height);
+        let bitmap = CreateCompatibleBitmap(screen, full_width, full_height);
         let old = SelectObject(memory, bitmap.into());
         let mut result = None;
         if PrintWindow(hwnd, memory, PW_RENDERFULLCONTENT) != 0 {
             let mut info = BITMAPINFO {
                 bmiHeader: BITMAPINFOHEADER {
                     biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: width,
-                    biHeight: -height,
+                    biWidth: full_width,
+                    biHeight: -full_height,
                     biPlanes: 1,
                     biBitCount: 32,
                     biCompression: BI_RGB.0,
@@ -376,17 +388,23 @@ fn print_window(hwnd: HWND) -> Option<Pixels> {
                 },
                 ..Default::default()
             };
-            let mut pixels = vec![0u8; (width * height * 4) as usize];
+            let mut whole = vec![0u8; (full_width * full_height * 4) as usize];
             if GetDIBits(
                 memory,
                 bitmap,
                 0,
-                height as u32,
-                Some(pixels.as_mut_ptr() as *mut _),
+                full_height as u32,
+                Some(whole.as_mut_ptr() as *mut _),
                 &mut info,
                 DIB_RGB_COLORS,
             ) != 0
             {
+                let row = (full_width * 4) as usize;
+                let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+                for y in crop_top..crop_top + height {
+                    let start = y as usize * row + crop_left as usize * 4;
+                    pixels.extend_from_slice(&whole[start..start + width as usize * 4]);
+                }
                 for pixel in pixels.chunks_exact_mut(4) {
                     pixel.swap(0, 2);
                     // GDI leaves alpha undefined.
@@ -401,6 +419,21 @@ fn print_window(hwnd: HWND) -> Option<Pixels> {
         ReleaseDC(None, screen);
         result
     }
+}
+
+/// The part of a window Windows shows (its frame) inside its whole rectangle:
+/// left and top offset, width and height, kept inside the rectangle.
+pub fn visible_part(window: RECT, frame: RECT) -> (i32, i32, i32, i32) {
+    let full_width = window.right - window.left;
+    let full_height = window.bottom - window.top;
+    let left = (frame.left - window.left).clamp(0, full_width);
+    let top = (frame.top - window.top).clamp(0, full_height);
+    let right = (frame.right - window.left).clamp(left, full_width);
+    let bottom = (frame.bottom - window.top).clamp(top, full_height);
+    if right - left <= 0 || bottom - top <= 0 {
+        return (0, 0, full_width, full_height);
+    }
+    (left, top, right - left, bottom - top)
 }
 
 // ---------------------------------------------------------------- the picture
@@ -463,7 +496,30 @@ fn encode(
 
 #[cfg(test)]
 mod tests {
-    use super::looks_real;
+    use super::{looks_real, visible_part};
+    use windows::Win32::Foundation::RECT;
+
+    #[test]
+    fn the_picture_is_the_visible_frame() {
+        let rect = |left, top, right, bottom| RECT {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        // A window with Windows 11's 7-pixel invisible borders.
+        let window = rect(93, 0, 1293, 807);
+        let frame = rect(100, 0, 1286, 800);
+        assert_eq!(visible_part(window, frame), (7, 0, 1186, 800));
+        // A maximized window reaches past the screen; its frame doesn't.
+        let window = rect(-11, -11, 2571, 1531);
+        let frame = rect(0, 0, 2560, 1520);
+        assert_eq!(visible_part(window, frame), (11, 11, 2560, 1520));
+        // No frame known: the whole window.
+        let window = rect(0, 0, 800, 600);
+        assert_eq!(visible_part(window, window), (0, 0, 800, 600));
+        assert_eq!(visible_part(window, rect(0, 0, 0, 0)), (0, 0, 800, 600));
+    }
 
     #[test]
     fn see_through_and_black_pictures_are_not_kept() {
