@@ -339,8 +339,6 @@ fn main() {
             notifications::notification_clear_all,
             notifications::notification_center_hide,
             wifi::wifi_list_networks,
-            wifi::wifi_request_access,
-            wifi::wifi_access_status,
             wifi::wifi_scan,
             wifi::wifi_connect,
             wifi::wifi_disconnect,

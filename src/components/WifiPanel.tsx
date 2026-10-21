@@ -5,6 +5,7 @@ import {
 	ChevronLeft,
 	LoaderCircle,
 	Lock,
+	Plus,
 	RefreshCw,
 	Wifi,
 	WifiHigh,
@@ -23,6 +24,8 @@ interface WifiNetwork {
 
 interface WifiNetworkList {
 	networks: WifiNetwork[];
+	/** Windows won't list the networks around to Bloom (no location access):
+	 * `networks` are the saved ones. */
 	location_denied: boolean;
 }
 
@@ -37,8 +40,7 @@ const ERROR_TEXT: Record<string, string> = {
 	unsupported: "Connect to this network in Windows Settings",
 	"not-found": "This network is out of range",
 	timeout: "Couldn't connect in time",
-	"no-adapter": "No Wi-Fi adapter found",
-	"location-denied": "Location access is off"
+	"no-adapter": "No Wi-Fi adapter found"
 };
 
 function SignalIcon({ signal }: { signal: number }) {
@@ -68,12 +70,15 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 	const scanFallback = useRef<number | null>(null);
 
 	const refresh = useCallback(async () => {
+		let next: WifiNetworkList;
 		try {
-			setList(await invoke<WifiNetworkList>("wifi_list_networks"));
+			next = await invoke<WifiNetworkList>("wifi_list_networks");
 		} catch (e) {
 			console.error("[wifi] list failed:", e);
-			setList({ networks: [], location_denied: false });
+			next = { networks: [], location_denied: false };
 		}
+		setList(next);
+		return next;
 	}, []);
 
 	const scan = useCallback(async () => {
@@ -89,49 +94,16 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 		}
 	}, []);
 
+	// Without location access Windows doesn't say which networks are around
+	// (and isn't asked): the view lists the saved ones, which connect the same
+	// way, and Windows' own list is one click away for a new network.
+	const savedOnly = !!list?.location_denied;
 	useEffect(() => {
 		if (!enabled) return;
-		void refresh();
-		void scan();
+		void refresh().then((now) => {
+			if (!now.location_denied) void scan();
+		});
 	}, [enabled, refresh, scan]);
-
-	// Windows gives the list of Wi-Fi networks only to apps allowed precise
-	// location, app by app. The first time, Bloom asks (Windows' own one-time
-	// prompt, for Bloom alone); once allowed, the list is here. Until then the
-	// view says how to allow it, and looks again every few seconds, so the
-	// list shows the moment it is allowed in Settings.
-	const locationDenied = !!list?.location_denied;
-	const [access, setAccess] = useState<"idle" | "asking" | "denied" | "off">("idle");
-	const askedRef = useRef(false);
-	useEffect(() => {
-		if (!locationDenied || askedRef.current) return;
-		askedRef.current = true;
-		setAccess("asking");
-		void invoke<string>("wifi_request_access")
-			.then((answer) => {
-				if (answer === "allowed") {
-					setAccess("idle");
-					void refresh();
-					void scan();
-				} else {
-					setAccess(answer === "denied-by-system" ? "off" : "denied");
-				}
-			})
-			.catch(() => setAccess("denied"));
-	}, [locationDenied, refresh, scan]);
-	useEffect(() => {
-		if (!locationDenied || access === "asking") return;
-		const timer = window.setInterval(() => {
-			void invoke<string>("wifi_access_status").then((now) => {
-				if (now === "allowed") {
-					setAccess("idle");
-					void refresh();
-					void scan();
-				}
-			});
-		}, 3000);
-		return () => window.clearInterval(timer);
-	}, [locationDenied, access, refresh, scan]);
 
 	useEffect(() => {
 		let debounce: number | null = null;
@@ -277,37 +249,6 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 
 	const renderBody = () => {
 		if (!enabled) return <div className="qp-empty">Wi-Fi is off</div>;
-		if (list?.location_denied) {
-			if (access === "asking" || access === "idle") {
-				return (
-					<div className="qp-empty">
-						<LoaderCircle className="qp-spin" />
-						<span>Answer Windows' question to show the networks here</span>
-					</div>
-				);
-			}
-			return (
-				<div className="qp-empty">
-					<Wifi />
-					<span>
-						{access === "off"
-							? "Windows only lists Wi-Fi networks to apps allowed precise location, and location is off for this PC. Turn it on and allow only Bloom; Bloom uses it for this list and nothing else."
-							: "Windows only lists Wi-Fi networks to apps allowed precise location. Allow Bloom (only Bloom; it uses it for this list and nothing else) and the networks show here."}
-					</span>
-					<div className="qp-btn-row">
-						<button
-							className="qp-btn primary"
-							onClick={() => invoke("wifi_open_settings", { page: "location" })}
-						>
-							Allow in Settings
-						</button>
-						<button className="qp-btn" onClick={() => invoke("open_wifi_settings")}>
-							Windows' list
-						</button>
-					</div>
-				</div>
-			);
-		}
 		if (list === null) {
 			return (
 				<div className="qp-empty">
@@ -315,13 +256,16 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 				</div>
 			);
 		}
-		if (list.networks.length === 0) {
+		if (list.networks.length === 0 && !savedOnly) {
 			return (
 				<div className="qp-empty">{scanning ? "Looking for networks…" : "No networks found"}</div>
 			);
 		}
 		return (
 			<ul className="qp-list">
+				{savedOnly && list.networks.length === 0 && (
+					<li className="qp-empty">No saved networks</li>
+				)}
 				{list.networks.map((n) => {
 					const expanded = selected === n.ssid;
 					return (
@@ -335,7 +279,7 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 								aria-expanded={expanded}
 							>
 								<span className="qp-row-icon">
-									<SignalIcon signal={n.signal} />
+									{savedOnly ? <Wifi /> : <SignalIcon signal={n.signal} />}
 								</span>
 								<span className="qp-row-text">
 									<span className="qp-row-name">{n.ssid}</span>
@@ -348,6 +292,19 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 						</li>
 					);
 				})}
+				{savedOnly && (
+					<li className="qp-row">
+						<button className="qp-row-main" onClick={() => invoke("open_wifi_settings")}>
+							<span className="qp-row-icon">
+								<Plus />
+							</span>
+							<span className="qp-row-text">
+								<span className="qp-row-name">Other networks</span>
+								<span className="qp-row-sub">Windows' list</span>
+							</span>
+						</button>
+					</li>
+				)}
 			</ul>
 		);
 	};
@@ -359,14 +316,16 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 					<ChevronLeft />
 				</button>
 				<span className="qp-title">Wi-Fi</span>
-				<button
-					className="qp-icon-btn"
-					onClick={() => void scan()}
-					disabled={!enabled || scanning}
-					aria-label="Scan for networks"
-				>
-					<RefreshCw className={scanning ? "qp-spin" : ""} />
-				</button>
+				{!savedOnly && (
+					<button
+						className="qp-icon-btn"
+						onClick={() => void scan()}
+						disabled={!enabled || scanning}
+						aria-label="Scan for networks"
+					>
+						<RefreshCw className={scanning ? "qp-spin" : ""} />
+					</button>
+				)}
 				<button
 					className={`qp-switch ${enabled ? "on" : ""}`}
 					role="switch"

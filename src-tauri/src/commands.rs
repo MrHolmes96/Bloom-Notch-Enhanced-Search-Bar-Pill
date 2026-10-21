@@ -3560,14 +3560,14 @@ pub fn get_brightness() -> u32 {
 pub async fn get_wifi_status() -> Result<WifiStatus, String> {
     tauri::async_runtime::spawn_blocking(|| -> Result<WifiStatus, String> {
         let enabled = get_radio_state_sync(windows::Devices::Radios::RadioKind::WiFi)?;
-        let ssid = if enabled {
-            crate::wifi::connected_ssid()
+        let (connected, ssid) = if enabled {
+            crate::wifi::connection_status()
         } else {
-            None
+            (false, None)
         };
         Ok(WifiStatus {
             enabled,
-            connected: ssid.is_some(),
+            connected,
             ssid,
         })
     })

@@ -2,6 +2,14 @@
 //! (with a password for new personal networks), disconnect and forget, through
 //! the native WLAN API. A notification listener emits `wifi-changed` when a
 //! scan finishes or the connection changes, so the view never has to poll.
+//!
+//! Since Windows 11 24H2 Windows lists the networks around only to apps
+//! allowed precise location. Without that the view lists the networks Windows
+//! has saved (this PC's own list, which Windows gives any app) and connects to
+//! them the same way, and Windows' own list is one click away for a new one.
+//! Bloom never asks for location, and while it isn't allowed it doesn't touch
+//! the parts Windows keeps behind it (so no prompt, and Bloom never shows as
+//! using the location).
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -12,20 +20,21 @@ use tauri::{AppHandle, Emitter};
 use windows::core::{GUID, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, HANDLE};
 use windows::Win32::NetworkManagement::WiFi::{
-    dot11_BSS_type_infrastructure, wlan_connection_mode_profile,
-    wlan_intf_opcode_current_connection, wlan_notification_acm_connection_attempt_fail,
-    wlan_notification_acm_connection_complete, wlan_notification_acm_disconnected,
-    wlan_notification_acm_interface_arrival, wlan_notification_acm_interface_removal,
-    wlan_notification_acm_profile_change, wlan_notification_acm_scan_complete,
-    wlan_notification_acm_scan_fail, wlan_notification_acm_scan_list_refresh, WlanCloseHandle,
-    WlanConnect, WlanDeleteProfile, WlanDisconnect, WlanEnumInterfaces, WlanFreeMemory,
-    WlanGetAvailableNetworkList, WlanGetProfile, WlanOpenHandle, WlanQueryInterface,
+    dot11_BSS_type_infrastructure, wlan_connection_mode_profile, wlan_interface_state_connected,
+    wlan_intf_opcode_current_connection, wlan_intf_opcode_interface_state,
+    wlan_notification_acm_connection_attempt_fail, wlan_notification_acm_connection_complete,
+    wlan_notification_acm_disconnected, wlan_notification_acm_interface_arrival,
+    wlan_notification_acm_interface_removal, wlan_notification_acm_profile_change,
+    wlan_notification_acm_scan_complete, wlan_notification_acm_scan_fail,
+    wlan_notification_acm_scan_list_refresh, WlanCloseHandle, WlanConnect, WlanDeleteProfile,
+    WlanDisconnect, WlanEnumInterfaces, WlanFreeMemory, WlanGetAvailableNetworkList,
+    WlanGetProfile, WlanGetProfileList, WlanOpenHandle, WlanQueryInterface,
     WlanRegisterNotification, WlanScan, WlanSetProfile, DOT11_CIPHER_ALGO_TKIP, DOT11_SSID,
     L2_NOTIFICATION_DATA, WLAN_AVAILABLE_NETWORK, WLAN_AVAILABLE_NETWORK_CONNECTED,
     WLAN_AVAILABLE_NETWORK_HAS_PROFILE, WLAN_AVAILABLE_NETWORK_LIST, WLAN_CONNECTION_ATTRIBUTES,
     WLAN_CONNECTION_NOTIFICATION_DATA, WLAN_CONNECTION_PARAMETERS, WLAN_INTERFACE_INFO_LIST,
-    WLAN_NOTIFICATION_SOURCE_ACM, WLAN_REASON_CODE_MSMSEC_BASE,
-    WLAN_REASON_CODE_MSMSEC_PSK_MISMATCH_SUSPECTED,
+    WLAN_INTERFACE_STATE, WLAN_NOTIFICATION_SOURCE_ACM, WLAN_PROFILE_INFO, WLAN_PROFILE_INFO_LIST,
+    WLAN_REASON_CODE_MSMSEC_BASE, WLAN_REASON_CODE_MSMSEC_PSK_MISMATCH_SUSPECTED,
 };
 
 /// How long to wait for Windows to report the outcome of a connection attempt.
@@ -46,8 +55,8 @@ pub struct WifiNetwork {
 #[derive(Clone, Serialize)]
 pub struct WifiNetworkList {
     pub networks: Vec<WifiNetwork>,
-    /// Windows refused to list networks because location access is off for
-    /// desktop apps (required for Wi-Fi scans since Windows 11 24H2).
+    /// Windows won't list the networks around to Bloom (location access is
+    /// off for it), so `networks` are the saved ones.
     pub location_denied: bool,
 }
 
@@ -206,12 +215,255 @@ fn visible_networks(
 }
 
 fn find_candidate(client: &Client, iface: &GUID, ssid: &str) -> Result<Candidate, String> {
-    let networks = visible_networks(client, iface)?.ok_or("location-denied")?;
-    networks
+    if may_list_nearby() {
+        if let Some(networks) = visible_networks(client, iface)? {
+            return networks
+                .into_iter()
+                .find(|(n, _)| n.ssid == ssid)
+                .map(|(_, c)| c)
+                .ok_or_else(|| "not-found".to_string());
+        }
+    }
+    // Windows won't say what's around: a saved network, by its name.
+    saved_candidate(client, iface, ssid).ok_or_else(|| "not-found".to_string())
+}
+
+// ── Saved networks ───────────────────────────────────────────────────────────
+
+/// The text of the first `<tag>…</tag>` in a profile's XML.
+fn xml_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let start = xml.find(&open)? + open.len();
+    let end = xml[start..].find(&format!("</{tag}>"))? + start;
+    Some(xml[start..end].trim())
+}
+
+fn unescape_xml(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// A saved profile's security, labelled the way the view labels networks.
+fn profile_security(xml: &str) -> &'static str {
+    let auth = xml_tag(xml, "authentication")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let encryption = xml_tag(xml, "encryption")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match auth.as_str() {
+        "open" if encryption == "none" => "open",
+        "open" | "shared" => "wep",
+        "wpapsk" => "wpa",
+        "wpa2psk" => "wpa2",
+        "wpa3sae" => "wpa3",
+        "owe" => "owe",
+        "wpa" | "wpa2" | "wpa3" | "wpa3ent" | "wpa3ent192" => "enterprise",
+        _ => "other",
+    }
+}
+
+/// A saved profile's network name as bytes: its hex form when it has one
+/// (which keeps every byte exactly), else its name.
+fn profile_ssid(xml: &str) -> Option<Vec<u8>> {
+    let ssid = xml_tag(xml, "SSID")?;
+    if let Some(hex) = xml_tag(ssid, "hex").filter(|h| !h.is_empty() && h.len() % 2 == 0) {
+        let bytes: Option<Vec<u8>> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+            .collect();
+        if bytes.is_some() {
+            return bytes;
+        }
+    }
+    xml_tag(ssid, "name").map(|name| unescape_xml(name).into_bytes())
+}
+
+/// Whether Windows lets Bloom see the networks around. Asked without touching
+/// the list, so Windows never shows a prompt for Bloom. Windows that can't
+/// say (before 24H2) doesn't keep the list behind location.
+fn may_list_nearby() -> bool {
+    matches!(access_now(), None | Some("allowed"))
+}
+
+/// The connection the adapter has: the network's name and its saved
+/// profile, as far as Windows says.
+struct Connection {
+    name: Option<String>,
+    profile: Option<String>,
+}
+
+/// The network the adapter is associated with, straight from Windows (kept
+/// behind location access since 24H2): its name and its profile.
+fn current_connection(client: &Client, iface: &GUID) -> Option<(String, String)> {
+    let mut size = 0u32;
+    let mut data: *mut std::ffi::c_void = std::ptr::null_mut();
+    unsafe {
+        let rc = WlanQueryInterface(
+            client.0,
+            iface,
+            wlan_intf_opcode_current_connection,
+            None,
+            &mut size,
+            &mut data,
+            None,
+        );
+        // Fails with ERROR_INVALID_STATE while not associated.
+        let found = if rc == 0 {
+            (data as *const WLAN_CONNECTION_ATTRIBUTES)
+                .as_ref()
+                .map(|attrs| {
+                    (
+                        String::from_utf8_lossy(ssid_bytes(
+                            &attrs.wlanAssociationAttributes.dot11Ssid,
+                        ))
+                        .into_owned(),
+                        wide_to_string(&attrs.strProfileName),
+                    )
+                })
+        } else {
+            None
+        };
+        if !data.is_null() {
+            WlanFreeMemory(data);
+        }
+        found
+    }
+}
+
+/// Whether the adapter is connected (Windows says this to any app).
+fn interface_connected(client: &Client, iface: &GUID) -> bool {
+    let mut size = 0u32;
+    let mut data: *mut std::ffi::c_void = std::ptr::null_mut();
+    unsafe {
+        let rc = WlanQueryInterface(
+            client.0,
+            iface,
+            wlan_intf_opcode_interface_state,
+            None,
+            &mut size,
+            &mut data,
+            None,
+        );
+        let connected = rc == 0
+            && (data as *const WLAN_INTERFACE_STATE)
+                .as_ref()
+                .is_some_and(|state| *state == wlan_interface_state_connected);
+        if !data.is_null() {
+            WlanFreeMemory(data);
+        }
+        connected
+    }
+}
+
+/// The Wi-Fi connection's name from Windows' network status (what the
+/// network list calls it), which is its saved profile's name.
+fn wlan_profile_in_use() -> Option<String> {
+    use windows::Networking::Connectivity::{NetworkConnectivityLevel, NetworkInformation};
+    let profiles = NetworkInformation::GetConnectionProfiles().ok()?;
+    for index in 0..profiles.Size().unwrap_or(0) {
+        let Ok(profile) = profiles.GetAt(index) else {
+            continue;
+        };
+        let wlan = profile.IsWlanConnectionProfile().unwrap_or(false);
+        let up = profile
+            .GetNetworkConnectivityLevel()
+            .is_ok_and(|level| level != NetworkConnectivityLevel::None);
+        if !wlan || !up {
+            continue;
+        }
+        if let Ok(name) = profile.ProfileName() {
+            let name = name.to_string();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+fn connection(client: &Client, iface: &GUID) -> Option<Connection> {
+    if may_list_nearby() {
+        if let Some((ssid, profile)) = current_connection(client, iface) {
+            return Some(Connection {
+                name: Some(ssid),
+                profile: Some(profile),
+            });
+        }
+    }
+    if !interface_connected(client, iface) {
+        return None;
+    }
+    let profile = wlan_profile_in_use();
+    Some(Connection {
+        name: profile.clone(),
+        profile,
+    })
+}
+
+/// The networks Windows has saved, in the order Windows tries them, the one
+/// in use first.
+fn saved_networks(client: &Client, iface: &GUID) -> Vec<WifiNetwork> {
+    let mut list: *mut WLAN_PROFILE_INFO_LIST = std::ptr::null_mut();
+    let rc = unsafe { WlanGetProfileList(client.0, iface, None, &mut list) };
+    if rc != 0 {
+        return Vec::new();
+    }
+    let mut names = Vec::new();
+    unsafe {
+        if let Some(header) = list.as_ref() {
+            let count = header.dwNumberOfItems as usize;
+            // The same flexible-array pattern as the network list.
+            if count > 0 && count <= 1024 {
+                let entries: &[WLAN_PROFILE_INFO] =
+                    std::slice::from_raw_parts(header.ProfileInfo.as_ptr(), count);
+                names.extend(
+                    entries
+                        .iter()
+                        .map(|entry| wide_to_string(&entry.strProfileName)),
+                );
+            }
+        }
+        WlanFreeMemory(list as *const _);
+    }
+    let in_use = connection(client, iface).and_then(|c| c.profile);
+    let mut networks: Vec<WifiNetwork> = names
         .into_iter()
-        .find(|(n, _)| n.ssid == ssid)
-        .map(|(_, c)| c)
-        .ok_or_else(|| "not-found".to_string())
+        .filter(|name| !name.is_empty())
+        .filter_map(|name| {
+            let xml = get_profile_xml(client, iface, &name).unwrap_or_default();
+            // Ad hoc networks aren't managed.
+            if xml_tag(&xml, "connectionType").is_some_and(|t| t.eq_ignore_ascii_case("IBSS")) {
+                return None;
+            }
+            Some(WifiNetwork {
+                connected: in_use
+                    .as_deref()
+                    .is_some_and(|profile| profile.eq_ignore_ascii_case(&name)),
+                security: profile_security(&xml),
+                signal: 0,
+                saved: true,
+                ssid: name,
+            })
+        })
+        .collect();
+    // Stable: the one in use first, the rest in Windows' order.
+    networks.sort_by_key(|network| !network.connected);
+    networks
+}
+
+/// A saved network as the connect path needs it, from its profile.
+fn saved_candidate(client: &Client, iface: &GUID, name: &str) -> Option<Candidate> {
+    let xml = get_profile_xml(client, iface, name)?;
+    Some(Candidate {
+        ssid_bytes: profile_ssid(&xml).unwrap_or_else(|| name.as_bytes().to_vec()),
+        profile: Some(name.to_string()),
+        security: profile_security(&xml),
+        tkip: xml_tag(&xml, "encryption").is_some_and(|e| e.eq_ignore_ascii_case("TKIP")),
+    })
 }
 
 fn escape_xml(value: &str) -> String {
@@ -346,8 +598,13 @@ fn set_profile_xml(client: &Client, iface: &GUID, xml: &str) -> Result<(), Strin
 // ── Notifications ────────────────────────────────────────────────────────────
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
-/// The SSID a connect call is waiting on, and where to send its reason code.
-static PENDING_CONNECT: Mutex<Option<(Vec<u8>, Sender<u32>)>> = Mutex::new(None);
+/// The network a connect call is waiting on, and where to send its reason code.
+struct Pending {
+    ssid: Vec<u8>,
+    profile: String,
+    reply: Sender<u32>,
+}
+static PENDING_CONNECT: Mutex<Option<Pending>> = Mutex::new(None);
 
 unsafe extern "system" fn on_notification(
     data: *mut L2_NOTIFICATION_DATA,
@@ -367,12 +624,17 @@ unsafe extern "system" fn on_notification(
         let info = unsafe { (data.pData as *const WLAN_CONNECTION_NOTIFICATION_DATA).as_ref() };
         if let Some(info) = info {
             if let Ok(mut pending) = PENDING_CONNECT.lock() {
-                let matches = pending
-                    .as_ref()
-                    .is_some_and(|(ssid, _)| ssid.as_slice() == ssid_bytes(&info.dot11Ssid));
+                // By name too: without location access Windows may leave the
+                // SSID out.
+                let matches = pending.as_ref().is_some_and(|waiting| {
+                    (!waiting.ssid.is_empty()
+                        && waiting.ssid.as_slice() == ssid_bytes(&info.dot11Ssid))
+                        || (!waiting.profile.is_empty()
+                            && waiting.profile == wide_to_string(&info.strProfileName))
+                });
                 if matches {
-                    if let Some((_, tx)) = pending.take() {
-                        let _ = tx.send(info.wlanReasonCode);
+                    if let Some(waiting) = pending.take() {
+                        let _ = waiting.reply.send(info.wlanReasonCode);
                     }
                 }
             }
@@ -423,46 +685,28 @@ pub fn setup_wifi_notifications(app: AppHandle) {
     });
 }
 
-/// Name of the network the adapter is associated with, if any.
-pub fn connected_ssid() -> Option<String> {
-    let client = Client::open().ok()?;
-    let iface = client.interface().ok()?;
-    let mut size = 0u32;
-    let mut data: *mut std::ffi::c_void = std::ptr::null_mut();
-    unsafe {
-        let rc = WlanQueryInterface(
-            client.0,
-            &iface,
-            wlan_intf_opcode_current_connection,
-            None,
-            &mut size,
-            &mut data,
-            None,
-        );
-        // Fails with ERROR_INVALID_STATE while not associated.
-        let ssid = if rc == 0 {
-            (data as *const WLAN_CONNECTION_ATTRIBUTES)
-                .as_ref()
-                .map(|attrs| {
-                    String::from_utf8_lossy(ssid_bytes(&attrs.wlanAssociationAttributes.dot11Ssid))
-                        .into_owned()
-                })
-        } else {
-            None
-        };
-        if !data.is_null() {
-            WlanFreeMemory(data);
-        }
-        ssid
+/// For the controls tile: whether Wi-Fi is connected, and to which network
+/// when Windows names it.
+pub fn connection_status() -> (bool, Option<String>) {
+    let Ok(client) = Client::open() else {
+        return (false, None);
+    };
+    let Ok(iface) = client.interface() else {
+        return (false, None);
+    };
+    match connection(&client, &iface) {
+        Some(connection) => (true, connection.name),
+        None => (false, None),
     }
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
 
-/// Whether Windows lets Bloom list Wi-Fi networks, without asking it to
-/// (so nothing shows in the tray as using the location): "allowed",
-/// "prompt" (Windows would ask), "denied-by-user", "denied-by-system"
-/// (location off for the PC), or None when Windows can't say.
+/// Whether Windows lets Bloom list Wi-Fi networks, checked without asking
+/// (so Windows shows no prompt and nothing in the tray as using the
+/// location): "allowed", "prompt" (Windows would ask), "denied-by-user",
+/// "denied-by-system" (location off for the PC), or None when Windows can't
+/// say.
 fn access_now() -> Option<&'static str> {
     use windows::Security::Authorization::AppCapabilityAccess::{
         AppCapability, AppCapabilityAccessStatus,
@@ -479,52 +723,25 @@ fn access_now() -> Option<&'static str> {
     })
 }
 
-/// Whether Bloom may list Wi-Fi networks now (see `access_now`).
-#[tauri::command]
-pub async fn wifi_access_status() -> String {
-    tauri::async_runtime::spawn_blocking(|| access_now().unwrap_or("unknown").to_string())
-        .await
-        .unwrap_or_else(|_| "unknown".into())
-}
-
 fn list_sync() -> Result<WifiNetworkList, String> {
-    use std::sync::atomic::{AtomicU8, Ordering};
-    /// Whether `access_now`'s "not allowed" matched what the list itself
-    /// said, the first time both were asked: 0 not known yet, 1 it did, 2 it
-    /// didn't (so it isn't relied on).
-    static CHECK_MATCHES: AtomicU8 = AtomicU8::new(0);
-    let denied_now = matches!(
-        access_now(),
-        Some("prompt" | "denied-by-user" | "denied-by-system")
-    );
-    // Not allowed: the list isn't asked for at all, which would only be
-    // refused (and show Bloom in the tray as using the location).
-    if denied_now && CHECK_MATCHES.load(Ordering::Acquire) == 1 {
-        return Ok(WifiNetworkList {
-            networks: Vec::new(),
-            location_denied: true,
-        });
-    }
     let client = Client::open()?;
     let iface = client.interface()?;
-    let networks = visible_networks(&client, &iface)?;
-    if CHECK_MATCHES.load(Ordering::Acquire) == 0 {
-        let matches = denied_now == networks.is_none();
-        CHECK_MATCHES.store(if matches { 1 } else { 2 }, Ordering::Release);
+    if may_list_nearby() {
+        if let Some(networks) = visible_networks(&client, &iface)? {
+            return Ok(WifiNetworkList {
+                networks: networks.into_iter().map(|(n, _)| n).collect(),
+                location_denied: false,
+            });
+        }
     }
-    Ok(match networks {
-        Some(networks) => WifiNetworkList {
-            networks: networks.into_iter().map(|(n, _)| n).collect(),
-            location_denied: false,
-        },
-        None => WifiNetworkList {
-            networks: Vec::new(),
-            location_denied: true,
-        },
+    Ok(WifiNetworkList {
+        networks: saved_networks(&client, &iface),
+        location_denied: true,
     })
 }
 
-/// Networks Windows can currently see, from its last scan.
+/// Networks Windows can currently see, from its last scan, or the saved ones
+/// when Windows won't list them to Bloom.
 #[tauri::command]
 pub async fn wifi_list_networks() -> Result<WifiNetworkList, String> {
     tauri::async_runtime::spawn_blocking(list_sync)
@@ -532,10 +749,14 @@ pub async fn wifi_list_networks() -> Result<WifiNetworkList, String> {
         .map_err(|e| e.to_string())?
 }
 
-/// Starts a fresh scan. Results arrive as a `wifi-changed` event.
+/// Starts a fresh scan. Results arrive as a `wifi-changed` event. Nothing to
+/// do while Windows won't list the networks around to Bloom.
 #[tauri::command]
 pub async fn wifi_scan() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| {
+        if !may_list_nearby() {
+            return Ok(());
+        }
         let client = Client::open()?;
         let iface = client.interface()?;
         let rc = unsafe { WlanScan(client.0, &iface, None, None, None) };
@@ -597,7 +818,11 @@ fn connect_sync(ssid: &str, password: Option<&str>) -> Result<(), String> {
 
     let (tx, rx) = channel();
     if let Ok(mut pending) = PENDING_CONNECT.lock() {
-        *pending = Some((candidate.ssid_bytes.clone(), tx));
+        *pending = Some(Pending {
+            ssid: candidate.ssid_bytes.clone(),
+            profile: profile.clone(),
+            reply: tx,
+        });
     }
 
     let name = HSTRING::from(profile.as_str());
@@ -649,11 +874,11 @@ fn is_key_mismatch(reason: u32) -> bool {
         || (WLAN_REASON_CODE_MSMSEC_BASE..WLAN_REASON_CODE_MSMSEC_BASE + 0x10000).contains(&reason)
 }
 
-/// Connects to a visible network. Saved and open networks need no password;
-/// a new personal network needs one. Errors are short codes the view maps to
+/// Connects to a visible network (or a saved one, by name, while Windows
+/// won't list them to Bloom). Saved and open networks need no password; a new
+/// personal network needs one. Errors are short codes the view maps to
 /// messages ("wrong-password", "password-required", "password-length",
-/// "unsupported", "not-found", "timeout", "location-denied", "no-adapter") or
-/// Windows' own text.
+/// "unsupported", "not-found", "timeout", "no-adapter") or Windows' own text.
 #[tauri::command]
 pub async fn wifi_connect(ssid: String, password: Option<String>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || connect_sync(&ssid, password.as_deref()))
@@ -676,8 +901,8 @@ pub async fn wifi_disconnect() -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Deletes the saved profile of a visible network, disconnecting from it if
-/// it's the current one.
+/// Deletes a network's saved profile, disconnecting from it if it's the
+/// current one.
 #[tauri::command]
 pub async fn wifi_forget(ssid: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -691,30 +916,6 @@ pub async fn wifi_forget(ssid: String) -> Result<(), String> {
             return Err(format!("Couldn't forget the network ({rc})"));
         }
         Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Asks Windows to let Bloom list Wi-Fi networks. Windows ties the list to
-/// precise location access, per app: the first time, this shows Windows'
-/// own one-time prompt for Bloom only; afterwards it says what was chosen
-/// ("allowed", "denied-by-user", or "denied-by-system" when location is off
-/// for the whole PC). Bloom uses it for the network list and nothing else.
-#[tauri::command]
-pub async fn wifi_request_access() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        use windows::Devices::WiFi::{WiFiAccessStatus, WiFiAdapter};
-        let status = WiFiAdapter::RequestAccessAsync()
-            .and_then(|operation| operation.get())
-            .map_err(|e| e.to_string())?;
-        Ok(match status {
-            WiFiAccessStatus::Allowed => "allowed",
-            WiFiAccessStatus::DeniedByUser => "denied-by-user",
-            WiFiAccessStatus::DeniedBySystem => "denied-by-system",
-            _ => "unknown",
-        }
-        .to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -789,6 +990,39 @@ mod tests {
 
         let wpa3 = profile_xml("Home", b"Home", "wpa3", false, Some("password1"));
         assert!(wpa3.contains("WPA3SAE") && wpa3.contains("transitionMode"));
+    }
+
+    #[test]
+    fn reads_saved_profiles() {
+        let xml = profile_xml("Café & <Home>", "Café".as_bytes(), "wpa2", true, None);
+        assert_eq!(profile_security(&xml), "wpa2");
+        assert_eq!(profile_ssid(&xml).as_deref(), Some("Café".as_bytes()));
+        assert_eq!(xml_tag(&xml, "encryption"), Some("TKIP"));
+        assert_eq!(
+            profile_security(&profile_xml("G", b"G", "open", false, None)),
+            "open"
+        );
+        assert_eq!(
+            profile_security(&profile_xml("H", b"H", "wpa3", false, None)),
+            "wpa3"
+        );
+
+        // A profile Windows wrote, without the hex form.
+        let windows = r#"<?xml version="1.0"?><WLANProfile xmlns="x"><name>Work</name><SSIDConfig><SSID><name>Tom &amp; Co</name></SSID></SSIDConfig><connectionType>ESS</connectionType><MSM><security><authEncryption><authentication>WPA2</authentication><encryption>AES</encryption><useOneX>true</useOneX></authEncryption></security></MSM></WLANProfile>"#;
+        assert_eq!(
+            profile_ssid(windows).as_deref(),
+            Some("Tom & Co".as_bytes())
+        );
+        assert_eq!(profile_security(windows), "enterprise");
+        assert_eq!(xml_tag(windows, "connectionType"), Some("ESS"));
+        assert_eq!(
+            profile_security("<authentication>open</authentication><encryption>WEP</encryption>"),
+            "wep"
+        );
+        assert_eq!(
+            profile_ssid("<SSID><hex>zz</hex><name>x</name></SSID>").as_deref(),
+            Some(&b"x"[..])
+        );
     }
 
     #[test]
