@@ -333,7 +333,8 @@ fn print_window(hwnd: HWND) -> Option<Pixels> {
         use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
         use windows::Win32::Graphics::Gdi::{
             CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
-            ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC,
+            PatBlt, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLACKNESS,
+            DIB_RGB_COLORS, HDC,
         };
         use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsWindow};
         #[link(name = "user32")]
@@ -361,19 +362,21 @@ fn print_window(hwnd: HWND) -> Option<Pixels> {
             &mut frame as *mut _ as *mut _,
             std::mem::size_of::<RECT>() as u32,
         );
+        if window.right - window.left <= 100
+            || window.bottom - window.top <= 100
+            || window.right - window.left > 7680
+            || window.bottom - window.top > 4320
+        {
+            return None;
+        }
         let full_width = window.right - window.left;
         let full_height = window.bottom - window.top;
-        if full_width <= 100 || full_height <= 100 || full_width > 7680 || full_height > 4320 {
-            return None;
-        }
-        let (crop_left, crop_top, width, height) = visible_part(window, frame);
-        if width <= 100 || height <= 100 {
-            return None;
-        }
         let screen = GetDC(None);
         let memory = CreateCompatibleDC(Some(screen));
         let bitmap = CreateCompatibleBitmap(screen, full_width, full_height);
         let old = SelectObject(memory, bitmap.into());
+        // Black, so what the window doesn't draw is known.
+        let _ = PatBlt(memory, 0, 0, full_width, full_height, BLACKNESS);
         let mut result = None;
         if PrintWindow(hwnd, memory, PW_RENDERFULLCONTENT) != 0 {
             let mut info = BITMAPINFO {
@@ -399,18 +402,32 @@ fn print_window(hwnd: HWND) -> Option<Pixels> {
                 DIB_RGB_COLORS,
             ) != 0
             {
-                let row = (full_width * 4) as usize;
-                let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-                for y in crop_top..crop_top + height {
-                    let start = y as usize * row + crop_left as usize * 4;
-                    pixels.extend_from_slice(&whole[start..start + width as usize * 4]);
+                // An app Windows scales up for the display (one not made for
+                // its scale: Java apps like RuneLite, older programs) draws
+                // itself at its own, smaller size, into the corner of the
+                // picture: then the picture is that drawing, so it fills the
+                // preview like every other window's.
+                let scale = draw_scale(hwnd);
+                let (_, _, left, top, width, height) =
+                    if scale > 1.0 && drawn_smaller(&whole, full_width, full_height, scale) {
+                        drawn_part(window, frame, scale)
+                    } else {
+                        drawn_part(window, frame, 1.0)
+                    };
+                if width > 50 && height > 50 {
+                    let row = (full_width * 4) as usize;
+                    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+                    for y in top..top + height {
+                        let start = y as usize * row + left as usize * 4;
+                        pixels.extend_from_slice(&whole[start..start + width as usize * 4]);
+                    }
+                    for pixel in pixels.chunks_exact_mut(4) {
+                        pixel.swap(0, 2);
+                        // GDI leaves alpha undefined.
+                        pixel[3] = 255;
+                    }
+                    result = Some((width as u32, height as u32, pixels));
                 }
-                for pixel in pixels.chunks_exact_mut(4) {
-                    pixel.swap(0, 2);
-                    // GDI leaves alpha undefined.
-                    pixel[3] = 255;
-                }
-                result = Some((width as u32, height as u32, pixels));
             }
         }
         SelectObject(memory, old);
@@ -419,6 +436,78 @@ fn print_window(hwnd: HWND) -> Option<Pixels> {
         ReleaseDC(None, screen);
         result
     }
+}
+
+/// How many screen pixels each pixel the window draws takes: above 1 for an
+/// app Windows scales up because it isn't made for the display's scale
+/// (it draws at 96 DPI, or at the scale Windows started with, and shows on
+/// a display set to more).
+pub fn draw_scale(hwnd: HWND) -> f64 {
+    use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
+    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
+    unsafe {
+        let drawn = GetDpiForWindow(hwnd);
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let (mut shown, mut _y) = (0u32, 0u32);
+        if drawn == 0 || GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut shown, &mut _y).is_err()
+        {
+            return 1.0;
+        }
+        scale_between(drawn, shown)
+    }
+}
+
+/// Screen pixels per drawn pixel for a window drawn at `drawn` DPI on a
+/// display at `shown` DPI (1 when the app draws at the display's scale).
+pub fn scale_between(drawn: u32, shown: u32) -> f64 {
+    if drawn == 0 || shown == 0 {
+        return 1.0;
+    }
+    let scale = shown as f64 / drawn as f64;
+    if scale > 1.01 {
+        scale
+    } else {
+        1.0
+    }
+}
+
+/// Whether a window's picture (`width` x `height`, BGRA, black where it
+/// drew nothing) was drawn at `scale` times smaller than it shows: nothing
+/// past that smaller size, to the right and below.
+pub fn drawn_smaller(bgra: &[u8], width: i32, height: i32, scale: f64) -> bool {
+    let drawn_width = (width as f64 / scale).ceil() as i32 + 2;
+    let drawn_height = (height as f64 / scale).ceil() as i32 + 2;
+    if drawn_width >= width || drawn_height >= height {
+        return false;
+    }
+    let empty = |x: i32, y: i32| {
+        let at = ((y * width + x) * 4) as usize;
+        bgra.get(at..at + 3).is_some_and(|p| p == [0, 0, 0])
+    };
+    // Every fourth pixel of the strip on the right and the strip below.
+    let right = (0..height)
+        .step_by(4)
+        .all(|y| (drawn_width..width).step_by(4).all(|x| empty(x, y)));
+    right
+        && (drawn_height..height)
+            .step_by(4)
+            .all(|y| (0..drawn_width).step_by(4).all(|x| empty(x, y)))
+}
+
+/// What PrintWindow draws for a window and the part of it Windows shows, at
+/// the size the app draws itself (`scale` screen pixels to each of its
+/// pixels): the whole drawing's width and height, then the visible part's
+/// left, top, width and height.
+pub fn drawn_part(window: RECT, frame: RECT, scale: f64) -> (i32, i32, i32, i32, i32, i32) {
+    let down = |value: i32| (value as f64 / scale).round() as i32;
+    let full_width = down(window.right - window.left).max(1);
+    let full_height = down(window.bottom - window.top).max(1);
+    let (left, top, width, height) = visible_part(window, frame);
+    let left = down(left).clamp(0, full_width - 1);
+    let top = down(top).clamp(0, full_height - 1);
+    let width = down(width).clamp(1, full_width - left);
+    let height = down(height).clamp(1, full_height - top);
+    (full_width, full_height, left, top, width, height)
 }
 
 /// The part of a window Windows shows (its frame) inside its whole rectangle:
@@ -496,8 +585,45 @@ fn encode(
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_real, visible_part};
+    use super::{drawn_part, drawn_smaller, looks_real, scale_between, visible_part};
     use windows::Win32::Foundation::RECT;
+
+    #[test]
+    fn scaled_up_apps_are_taken_at_their_own_size() {
+        let rect = |left, top, right, bottom| RECT {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        // A 96 DPI app on a display at 150 %.
+        assert_eq!(scale_between(96, 144), 1.5);
+        assert_eq!(scale_between(144, 144), 1.0);
+        assert_eq!(scale_between(144, 96), 1.0);
+        assert_eq!(scale_between(0, 144), 1.0);
+        // 1920 x 1200 on screen, with 7-pixel borders: drawn at 1280 x 800.
+        let window = rect(-7, 0, 1913, 1207);
+        let frame = rect(0, 0, 1906, 1200);
+        assert_eq!(drawn_part(window, frame, 1.5), (1280, 805, 5, 0, 1271, 800));
+        // Told apart by the picture: drawn into the top-left two thirds, the
+        // rest black, or across the whole picture.
+        let (w, h) = (300, 200);
+        let mut corner = vec![0u8; (w * h * 4) as usize];
+        for y in 0..134 {
+            for x in 0..200 {
+                let at = ((y * w + x) * 4) as usize;
+                corner[at..at + 3].copy_from_slice(&[40, 90, 160]);
+            }
+        }
+        assert!(drawn_smaller(&corner, w, h, 1.5));
+        let full = vec![40u8; (w * h * 4) as usize];
+        assert!(!drawn_smaller(&full, w, h, 1.5));
+        // An app drawn at the display's scale: as before.
+        assert_eq!(
+            drawn_part(window, frame, 1.0),
+            (1920, 1207, 7, 0, 1906, 1200)
+        );
+    }
 
     #[test]
     fn the_picture_is_the_visible_frame() {

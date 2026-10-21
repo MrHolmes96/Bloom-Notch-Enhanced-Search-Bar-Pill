@@ -67,15 +67,14 @@ pub fn dock_live_previews(app: AppHandle, items: Vec<LivePreview>) {
                 continue;
             };
             // Only a minimized title bar (or nothing) to draw: the snapshot.
-            let drawable = DwmQueryThumbnailSourceSize(thumbnail)
-                .is_ok_and(|size| size.cx >= 100 && size.cy >= 100);
-            if !drawable {
+            let size = DwmQueryThumbnailSourceSize(thumbnail).ok();
+            let Some(size) = size.filter(|size| size.cx >= 100 && size.cy >= 100) else {
                 let _ = DwmUnregisterThumbnail(thumbnail);
                 continue;
-            }
+            };
             // The part of the window Windows shows (no invisible resize
             // borders), fitted into the card's picture in its own shape.
-            let (source_rect, source_width, source_height) = visible_source(source);
+            let (source_rect, source_width, source_height) = visible_source(source, size.cx);
             let card = RECT {
                 left: item.left,
                 top: item.top,
@@ -106,8 +105,10 @@ pub fn dock_live_previews(app: AppHandle, items: Vec<LivePreview>) {
     }
 }
 
-/// The window's visible frame in its own coordinates, and its size.
-unsafe fn visible_source(hwnd: HWND) -> (RECT, i32, i32) {
+/// The window's visible frame in the thumbnail's own coordinates (`drawn`
+/// pixels wide in all: an app Windows scales up for the display is that
+/// many, fewer than it shows), and its width and height there.
+unsafe fn visible_source(hwnd: HWND, drawn: i32) -> (RECT, i32, i32) {
     use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
     let mut window = RECT::default();
     let _ = GetWindowRect(hwnd, &mut window);
@@ -118,7 +119,13 @@ unsafe fn visible_source(hwnd: HWND) -> (RECT, i32, i32) {
         &mut frame as *mut _ as *mut _,
         std::mem::size_of::<RECT>() as u32,
     );
-    let (left, top, width, height) = crate::window_capture::visible_part(window, frame);
+    let shown = window.right - window.left;
+    let scale = if drawn > 0 && shown > drawn + 2 {
+        shown as f64 / drawn as f64
+    } else {
+        1.0
+    };
+    let (_, _, left, top, width, height) = crate::window_capture::drawn_part(window, frame, scale);
     (
         RECT {
             left,
