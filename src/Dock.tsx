@@ -230,6 +230,8 @@ const Dock = memo(function Dock() {
 	const [previewStyle, setPreviewStyle] = useState(
 		() => localStorage.getItem("bloom-dock-preview-style") ?? "static"
 	);
+	const previewStyleRef = useRef(previewStyle);
+	previewStyleRef.current = previewStyle;
 	const [previewData, setPreviewData] = useState<{
 		id: string;
 		previews: { hwnd: number; title: string; image: string }[];
@@ -296,6 +298,8 @@ const Dock = memo(function Dock() {
 	const previewTimerRef = useRef<any>(null);
 	const isPreviewHoveredRef = useRef(false);
 	const hoveredAppRef = useRef<string | null>(null);
+	// The card whose windows were taken again since it opened (once per opening).
+	const refreshedCardRef = useRef<string | null>(null);
 
 	useEffect(() => {
 		if (isAnyInteraction) {
@@ -1255,6 +1259,7 @@ const Dock = memo(function Dock() {
 		hoveredAppRef.current = hoveredApp;
 
 		if (!hoveredApp) {
+			refreshedCardRef.current = null;
 			const timer = setTimeout(() => setPreviewData(null), 100);
 			return () => clearTimeout(timer);
 		}
@@ -1291,10 +1296,41 @@ const Dock = memo(function Dock() {
 							.sort((a, b) => b.lastFocused - a.lastFocused)
 							.map(({ hwnd, title, image }) => ({ hwnd, title, image }));
 
+						const key = itemKey(app);
 						const currentHovered = hoveredAppRef.current;
-						if (captured.length > 0 && currentHovered === itemKey(app)) {
-							setPreviewData({ id: itemKey(app), previews: captured });
-						} else if (currentHovered === itemKey(app)) {
+						if (captured.length > 0 && currentHovered === key) {
+							setPreviewData({ id: key, previews: captured });
+							// The card shows at once with the snapshots; then each of
+							// its windows that is on screen is taken again and shown as
+							// it is now. Once per opening, only these windows, and only
+							// static cards (live ones are drawn by Windows as they are).
+							if (previewStyleRef.current !== "live" && refreshedCardRef.current !== key) {
+								refreshedCardRef.current = key;
+								captured.forEach(({ hwnd }) => {
+									void invoke<[string, number] | null>("capture_window_thumbnail", {
+										hwnd,
+										maxWidth: PREVIEW_BOX,
+										maxHeight: PREVIEW_BOX,
+										fresh: true
+									})
+										.then((res) => {
+											if (!res?.[0] || hoveredAppRef.current !== key) return;
+											const image = res[0];
+											setPreviewData((prev) =>
+												prev && prev.id === key
+													? {
+															...prev,
+															previews: prev.previews.map((p) =>
+																p.hwnd === hwnd ? { ...p, image } : p
+															)
+														}
+													: prev
+											);
+										})
+										.catch(() => {});
+								});
+							}
+						} else if (currentHovered === key) {
 							setPreviewData(null);
 						}
 					} catch (e) {

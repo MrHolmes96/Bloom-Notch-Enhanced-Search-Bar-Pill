@@ -4,7 +4,8 @@
 //! timer and never while it is being used: a moment after it opens, when it
 //! stops being the window in front (it is still on screen then, so its
 //! preview is how it was left), when its title changes while it is in front
-//! (a browser's tab), when the dock is pointed at, and right before the dock
+//! (a browser's tab), when the dock is pointed at, when its preview card
+//! opens (so the card shows it as it is now), and right before the dock
 //! minimizes it. Each is skipped when the window's picture is only seconds
 //! old, and full-screen windows (games, video) are never taken in the
 //! background.

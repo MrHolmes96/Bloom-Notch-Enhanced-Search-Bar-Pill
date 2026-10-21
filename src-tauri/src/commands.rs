@@ -3399,11 +3399,18 @@ pub fn settings_file_readable(app: AppHandle) -> bool {
         })
 }
 
+/// A window's picture for its dock preview card: its snapshot, at once.
+/// With `fresh`, asked right after the card shows: the window taken again as
+/// it is now, when it's on screen and its snapshot is more than a second old
+/// (None otherwise: the card keeps what it shows). Only the windows in a card
+/// that is open are taken, once per opening, so nothing runs in the
+/// background for it.
 #[tauri::command]
 pub async fn capture_window_thumbnail(
     hwnd: isize,
     max_width: u32,
     max_height: u32,
+    fresh: Option<bool>,
 ) -> Result<Option<(String, i64)>, String> {
     tauri::async_runtime::spawn_blocking(move || unsafe {
         use windows::Win32::Foundation::HWND;
@@ -3412,6 +3419,14 @@ pub async fn capture_window_thumbnail(
         let hwnd = HWND(hwnd as *mut _);
         if !IsWindow(Some(hwnd)).as_bool() {
             return None;
+        }
+
+        if fresh == Some(true) {
+            if IsIconic(hwnd).as_bool() || crate::window_capture::age_ms(hwnd) < 1000 {
+                return None;
+            }
+            let shot = crate::window_capture::take(hwnd, max_width, max_height, true)?;
+            return shot.usable.then_some((shot.image, 0));
         }
 
         let hwnd_key = hwnd.0 as isize;
