@@ -101,7 +101,8 @@ const CATEGORIES: {
 		sections: [
 			{ id: "theme", label: "Theme", icon: Palette },
 			{ id: "colors", label: "Colors", icon: Droplets },
-			{ id: "size", label: "Size & Corners", icon: Maximize2 }
+			{ id: "size", label: "Size & Corners", icon: Maximize2 },
+			{ id: "borders", label: "Borders", icon: LayoutPanelLeft }
 		]
 	},
 	{
@@ -135,7 +136,6 @@ const CATEGORIES: {
 		label: "Windows",
 		icon: AppWindow,
 		sections: [
-			{ id: "borders", label: "Borders", icon: LayoutPanelLeft },
 			{ id: "sizes", label: "Window Sizes", icon: AppWindow }
 		]
 	},
@@ -207,6 +207,8 @@ function readRemembered(): Record<string, string> {
  */
 function placeFor(tab: string, remembered: Record<string, string>): Place {
 	if (tab === "integration-blitzit") return { category: "integrations", section: "blitzit" };
+	// Window borders moved from Windows to Appearance.
+	if (tab === "windows/borders") return { category: "appearance", section: "borders" };
 	const [categoryId, sectionId] = tab.split("/");
 	const category = CATEGORIES.find((c) => c.id === categoryId) ?? CATEGORIES[0];
 	const has = (id: string | undefined) => !!id && category.sections.some((s) => s.id === id);

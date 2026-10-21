@@ -1,8 +1,9 @@
 import { Palette, Droplet, Contrast, Droplets, Sun, Square, Maximize2, PanelBottom } from "lucide-react";
 import { SettingRow } from "./SettingRow";
+import { WindowBordersSettings } from "./WindowBordersSettings";
 
 /** Settings > Appearance's sub-sections. */
-export type AppearanceSection = "theme" | "colors" | "size";
+export type AppearanceSection = "theme" | "colors" | "size" | "borders";
 
 interface AppearanceTabProps {
 	section: AppearanceSection;
@@ -127,6 +128,8 @@ export function AppearanceTab({
 					</div>
 				</>
 			)}
+
+			{section === "borders" && <WindowBordersSettings />}
 
 			{section === "colors" && (
 				<>

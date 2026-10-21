@@ -744,6 +744,23 @@ input:checked + .slider:before {
 	color: var(--text-muted);
 }
 
+/* Window Borders: take the Windows accent colour. */
+.border-accent-btn {
+	background: var(--bloom-border, rgba(255, 255, 255, 0.12));
+	border: none;
+	border-radius: 6px;
+	color: var(--bloom-text, white);
+	font-size: 11px;
+	font-weight: 600;
+	padding: 4px 9px;
+	cursor: pointer;
+	transition: opacity 0.15s ease;
+}
+
+.border-accent-btn:hover {
+	opacity: 0.8;
+}
+
 /* About tab container and header */
 @font-face {
 	font-family: "Syne";
