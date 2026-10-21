@@ -5,7 +5,6 @@ import {
 	ChevronLeft,
 	LoaderCircle,
 	Lock,
-	MapPin,
 	RefreshCw,
 	Wifi,
 	WifiHigh,
@@ -95,6 +94,16 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 		void refresh();
 		void scan();
 	}, [enabled, refresh, scan]);
+
+	// Windows shows its Wi-Fi networks only to apps allowed to know the
+	// location. Without that, Windows' own Wi-Fi list (the one in Quick
+	// Settings, which needs no location access) opens in place of this one.
+	const locationDenied = !!list?.location_denied;
+	useEffect(() => {
+		if (!locationDenied) return;
+		void invoke("open_wifi_settings").catch(() => {});
+		onBack();
+	}, [locationDenied]);
 
 	useEffect(() => {
 		let debounce: number | null = null;
@@ -243,14 +252,8 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 		if (list?.location_denied) {
 			return (
 				<div className="qp-empty">
-					<MapPin />
-					<span>Windows only lists Wi-Fi networks for apps with location access.</span>
-					<button
-						className="qp-btn"
-						onClick={() => invoke("wifi_open_settings", { page: "location" })}
-					>
-						Location settings
-					</button>
+					<LoaderCircle className="qp-spin" />
+					<span>Opening Windows' Wi-Fi list…</span>
 				</div>
 			);
 		}

@@ -2370,8 +2370,11 @@ pub fn sync_overlay_position(app: AppHandle) {
     crate::services::sync_overlays(&app);
 }
 
+/// Windows' own Wi-Fi list (the one in Quick Settings).
 #[tauri::command]
 pub fn open_wifi_settings() {
+    // Lets it come to the front.
+    crate::foreground::grant();
     unsafe {
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::Shell::ShellExecuteA;
