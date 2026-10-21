@@ -459,10 +459,60 @@ pub fn connected_ssid() -> Option<String> {
 
 // ── Commands ─────────────────────────────────────────────────────────────────
 
+/// Whether Windows lets Bloom list Wi-Fi networks, without asking it to
+/// (so nothing shows in the tray as using the location): "allowed",
+/// "prompt" (Windows would ask), "denied-by-user", "denied-by-system"
+/// (location off for the PC), or None when Windows can't say.
+fn access_now() -> Option<&'static str> {
+    use windows::Security::Authorization::AppCapabilityAccess::{
+        AppCapability, AppCapabilityAccessStatus,
+    };
+    let status = AppCapability::Create(&HSTRING::from("wiFiControl"))
+        .and_then(|capability| capability.CheckAccess())
+        .ok()?;
+    Some(match status {
+        AppCapabilityAccessStatus::Allowed => "allowed",
+        AppCapabilityAccessStatus::UserPromptRequired => "prompt",
+        AppCapabilityAccessStatus::DeniedByUser => "denied-by-user",
+        AppCapabilityAccessStatus::DeniedBySystem => "denied-by-system",
+        _ => return None,
+    })
+}
+
+/// Whether Bloom may list Wi-Fi networks now (see `access_now`).
+#[tauri::command]
+pub async fn wifi_access_status() -> String {
+    tauri::async_runtime::spawn_blocking(|| access_now().unwrap_or("unknown").to_string())
+        .await
+        .unwrap_or_else(|_| "unknown".into())
+}
+
 fn list_sync() -> Result<WifiNetworkList, String> {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    /// Whether `access_now`'s "not allowed" matched what the list itself
+    /// said, the first time both were asked: 0 not known yet, 1 it did, 2 it
+    /// didn't (so it isn't relied on).
+    static CHECK_MATCHES: AtomicU8 = AtomicU8::new(0);
+    let denied_now = matches!(
+        access_now(),
+        Some("prompt" | "denied-by-user" | "denied-by-system")
+    );
+    // Not allowed: the list isn't asked for at all, which would only be
+    // refused (and show Bloom in the tray as using the location).
+    if denied_now && CHECK_MATCHES.load(Ordering::Acquire) == 1 {
+        return Ok(WifiNetworkList {
+            networks: Vec::new(),
+            location_denied: true,
+        });
+    }
     let client = Client::open()?;
     let iface = client.interface()?;
-    Ok(match visible_networks(&client, &iface)? {
+    let networks = visible_networks(&client, &iface)?;
+    if CHECK_MATCHES.load(Ordering::Acquire) == 0 {
+        let matches = denied_now == networks.is_none();
+        CHECK_MATCHES.store(if matches { 1 } else { 2 }, Ordering::Release);
+    }
+    Ok(match networks {
         Some(networks) => WifiNetworkList {
             networks: networks.into_iter().map(|(n, _)| n).collect(),
             location_denied: false,
@@ -641,6 +691,30 @@ pub async fn wifi_forget(ssid: String) -> Result<(), String> {
             return Err(format!("Couldn't forget the network ({rc})"));
         }
         Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Asks Windows to let Bloom list Wi-Fi networks. Windows ties the list to
+/// precise location access, per app: the first time, this shows Windows'
+/// own one-time prompt for Bloom only; afterwards it says what was chosen
+/// ("allowed", "denied-by-user", or "denied-by-system" when location is off
+/// for the whole PC). Bloom uses it for the network list and nothing else.
+#[tauri::command]
+pub async fn wifi_request_access() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        use windows::Devices::WiFi::{WiFiAccessStatus, WiFiAdapter};
+        let status = WiFiAdapter::RequestAccessAsync()
+            .and_then(|operation| operation.get())
+            .map_err(|e| e.to_string())?;
+        Ok(match status {
+            WiFiAccessStatus::Allowed => "allowed",
+            WiFiAccessStatus::DeniedByUser => "denied-by-user",
+            WiFiAccessStatus::DeniedBySystem => "denied-by-system",
+            _ => "unknown",
+        }
+        .to_string())
     })
     .await
     .map_err(|e| e.to_string())?

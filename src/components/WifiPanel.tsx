@@ -95,15 +95,43 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 		void scan();
 	}, [enabled, refresh, scan]);
 
-	// Windows shows its Wi-Fi networks only to apps allowed to know the
-	// location. Without that, Windows' own Wi-Fi list (the one in Quick
-	// Settings, which needs no location access) opens in place of this one.
+	// Windows gives the list of Wi-Fi networks only to apps allowed precise
+	// location, app by app. The first time, Bloom asks (Windows' own one-time
+	// prompt, for Bloom alone); once allowed, the list is here. Until then the
+	// view says how to allow it, and looks again every few seconds, so the
+	// list shows the moment it is allowed in Settings.
 	const locationDenied = !!list?.location_denied;
+	const [access, setAccess] = useState<"idle" | "asking" | "denied" | "off">("idle");
+	const askedRef = useRef(false);
 	useEffect(() => {
-		if (!locationDenied) return;
-		void invoke("open_wifi_settings").catch(() => {});
-		onBack();
-	}, [locationDenied]);
+		if (!locationDenied || askedRef.current) return;
+		askedRef.current = true;
+		setAccess("asking");
+		void invoke<string>("wifi_request_access")
+			.then((answer) => {
+				if (answer === "allowed") {
+					setAccess("idle");
+					void refresh();
+					void scan();
+				} else {
+					setAccess(answer === "denied-by-system" ? "off" : "denied");
+				}
+			})
+			.catch(() => setAccess("denied"));
+	}, [locationDenied, refresh, scan]);
+	useEffect(() => {
+		if (!locationDenied || access === "asking") return;
+		const timer = window.setInterval(() => {
+			void invoke<string>("wifi_access_status").then((now) => {
+				if (now === "allowed") {
+					setAccess("idle");
+					void refresh();
+					void scan();
+				}
+			});
+		}, 3000);
+		return () => window.clearInterval(timer);
+	}, [locationDenied, access, refresh, scan]);
 
 	useEffect(() => {
 		let debounce: number | null = null;
@@ -250,10 +278,33 @@ export function WifiPanel({ enabled, onToggle, onBack, onPinChange }: WifiPanelP
 	const renderBody = () => {
 		if (!enabled) return <div className="qp-empty">Wi-Fi is off</div>;
 		if (list?.location_denied) {
+			if (access === "asking" || access === "idle") {
+				return (
+					<div className="qp-empty">
+						<LoaderCircle className="qp-spin" />
+						<span>Answer Windows' question to show the networks here</span>
+					</div>
+				);
+			}
 			return (
 				<div className="qp-empty">
-					<LoaderCircle className="qp-spin" />
-					<span>Opening Windows' Wi-Fi list…</span>
+					<Wifi />
+					<span>
+						{access === "off"
+							? "Windows only lists Wi-Fi networks to apps allowed precise location, and location is off for this PC. Turn it on and allow only Bloom; Bloom uses it for this list and nothing else."
+							: "Windows only lists Wi-Fi networks to apps allowed precise location. Allow Bloom (only Bloom; it uses it for this list and nothing else) and the networks show here."}
+					</span>
+					<div className="qp-btn-row">
+						<button
+							className="qp-btn primary"
+							onClick={() => invoke("wifi_open_settings", { page: "location" })}
+						>
+							Allow in Settings
+						</button>
+						<button className="qp-btn" onClick={() => invoke("open_wifi_settings")}>
+							Windows' list
+						</button>
+					</div>
 				</div>
 			);
 		}
