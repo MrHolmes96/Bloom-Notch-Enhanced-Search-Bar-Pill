@@ -420,9 +420,13 @@ fn place(entry: &mut Snapped, force: bool) {
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
                 );
             }
+            // Under the window above it; for the front window under an
+            // always-on-top one (the notch, the dock), the top of the
+            // ordinary windows, so the line never joins the always-on-top
+            // ones and has to be put back on every look.
             let above = GetWindow(target, GW_HWNDPREV)
                 .ok()
-                .filter(|window| *window != edge)
+                .filter(|window| *window != edge && (topmost || !is_topmost(*window)))
                 .unwrap_or(if topmost { HWND_TOPMOST } else { HWND_TOP });
             let _ = SetWindowPos(edge, Some(above), x, y, width, height, flags);
         }

@@ -100,14 +100,32 @@ pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
         CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0,
     };
     use windows::Win32::System::Threading::{
-        OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE,
+        CreateEventW, GetExitCodeProcess, OpenProcess, WaitForSingleObject, INFINITE,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
     };
+    // Bloom's "please quit" signal (the installer and uninstaller set it): a
+    // Bloom that was asked to quit is never started again.
+    let quit_name: Vec<u16> = crate::startup::QUIT_EVENT
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let quit =
+        unsafe { CreateEventW(None, true, false, windows::core::PCWSTR(quit_name.as_ptr())).ok() };
     // Only treat a missing PID as an already-exited parent. Access denied or
     // another wait failure must not restore the taskbar over a live Bloom.
+    let mut exit_code: Option<u32> = None;
     unsafe {
-        match OpenProcess(PROCESS_SYNCHRONIZE, false, parent_pid) {
+        match OpenProcess(
+            PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            parent_pid,
+        ) {
             Ok(parent) => {
                 let result = WaitForSingleObject(parent, INFINITE);
+                let mut code = 0u32;
+                if GetExitCodeProcess(parent, &mut code).is_ok() {
+                    exit_code = Some(code);
+                }
                 let _ = CloseHandle(parent);
                 if result != WAIT_OBJECT_0 {
                     return;
@@ -120,16 +138,24 @@ pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
         }
     }
     let _ = TASKBAR_MARKER.set(marker.clone());
+    let owned = |marker: &PathBuf| {
+        std::fs::read_to_string(marker)
+            .ok()
+            .and_then(|contents| parse_marker_pid(&contents))
+            == Some(parent_pid)
+    };
+    // Quit the normal way: it put everything back itself.
+    if !owned(&marker) {
+        return;
+    }
+    let asked_to_quit =
+        quit.is_some_and(|event| unsafe { WaitForSingleObject(event, 0) } == WAIT_OBJECT_0);
     // Explorer can be restarting at the same time. Retry briefly, but never
     // act on a marker owned by a replacement Bloom process.
     let mut popups_restored = false;
     for _ in 0..120 {
-        if std::fs::read_to_string(&marker)
-            .ok()
-            .and_then(|contents| parse_marker_pid(&contents))
-            != Some(parent_pid)
-        {
-            return;
+        if !owned(&marker) {
+            break;
         }
         // Windows' volume, brightness and notification pop-ups too, which a
         // killed Bloom also left hidden.
@@ -140,9 +166,115 @@ pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
         }
         restore_taskbar_after_crash();
         if !marker.exists() {
-            return;
+            break;
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    // Bloom crashed (not stopped by the user or an installer): noted in
+    // crash.log, and started again, unless it keeps crashing or another
+    // Bloom has already taken over.
+    let Some(code) = exit_code else {
+        return;
+    };
+    let taken_over = std::fs::read_to_string(&marker)
+        .ok()
+        .and_then(|contents| parse_marker_pid(&contents))
+        .is_some_and(|pid| pid != parent_pid);
+    if !crashed(code) {
+        return;
+    }
+    note_crash(&format!(
+        "Bloom stopped unexpectedly: {} ({code:#010x})",
+        crash_meaning(code)
+    ));
+    if asked_to_quit || taken_over {
+        return;
+    }
+    if !may_restart() {
+        note_crash("Not started again: it crashed three times in ten minutes");
+        return;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if std::process::Command::new(exe)
+            .arg(crate::startup::AUTOSTART_ARG)
+            .spawn()
+            .is_ok()
+        {
+            note_crash("Started Bloom again");
+        }
+    }
+}
+
+/// An exit code that means Bloom crashed, not that it was ended: Windows'
+/// error codes (an access violation, a stack overflow, a failed check), and
+/// Rust's code for a panic on the main thread. Ending it from Task Manager
+/// gives 1, quitting 0.
+fn crashed(code: u32) -> bool {
+    code >= 0xC000_0000 || code == 101
+}
+
+fn crash_meaning(code: u32) -> &'static str {
+    match code {
+        0xC000_0005 => "memory access violation",
+        0xC000_00FD => "stack overflow",
+        0xC000_0374 => "heap corruption",
+        0xC000_0409 => "a failed check (a Rust panic in a Windows callback, or a fail-fast)",
+        0xC000_0017 | 0xC000_012D => "out of memory",
+        0xE06D_7363 => "unhandled C++ exception",
+        101 => "a Rust panic on the main thread",
+        _ => "crash",
+    }
+}
+
+/// At most three restarts in ten minutes, so a crash at start can't loop.
+fn may_restart() -> bool {
+    let Some(path) = data_file("restarts.txt") else {
+        return true;
+    };
+    let now = get_now_ms();
+    let mut recent: Vec<i64> = std::fs::read_to_string(&path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .filter(|at| now - at < 10 * 60 * 1000)
+        .collect();
+    if recent.len() >= 3 {
+        return false;
+    }
+    recent.push(now);
+    let text: Vec<String> = recent.iter().map(|at| at.to_string()).collect();
+    let _ = std::fs::write(&path, text.join("\n"));
+    true
+}
+
+/// A file in Bloom's data folder, found without the app (the watchdog and
+/// the panic handler have none).
+fn data_file(name: &str) -> Option<PathBuf> {
+    let dir = PathBuf::from(std::env::var_os("APPDATA")?).join(crate::data_folders::IDENTIFIER);
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join(name))
+}
+
+/// One line in crash.log (Bloom's data folder): what went wrong, and when.
+pub fn note_crash(line: &str) {
+    use std::io::Write;
+    let Some(path) = data_file("crash.log") else {
+        return;
+    };
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 64 * 1024) {
+        let _ = std::fs::remove_file(&path);
+    }
+    let time = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(
+            file,
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02} {line}",
+            time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond
+        );
     }
 }
 

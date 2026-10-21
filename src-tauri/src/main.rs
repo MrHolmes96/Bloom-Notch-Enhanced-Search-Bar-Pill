@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_icon;
+mod backup;
 mod bluetooth;
 mod brightness;
 mod commands;
@@ -59,6 +60,18 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
 }
 
 fn main() {
+    // What went wrong, in crash.log (Bloom's data folder), before a panic
+    // ends a thread or, inside a Windows callback, all of Bloom.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        utils::note_crash(&format!(
+            "panic on thread '{}': {}",
+            thread.name().unwrap_or("unnamed"),
+            info.to_string().replace('\n', " ")
+        ));
+        default_hook(info);
+    }));
     let mut args = std::env::args_os();
     let first = args.nth(1);
     if first.as_deref() == Some(std::ffi::OsStr::new("--taskbar-watchdog")) {
@@ -245,6 +258,8 @@ fn main() {
             get_disk_space,
             get_network_speed,
             export_settings,
+            backup::export_backup,
+            backup::import_backup,
             import_settings,
             reset_settings,
             read_settings_from_path,
@@ -324,6 +339,8 @@ fn main() {
             notifications::notification_clear_all,
             notifications::notification_center_hide,
             wifi::wifi_list_networks,
+            wifi::wifi_request_access,
+            wifi::wifi_access_status,
             wifi::wifi_scan,
             wifi::wifi_connect,
             wifi::wifi_disconnect,
