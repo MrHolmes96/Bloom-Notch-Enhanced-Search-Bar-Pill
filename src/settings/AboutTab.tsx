@@ -33,13 +33,13 @@ export function AboutTab({
 	const getExportLabel = () => {
 		if (exportStatus === "exporting") return "Exporting...";
 		if (exportStatus === "success") return "Exported!";
-		return "Export Settings";
+		return "Export Backup";
 	};
 
 	const getImportLabel = () => {
 		if (importStatus === "importing") return "Importing...";
 		if (importStatus === "success") return "Imported!";
-		return "Import Settings";
+		return "Import Backup";
 	};
 
 	return (
@@ -103,14 +103,14 @@ export function AboutTab({
 				<SettingRow
 					icon={FileDown}
 					label={getExportLabel()}
-					desc="Save settings to a file"
+					desc="Every setting, pinned dock apps, custom icons, window sizes and search history, in one file"
 					action
 					onClick={handleExportSettings}
 				/>
 				<SettingRow
 					icon={Upload}
 					label={getImportLabel()}
-					desc="Load settings from a file"
+					desc="Restores a backup (dock apps not on this PC are left out), then Bloom restarts"
 					action
 					divider={false}
 					onClick={handleImportSettings}

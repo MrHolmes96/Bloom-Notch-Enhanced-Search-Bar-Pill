@@ -27,6 +27,7 @@ Run from the repo root unless noted. Bun 1.4.0, Rust stable.
 - Stored in `%APPDATA%/com.mrholmes.bloom/settings.json` as a flat object of `bloom-`-prefixed keys; all values are strings (`"true"`/`"false"` for booleans). `SETTINGS.md` documents every key
 - UI write path: set `localStorage`, then `invoke("save_setting")` → backend caches it and emits `settings-changed`. External file edits are watched and emitted as `settings-external-changed`
 - `src/hooks/useSettingsSync.ts` is the single sync hook for both events and normalizes string booleans/numbers
+- Settings > About > Export/Import Backup is `src-tauri/src/backup.rs`: every settings.json key is in it automatically, plus pinned apps, custom icons, window sizes and the search bar's localStorage history. Any new feature that keeps the user's own data in a file of its own (or localStorage only) must be added there, so a backup always restores everything
 - The CSP in `tauri.conf.json` allow-lists network origins (weather APIs only); add new origins there. New Tauri plugins also need permissions in `capabilities/default.json`
 
 ## Gotchas

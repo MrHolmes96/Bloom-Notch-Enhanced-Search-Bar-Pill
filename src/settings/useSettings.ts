@@ -737,18 +737,33 @@ export function useSettings() {
 	};
 
 	// ── Export / Import ──
+	// A backup: every setting, the dock's pinned apps, custom icons, window
+	// sizes, and the search bar's history (kept only in this web view).
+	const localOnlyForBackup = () => {
+		const local: Record<string, string> = {};
+		for (let i = 0; i < localStorage.length; i++) {
+			const key = localStorage.key(i);
+			if (key?.startsWith("launcher-")) {
+				const value = localStorage.getItem(key);
+				if (value !== null) local[key] = value;
+			}
+		}
+		return local;
+	};
+
 	const handleExportSettings = async () => {
 		setExportStatus("exporting");
 		try {
 			const { save: saveDialog } = await import("@tauri-apps/plugin-dialog");
-			const settingsJson = await invoke<string>("export_settings");
+			const backup = await invoke<string>("export_backup", { local: localOnlyForBackup() });
+			const day = new Date().toISOString().slice(0, 10);
 			const filePath = await saveDialog({
-				title: "Export Bloom Settings",
-				defaultPath: "bloom-settings.json",
-				filters: [{ name: "JSON", extensions: ["json"] }]
+				title: "Export Bloom Backup",
+				defaultPath: `bloom-backup-${day}.json`,
+				filters: [{ name: "Bloom backup", extensions: ["json"] }]
 			});
 			if (filePath) {
-				await invoke("write_settings_to_path", { path: filePath, content: settingsJson });
+				await invoke("write_settings_to_path", { path: filePath, content: backup });
 				setExportStatus("success");
 				setTimeout(() => setExportStatus("idle"), 2000);
 			} else {
@@ -764,23 +779,43 @@ export function useSettings() {
 	const handleImportSettings = async () => {
 		setImportStatus("importing");
 		try {
-			const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
+			const { open: openDialog, ask } = await import("@tauri-apps/plugin-dialog");
 			const filePath = await openDialog({
-				title: "Import Bloom Settings",
-				filters: [{ name: "JSON", extensions: ["json"] }],
+				title: "Import Bloom Backup",
+				filters: [{ name: "Bloom backup", extensions: ["json"] }],
 				multiple: false
 			});
-			if (filePath) {
-				const content = await invoke<string>("read_settings_from_path", {
-					path: filePath as string
-				});
-				await invoke("import_settings", { settings: content });
-				await loadAllSettings();
-				setImportStatus("success");
-				setTimeout(() => setImportStatus("idle"), 2000);
-			} else {
+			if (!filePath) {
 				setImportStatus("idle");
+				return;
 			}
+			const confirmed = await ask(
+				"Your settings, pinned dock apps, custom icons, window sizes and search history are replaced with the backup's (dock apps that aren't on this PC are left out), then Bloom restarts.",
+				{
+					title: "Restore Bloom Backup",
+					kind: "warning",
+					okLabel: "Restore and Restart",
+					cancelLabel: "Cancel"
+				}
+			);
+			if (!confirmed) {
+				setImportStatus("idle");
+				return;
+			}
+			const content = await invoke<string>("read_settings_from_path", {
+				path: filePath as string
+			});
+			const restored = await invoke<{ local: Record<string, string>; pinned: number; skipped: string[] }>(
+				"import_backup",
+				{ content }
+			);
+			for (const [key, value] of Object.entries(restored.local)) {
+				try {
+					localStorage.setItem(key, value);
+				} catch {}
+			}
+			setImportStatus("success");
+			await invoke("restart_bloom");
 		} catch (e) {
 			console.error("Import failed:", e);
 			setImportStatus("error");
