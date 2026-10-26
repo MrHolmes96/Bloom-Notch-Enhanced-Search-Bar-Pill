@@ -12,6 +12,13 @@
 //! and passes every message on unchanged to Explorer's task list, so Explorer
 //! keeps everything apps tell it (thumbnail buttons, overlay icons, tabs).
 //!
+//! Apps wait while Windows hands Bloom each call, so the window has a thread
+//! of its own and answers at once: it only records the window, its state and
+//! its value, and passes the call on. Finding which app a window belongs to
+//! (a scan of every process), telling the dock and writing the log are done on
+//! a worker thread afterwards, so a busy disk or a long process list can never
+//! hold an app's window still.
+//!
 //! This is how ManagedShell (RetroBar, Cairo) and Emerge Desktop receive
 //! these calls alongside Explorer. Bloom checks both properties every two
 //! seconds (Explorer sets its own again when it restarts) and gives Explorer
@@ -105,6 +112,77 @@ static EXPLORER_LIST: AtomicIsize = AtomicIsize::new(0);
 static ANNOUNCING: AtomicBool = AtomicBool::new(false);
 static PRUNING: AtomicBool = AtomicBool::new(false);
 static APP: OnceLock<AppHandle> = OnceLock::new();
+
+/// Work done after the app that sent a call has had its answer.
+enum Work {
+    /// A line for `taskbar-progress.log`.
+    Note(String),
+    /// The first message of a kind, to note with the program that sent it.
+    First { msg: u32, window: isize, value: isize },
+    /// Find which app a window showing progress belongs to.
+    Resolve(isize),
+    /// Tell the dock what changed.
+    Announce,
+}
+
+static WORK: OnceLock<std::sync::mpsc::Sender<Work>> = OnceLock::new();
+
+fn queue(work: Work) {
+    if let Some(sender) = WORK.get() {
+        let _ = sender.send(work);
+    }
+}
+
+/// Starts the worker that does everything the window's thread must not.
+fn start_worker() {
+    let (sender, receiver) = std::sync::mpsc::channel::<Work>();
+    if WORK.set(sender).is_err() {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("bloom-task-list-worker".into())
+        .spawn(move || {
+            while let Ok(work) = receiver.recv() {
+                match work {
+                    Work::Note(line) => write_note(&line),
+                    Work::First { msg, window, value } => {
+                        let program = unsafe {
+                            let mut pid = 0u32;
+                            GetWindowThreadProcessId(HWND(window as *mut _), Some(&mut pid));
+                            crate::commands::any_process_path(pid).unwrap_or_default()
+                        };
+                        write_note(&format!(
+                            "first WM_USER+{} window={window:#x} value={value:#x} program={program}",
+                            msg.wrapping_sub(WM_USER),
+                        ));
+                    }
+                    Work::Resolve(hwnd) => {
+                        let mut pid = 0u32;
+                        unsafe {
+                            GetWindowThreadProcessId(HWND(hwnd as *mut _), Some(&mut pid));
+                        }
+                        let (programs, family) = unsafe { lineage(pid) };
+                        write_note(&format!(
+                            "progress from window={hwnd:#x} program={} processes={}",
+                            programs.join(" < "),
+                            family.len()
+                        ));
+                        let found = ENTRIES.lock().is_ok_and(|mut entries| {
+                            entries.iter_mut().find(|e| e.hwnd == hwnd).is_some_and(|entry| {
+                                entry.programs = programs;
+                                entry.family = family;
+                                true
+                            })
+                        });
+                        if found {
+                            announce();
+                        }
+                    }
+                    Work::Announce => announce(),
+                }
+            }
+        });
+}
 
 fn state_name(state: u32) -> &'static str {
     match state {
@@ -251,17 +329,15 @@ unsafe fn windows_of(families: &[&[u32]]) -> Vec<Vec<isize>> {
         .collect()
 }
 
+/// A window seen showing progress for the first time. Only what Windows
+/// answers at once is looked up here (the app is waiting); its app is found
+/// on the worker, which then tells the dock.
 unsafe fn new_entry(hwnd: isize, state: u32, value: Option<f64>) -> Entry {
     let window = HWND(hwnd as *mut _);
     let mut pid = 0u32;
     GetWindowThreadProcessId(window, Some(&mut pid));
     let owner = GetAncestor(window, GA_ROOTOWNER);
-    let (programs, family) = lineage(pid);
-    note(&format!(
-        "progress from window={hwnd:#x} program={} processes={}",
-        programs.join(" < "),
-        family.len()
-    ));
+    queue(Work::Resolve(hwnd));
     Entry {
         hwnd,
         owner: if owner.0.is_null() {
@@ -269,8 +345,8 @@ unsafe fn new_entry(hwnd: isize, state: u32, value: Option<f64>) -> Entry {
         } else {
             owner.0 as isize
         },
-        programs,
-        family,
+        programs: Vec::new(),
+        family: vec![pid],
         state,
         value,
         announced: None,
@@ -536,20 +612,19 @@ fn note_first(msg: u32, wparam: WPARAM, lparam: LPARAM) {
     }
     seen.push(msg);
     drop(seen);
-    let program = unsafe {
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(HWND(wparam.0 as *mut _), Some(&mut pid));
-        crate::commands::any_process_path(pid).unwrap_or_default()
-    };
-    note(&format!(
-        "first WM_USER+{} window={:#x} value={:#x} program={program}",
-        msg.wrapping_sub(WM_USER),
-        wparam.0,
-        lparam.0
-    ));
+    queue(Work::First {
+        msg,
+        window: wparam.0 as isize,
+        value: lparam.0,
+    });
 }
 
+/// Queues a line for `taskbar-progress.log` (written by the worker).
 fn note(line: &str) {
+    queue(Work::Note(line.to_string()));
+}
+
+fn write_note(line: &str) {
     use std::io::Write;
     let Some(path) = APP
         .get()
@@ -586,7 +661,7 @@ unsafe extern "system" fn window_proc(
             TIMER_ANNOUNCE => {
                 let _ = KillTimer(Some(window), TIMER_ANNOUNCE);
                 ANNOUNCING.store(false, Ordering::Relaxed);
-                announce();
+                queue(Work::Announce);
             }
             TIMER_PRUNE => {
                 let (dropped, empty) = prune();
@@ -595,7 +670,7 @@ unsafe extern "system" fn window_proc(
                     PRUNING.store(false, Ordering::Relaxed);
                 }
                 if dropped {
-                    announce();
+                    queue(Work::Announce);
                 }
             }
             TIMER_CLAIM => claim(),
@@ -637,49 +712,74 @@ unsafe extern "system" fn window_proc(
     forward(msg, wparam, lparam)
 }
 
-/// Makes the window and names it on Bloom's `Shell_TrayWnd` (`host`) and on
-/// Explorer's taskbar. Runs on the tray host's thread, which keeps the
-/// window's messages flowing.
-pub(crate) unsafe fn start(app: &AppHandle, module: HINSTANCE, host: HWND) {
+/// Bloom's task list window, for the hang guard (0 until it is made).
+pub fn window() -> isize {
+    WINDOW.load(Ordering::Relaxed)
+}
+
+/// Makes the window on a thread of its own and names it on Bloom's
+/// `Shell_TrayWnd` (`host`) and on Explorer's taskbar. Apps wait on this
+/// window's thread whenever they report to the taskbar, so nothing else runs
+/// on it (it used to share the tray's thread, where a slow tray message held
+/// every app reporting progress still too).
+pub(crate) fn start(app: &AppHandle, host: HWND) {
     let _ = APP.set(app.clone());
-    let class = WNDCLASSEXW {
-        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-        lpfnWndProc: Some(window_proc),
-        hInstance: module,
-        lpszClassName: w!("BloomTaskList"),
-        ..Default::default()
-    };
-    if RegisterClassExW(&class) == 0 {
-        return;
-    }
-    // A hidden top-level window, as ManagedShell's, never shown.
-    let Ok(window) = CreateWindowExW(
-        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-        w!("BloomTaskList"),
-        w!(""),
-        WS_POPUP,
-        0,
-        0,
-        0,
-        0,
-        None,
-        None,
-        Some(module),
-        None,
-    ) else {
-        return;
-    };
-    // Sandboxed programs reach Explorer's task list, so they must reach this.
-    let _ = ChangeWindowMessageFilterEx(window, WM_COPYDATA, MSGFLT_ALLOW, None);
-    for msg in LIST_MESSAGES {
-        let _ = ChangeWindowMessageFilterEx(window, msg, MSGFLT_ALLOW, None);
-    }
-    WINDOW.store(window.0 as isize, Ordering::Relaxed);
     HOST.store(host.0 as isize, Ordering::Relaxed);
-    // Explorer's own list, found before its taskbar is made to name Bloom's.
-    let _ = explorer_list();
-    claim();
-    SetTimer(Some(window), TIMER_CLAIM, CLAIM_MS, None);
+    start_worker();
+    let _ = std::thread::Builder::new()
+        .name("bloom-task-list".into())
+        .spawn(|| unsafe {
+            use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                DispatchMessageW, GetMessageW, TranslateMessage, MSG,
+            };
+            let Ok(module) = GetModuleHandleW(None) else {
+                return;
+            };
+            let module: HINSTANCE = module.into();
+            let class = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                lpfnWndProc: Some(window_proc),
+                hInstance: module,
+                lpszClassName: w!("BloomTaskList"),
+                ..Default::default()
+            };
+            if RegisterClassExW(&class) == 0 {
+                return;
+            }
+            // A hidden top-level window, as ManagedShell's, never shown.
+            let Ok(window) = CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                w!("BloomTaskList"),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                Some(module),
+                None,
+            ) else {
+                return;
+            };
+            // Sandboxed programs reach Explorer's task list, so they must reach this.
+            let _ = ChangeWindowMessageFilterEx(window, WM_COPYDATA, MSGFLT_ALLOW, None);
+            for msg in LIST_MESSAGES {
+                let _ = ChangeWindowMessageFilterEx(window, msg, MSGFLT_ALLOW, None);
+            }
+            WINDOW.store(window.0 as isize, Ordering::Relaxed);
+            // Explorer's own list, found before its taskbar is made to name Bloom's.
+            let _ = explorer_list();
+            claim();
+            SetTimer(Some(window), TIMER_CLAIM, CLAIM_MS, None);
+            let mut msg = MSG::default();
+            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        });
 }
 
 #[cfg(test)]

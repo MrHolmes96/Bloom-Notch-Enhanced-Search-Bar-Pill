@@ -1249,16 +1249,6 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                                 }
                             }
                         }
-                        (SystemCommand::ToggleVisibility(visible), _) => {
-                            let _ = handle_system.emit("visibility-change", visible);
-                            if let Some(w) = handle_system.get_webview_window("bottom-corners") {
-                                if visible {
-                                    let _ = w.show();
-                                } else {
-                                    let _ = w.hide();
-                                }
-                            }
-                        }
                     }
                 }
                 if let Some(ref aev) = audio_endpoint_volume {
@@ -1470,7 +1460,6 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
 
     crate::brightness::start(app_handle.clone());
 
-    let tx_clone = tx.clone();
     let handle_visibility = app_handle.clone();
     std::thread::spawn(move || {
         use windows::Win32::Foundation::RECT;
@@ -1478,6 +1467,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
             GetForegroundWindow, GetWindowRect, IsIconic, IsZoomed,
         };
         let mut last_visible = true;
+        let mut last_visibility_said = Instant::now();
         let mut last_dock_overlap: Option<bool> = None;
         let mut last_notch_overlap: Option<bool> = None;
         let mut last_dock_maximized: Option<bool> = None;
@@ -1678,13 +1668,20 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     last_dock_maximized = Some(should_maximized);
                 }
 
-                // Update full-screen visibility (hides TopBar/Corners)
-                if current_is_fs && last_visible {
-                    let _ = tx_clone.send(SystemCommand::ToggleVisibility(false));
-                    last_visible = false;
-                } else if !current_is_fs && !last_visible {
-                    let _ = tx_clone.send(SystemCommand::ToggleVisibility(true));
-                    last_visible = true;
+                // Full-screen app in front: the notch and the dock step
+                // aside, and come back when it leaves. Applied here, at once:
+                // it used to go through the media worker, which can be held up
+                // for seconds by a media app that is slow to answer, and a
+                // dock told late (or never) stayed away after the game. Said
+                // again every 3 s, so a page that missed it catches up.
+                if current_is_fs == last_visible || last_visibility_said.elapsed() >= Duration::from_secs(3) {
+                    let leaving_full_screen = !current_is_fs && !last_visible;
+                    last_visible = !current_is_fs;
+                    last_visibility_said = Instant::now();
+                    let _ = handle_visibility.emit("visibility-change", last_visible);
+                    if leaving_full_screen {
+                        back_from_full_screen(&handle_visibility);
+                    }
                 }
 
                 osd_sync_ticks += 1;
@@ -1755,6 +1752,34 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
     });
 
     tx
+}
+
+/// A full-screen app left the front (a game was closed or switched away
+/// from). Games that change the screen's resolution, or keep the screen for a
+/// long time, can leave the strips the notch and the dock reserve dropped by
+/// Windows and Bloom's windows below the game in the always-on-top band. Both
+/// are put back, a moment later, once the desktop has settled.
+fn back_from_full_screen(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        if SHUTTING_DOWN.load(Ordering::Relaxed)
+            || CURRENT_FOREGROUND_FULLSCREEN.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        crate::commands::sync_appbar(app.clone()).await;
+        for label in ["main", "dock"] {
+            if let Some(hwnd) = cached_hwnd(&app, label) {
+                re_assert_topmost(hwnd);
+            }
+        }
+        // The pages decide again from where the pointer is now.
+        MH_LAST_MAIN_IGNORE.store(-1, Ordering::Relaxed);
+        MH_LAST_DOCK_IGNORE.store(-1, Ordering::Relaxed);
+        MH_LAST_OV_IGNORE.store(-1, Ordering::Relaxed);
+        let _ = app.emit_to("dock", "dock-report-rect", ());
+    });
 }
 
 /// What the window in front means for the dock and notch.
@@ -2224,6 +2249,19 @@ fn sync_native_osd(app_handle: &AppHandle) {
 static MOUSE_HOOK_UPDATES: OnceLock<SyncSender<()>> = OnceLock::new();
 static MOUSE_HOOK_CURSOR: AtomicI64 = AtomicI64::new(0);
 static MOUSE_HOOK_LAST_EVENT_MS: AtomicI64 = AtomicI64::new(0);
+/// Where the last button press landed while a dock menu was open (packed
+/// like `MOUSE_HOOK_CURSOR`), for the cursor worker to check.
+static MOUSE_HOOK_PRESS: AtomicI64 = AtomicI64::new(0);
+static MOUSE_HOOK_PRESS_PENDING: AtomicBool = AtomicBool::new(false);
+/// Held while deciding whether the notch, the dock or the overlay takes
+/// clicks. The cursor worker, the edge watchdogs and the input guard all
+/// decide; one at a time, so two can never leave a window taking clicks
+/// while Bloom records it as click-through.
+static HIT_LOCK: Mutex<()> = Mutex::new(());
+
+fn hit_lock() -> std::sync::MutexGuard<'static, ()> {
+    HIT_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 static MH_LAST_MAIN_IGNORE: AtomicI32 = AtomicI32::new(-1);
 static MH_LAST_DOCK_IGNORE: AtomicI32 = AtomicI32::new(-1);
 static MH_LAST_OV_IGNORE: AtomicI32 = AtomicI32::new(-1);
@@ -2469,6 +2507,7 @@ pub fn setup_mouse_hook(app_handle: AppHandle) {
     setup_volume_mixer_watchdog(app_handle.clone());
     setup_dock_edge_watchdog(app_handle.clone());
     setup_top_edge_watchdog(app_handle.clone());
+    setup_input_guard(app_handle.clone());
     std::thread::Builder::new()
         .name("bloom-cursor-worker".into())
         .spawn(move || {
@@ -2482,6 +2521,10 @@ pub fn setup_mouse_hook(app_handle: AppHandle) {
                         }
                         let cursor = unpack_cursor(MOUSE_HOOK_CURSOR.load(Ordering::Relaxed));
                         process_mouse_position(&app_handle, cursor);
+                        if MOUSE_HOOK_PRESS_PENDING.swap(false, Ordering::Relaxed) {
+                            let press = unpack_cursor(MOUSE_HOOK_PRESS.load(Ordering::Relaxed));
+                            close_dock_menu_if_outside(&app_handle, press);
+                        }
                         last_processed = Instant::now();
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -2710,6 +2753,7 @@ fn update_main_interaction(
     now: i64,
     fg_fs: bool,
 ) {
+    let _hit = hit_lock();
     if fg_fs {
         // Fullscreen foreground app or capture overlay: Bloom steps aside and
         // any pending top-edge dwell is dropped.
@@ -2889,6 +2933,94 @@ fn update_main_interaction(
     }
 }
 
+/// A press outside the dock's open menu (or its add-app panel) closes it, as
+/// a click outside a menu does. The dock window lets clicks through outside
+/// the dock and its menu, so its page never sees that press itself.
+fn close_dock_menu_if_outside(app_handle: &AppHandle, press: windows::Win32::Foundation::POINT) {
+    if !MENU_IS_OPEN.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some(dock_hwnd) = cached_hwnd(app_handle, "dock") else {
+        return;
+    };
+    let Some((win_pos, _)) = DOCK_WINDOW_RECT.lock().ok().and_then(|g| *g) else {
+        return;
+    };
+    let scale = window_scale(dock_hwnd);
+    let pad = (10.0 * scale) as i32;
+    let inside = |r: Option<IntRect>| {
+        r.is_some_and(|r| {
+            let x = win_pos.x + (r.x as f64 * scale) as i32 - pad;
+            let y = win_pos.y + (r.y as f64 * scale) as i32 - pad;
+            let w = (r.width as f64 * scale) as i32 + pad * 2;
+            let h = (r.height as f64 * scale) as i32 + pad * 2;
+            press.x >= x && press.x <= x + w && press.y >= y && press.y <= y + h
+        })
+    };
+    let menu = MENU_RECT.lock().ok().and_then(|g| *g);
+    let dock = DOCK_RECT.lock().ok().and_then(|g| *g);
+    if inside(menu) || inside(dock) {
+        return;
+    }
+    MENU_IS_OPEN.store(false, Ordering::Relaxed);
+    let _ = app_handle.emit_to("dock", "dock-dismiss-menus", ());
+}
+
+/// Every quarter second, checks that Bloom's notch, dock and overlay take
+/// clicks only where they should, from where the pointer really is.
+///
+/// Those three are transparent windows over the top, the bottom and the
+/// whole of the screen. Over anything but their own content they must let
+/// clicks through; one that doesn't makes the app under it look frozen (it
+/// still shows, but nothing in it can be clicked) until Bloom restarts. They
+/// were only switched on pointer moves seen by the mouse hook, so a hook
+/// Windows dropped (it does when a busy moment, such as a game, makes the
+/// hook late), a pointer resting after the last switch, or a window whose
+/// style changed underneath (remade after a crash of its web view) could leave
+/// one taking clicks. The guard compares each window's real style with what
+/// Bloom decided, forces a fresh decision where they differ, and decides again
+/// from the pointer's real position either way.
+fn setup_input_guard(app_handle: AppHandle) {
+    let _ = std::thread::Builder::new()
+        .name("bloom-input-guard".into())
+        .spawn(move || {
+            use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, WS_EX_TRANSPARENT};
+            loop {
+                std::thread::sleep(Duration::from_millis(250));
+                if SHUTTING_DOWN.load(Ordering::Relaxed) {
+                    continue;
+                }
+                for (label, decided) in [
+                    ("main", &MH_LAST_MAIN_IGNORE),
+                    ("dock", &MH_LAST_DOCK_IGNORE),
+                    ("overlay", &MH_LAST_OV_IGNORE),
+                ] {
+                    let Some(hwnd) = cached_hwnd(&app_handle, label) else {
+                        continue;
+                    };
+                    if !window_shown(hwnd) {
+                        continue;
+                    }
+                    let _hit = hit_lock();
+                    let wanted = decided.load(Ordering::Relaxed);
+                    if wanted == -1 {
+                        continue;
+                    }
+                    let style = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32;
+                    let passes_clicks = style & WS_EX_TRANSPARENT.0 != 0;
+                    if passes_clicks != (wanted == 1) {
+                        // Out of step: the next decision applies itself.
+                        decided.store(-1, Ordering::Relaxed);
+                    }
+                }
+                let mut point = windows::Win32::Foundation::POINT::default();
+                if unsafe { GetCursorPos(&mut point) }.is_ok() {
+                    process_mouse_position(&app_handle, point);
+                }
+            }
+        });
+}
+
 /// Keeps notch hit-testing fresh while the cursor is stationary: completes a
 /// pending top-edge dwell, forces interactivity during a held-button drag, and
 /// catches boundary crossings the movement-only hook misses (so the click-
@@ -2980,6 +3112,7 @@ fn update_dock_interaction(
     now: i64,
     fg_fs: bool,
 ) {
+    let _hit = hit_lock();
     if fg_fs {
         // Fullscreen foreground app or capture overlay: the dock must not
         // intercept input (e.g. a Snipping Tool selection ending at the
@@ -3120,7 +3253,12 @@ fn update_dock_interaction(
         MH_LAST_EDGE_HOVER.store(new_val, Ordering::Relaxed);
     }
 
-    let should_ignore = !is_click_interactive && !MENU_IS_OPEN.load(Ordering::Relaxed);
+    // Only the dock, its previews and its open menu take clicks. An open menu
+    // used to make the whole dock window (the bottom 600 px of the screen)
+    // take them, so the windows there stopped responding whenever a menu was
+    // left open or its page missed closing it. A press outside the menu now
+    // closes it through the mouse hook (`close_dock_menu_if_outside`).
+    let should_ignore = !is_click_interactive;
     let prev_ignore = MH_LAST_DOCK_IGNORE.load(Ordering::Relaxed);
     let new_ignore = if should_ignore { 1 } else { 0 };
     if prev_ignore != new_ignore {
@@ -3153,10 +3291,24 @@ unsafe extern "system" fn mouse_hook_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
-    if code >= 0 && wparam.0 == WM_MOUSEMOVE as usize && !SHUTTING_DOWN.load(Ordering::Relaxed) {
-        let cursor = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;
-        queue_cursor(cursor);
-        MOUSE_HOOK_LAST_EVENT_MS.store(hook_tick_ms(), Ordering::Relaxed);
+    const WM_LBUTTONDOWN: usize = 0x0201;
+    const WM_RBUTTONDOWN: usize = 0x0204;
+    const WM_MBUTTONDOWN: usize = 0x0207;
+    if code >= 0 && !SHUTTING_DOWN.load(Ordering::Relaxed) {
+        if wparam.0 == WM_MOUSEMOVE as usize {
+            let cursor = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;
+            queue_cursor(cursor);
+            MOUSE_HOOK_LAST_EVENT_MS.store(hook_tick_ms(), Ordering::Relaxed);
+        } else if matches!(wparam.0, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN)
+            && MENU_IS_OPEN.load(Ordering::Relaxed)
+        {
+            // Noted only: the worker decides whether it landed outside the
+            // dock's menu (this callback must return at once).
+            let cursor = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;
+            MOUSE_HOOK_PRESS.store(pack_cursor(cursor), Ordering::Relaxed);
+            MOUSE_HOOK_PRESS_PENDING.store(true, Ordering::Relaxed);
+            queue_cursor(cursor);
+        }
     }
     CallNextHookEx(None, code, wparam, lparam)
 }
@@ -3303,6 +3455,7 @@ fn process_mouse_position(app_handle: &AppHandle, cursor: windows::Win32::Founda
         }
 
         // --- Overlay cursor passthrough ---
+        let _hit = hit_lock();
         if let Some(ov_win) = app_handle.get_webview_window("overlay") {
             if fg_fs {
                 let prev = MH_LAST_OV_IGNORE.load(Ordering::Relaxed);

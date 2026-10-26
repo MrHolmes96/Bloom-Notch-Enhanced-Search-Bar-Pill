@@ -8,6 +8,7 @@ mod commands;
 mod data_folders;
 mod dock_extras;
 mod foreground;
+mod hang_guard;
 mod integrations;
 mod jumplist;
 mod later_windows;
@@ -475,6 +476,7 @@ fn main() {
             launcher::start_hotkey_listener(app.handle().clone());
             notifications::start(app.handle().clone());
             tray_host::start(app.handle().clone());
+            hang_guard::start(app.handle().clone());
             snap_borders::apply(app.handle());
             startup::listen_for_quit(app.handle().clone());
             startup::migrate(app.handle());

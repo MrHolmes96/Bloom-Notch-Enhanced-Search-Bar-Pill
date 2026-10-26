@@ -43,7 +43,6 @@ pub enum SystemCommand {
     MediaNext,
     MediaPrevious,
     MediaSeek(i64),
-    ToggleVisibility(bool),
 }
 
 #[derive(Clone, Copy, Deserialize, Debug)]

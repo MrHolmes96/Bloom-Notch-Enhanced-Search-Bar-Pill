@@ -423,7 +423,7 @@ const Dock = memo(function Dock() {
 			window.removeEventListener("resize", updateRect);
 			observer.disconnect();
 		};
-	}, [pinnedApps, activeApps, isHidden, previewData, scale]);
+	}, [pinnedApps, activeApps, isHidden, isVisible, isExpanded, previewData, scale]);
 
 	useEffect(() => {
 		const init = async () => {
@@ -1250,7 +1250,16 @@ const Dock = memo(function Dock() {
 			closePopup();
 		};
 		window.addEventListener("blur", handleBlur);
-		return () => window.removeEventListener("blur", handleBlur);
+		// A press outside the menu: the dock window lets it through to the app
+		// there, so Bloom tells the page instead.
+		const unlistenDismiss = listen("dock-dismiss-menus", handleBlur);
+		// Back from a full-screen app: say again where the dock takes clicks.
+		const unlistenReport = listen("dock-report-rect", () => reportDockRect.current());
+		return () => {
+			window.removeEventListener("blur", handleBlur);
+			unlistenDismiss.then((f) => f());
+			unlistenReport.then((f) => f());
+		};
 	}, []);
 
 	useEffect(() => {
@@ -1481,6 +1490,12 @@ const Dock = memo(function Dock() {
 						} as React.CSSProperties & Record<string, string | number>
 					}
 					onContextMenu={(e) => handleContextMenu(e, null)}
+					// Where the dock ends up after sliding away or back (a full-screen
+					// app, hover, startup) is where it takes clicks. A slide changes no
+					// size, so nothing else reports it, and the dock kept the place it
+					// had while slid away: back on screen it then let clicks through
+					// until the pointer rested on the bottom edge, as in Smart mode.
+					onAnimationComplete={() => reportDockRect.current()}
 				>
 					<EdgeSurface edge="bottom" flares={isExpanded && !isHidden} />
 					<AnimatePresence>

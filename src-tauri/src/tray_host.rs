@@ -237,6 +237,11 @@ fn now_ms() -> i64 {
     crate::utils::get_now_ms()
 }
 
+/// Bloom's `Shell_TrayWnd`, for the hang guard (0 until it is made).
+pub fn window() -> isize {
+    HOST.load(Ordering::Relaxed)
+}
+
 /// True once the host is up and apps have had a moment to add their icons.
 pub fn ready() -> bool {
     RUNNING.load(Ordering::Relaxed)
@@ -839,7 +844,7 @@ pub fn start(app: AppHandle) {
             raise(hwnd);
             // Apps' taskbar progress (and the rest of `ITaskbarList`) is sent
             // to the window this window names, so Bloom names one of its own.
-            crate::taskbar_progress::start(&app, module.into(), hwnd);
+            crate::taskbar_progress::start(&app, hwnd);
             HOST.store(hwnd.0 as isize, Ordering::Relaxed);
             EXPLORER_SEEN.store(
                 explorer_taskbar().map(|h| h.0 as isize).unwrap_or(0),
