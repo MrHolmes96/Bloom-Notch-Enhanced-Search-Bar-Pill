@@ -3,6 +3,7 @@
 mod app_icon;
 mod backup;
 mod bluetooth;
+mod black_screen;
 mod brightness;
 mod commands;
 mod data_folders;
@@ -228,6 +229,9 @@ fn main() {
             set_menu_open,
             focus_window,
             switch_to_window,
+            black_screen::screen_off_now,
+            launcher::app_hotkey_status,
+            launcher::set_hotkey_recording,
             focus_app_windows,
             close_window,
             quit_bloom,

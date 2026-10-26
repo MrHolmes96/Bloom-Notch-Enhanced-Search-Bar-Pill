@@ -56,7 +56,8 @@ import {
 	RotateCcwSquare as RotateCcwSquareGlyph,
 	Share2 as Share2Glyph,
 	Shield as ShieldGlyph,
-	SunMoon as SunMoonGlyph
+	SunMoon as SunMoonGlyph,
+	MonitorOff
 } from "lucide-react";
 import {
 	CC_KEY,
@@ -3068,6 +3069,20 @@ function App() {
 						title="Bloom Settings"
 					>
 						<SettingsIcon />
+					</button>
+				);
+			case "screen-off":
+				return (
+					<button
+						key={id}
+						className="cc-circular-btn"
+						onClick={(e) => {
+							e.stopPropagation();
+							invoke("screen_off_now").catch(console.error);
+						}}
+						title="Screen Off"
+					>
+						<MonitorOff size={18} strokeWidth={2.5} />
 					</button>
 				);
 			case "restart-bloom":

@@ -40,7 +40,8 @@ import {
 	Globe,
 	Puzzle,
 	FolderSearch,
-	SlidersHorizontal
+	SlidersHorizontal,
+	Keyboard
 } from "lucide-react";
 import {
 	useSettings,
@@ -91,6 +92,7 @@ const CATEGORIES: {
 		sections: [
 			{ id: "startup", label: "Startup", icon: Power },
 			{ id: "time", label: "Time & Battery", icon: Clock },
+			{ id: "shortcuts", label: "Shortcuts", icon: Keyboard },
 			{ id: "bloom", label: "Restart & Reset", icon: RefreshCw }
 		]
 	},

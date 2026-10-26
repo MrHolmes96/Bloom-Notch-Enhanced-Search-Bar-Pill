@@ -10,6 +10,7 @@ export type CCButtonId =
 	| "notifications"
 	| "bloom-settings"
 	| "restart-bloom"
+	| "screen-off"
 	| "night-light"
 	| "airplane"
 	| "hotspot"
@@ -40,6 +41,11 @@ export const CC_BUTTONS: CCButtonInfo[] = [
 	{ id: "notifications", label: "Notification Center", desc: "Open Windows' notification center" },
 	{ id: "bloom-settings", label: "Bloom Settings", desc: "Open these settings" },
 	{ id: "restart-bloom", label: "Restart Bloom", desc: "Restart the notch, dock and search bar" },
+	{
+		id: "screen-off",
+		label: "Screen Off",
+		desc: "Turn the screen off; music and videos keep playing (any key wakes it)"
+	},
 	{
 		id: "night-light",
 		label: "Night Light",

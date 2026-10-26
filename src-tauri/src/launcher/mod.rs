@@ -40,6 +40,70 @@ static QUERY_HOTKEYS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Whether the main hotkey could be registered, for the settings page.
 static HOTKEY_STATUS: Mutex<Option<bool>> = Mutex::new(None);
 
+/// Bloom's own shortcuts (Settings > General > Shortcuts), registered on the
+/// same thread as the search bar's but kept whether or not the search bar is
+/// on, and not muted by its game mode: the setting key, and what it does.
+const APP_HOTKEYS: [(&str, AppHotkey); 2] = [
+    ("bloom-hotkey-screen-off", AppHotkey::ScreenOff),
+    ("bloom-hotkey-notification-center", AppHotkey::NotificationCenter),
+];
+/// Their ids follow the search bar's (main and up to 32 query hotkeys).
+const APP_HOTKEY_BASE: i32 = HOTKEY_ID + 64;
+
+#[derive(Clone, Copy)]
+enum AppHotkey {
+    ScreenOff,
+    NotificationCenter,
+}
+
+/// A shortcut is being recorded in Settings: Bloom's own shortcuts wait.
+static RECORDING: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+pub fn set_hotkey_recording(recording: bool) {
+    RECORDING.store(recording, Ordering::Relaxed);
+}
+
+/// Whether each of Bloom's own shortcuts could be registered (null: none set).
+static APP_HOTKEY_STATUS: Mutex<[Option<bool>; 2]> = Mutex::new([None, None]);
+
+fn register_app_hotkeys(app: &AppHandle, registered: &mut Vec<i32>) {
+    let mut status = [None; 2];
+    for (index, (key, _)) in APP_HOTKEYS.iter().enumerate() {
+        let Some(combo) = setting(app, key).filter(|c| !c.trim().is_empty()) else {
+            continue;
+        };
+        let id = APP_HOTKEY_BASE + index as i32;
+        let ok = parse_hotkey(&combo)
+            .is_some_and(|(m, k)| unsafe { RegisterHotKey(None, id, m, k).is_ok() });
+        if ok {
+            registered.push(id);
+        }
+        status[index] = Some(ok);
+    }
+    if let Ok(mut saved) = APP_HOTKEY_STATUS.lock() {
+        *saved = status;
+    }
+}
+
+fn run_app_hotkey(app: &AppHandle, what: AppHotkey) {
+    match what {
+        AppHotkey::ScreenOff => crate::black_screen::screen_off(),
+        AppHotkey::NotificationCenter => {
+            let app = app.clone();
+            std::thread::spawn(move || crate::commands::toggle_notification_center(&app));
+        }
+    }
+}
+
+/// Whether one of Bloom's own shortcuts is registered: true, false when
+/// another app has that shortcut, or null when none is set.
+#[tauri::command]
+pub fn app_hotkey_status(key: String) -> Option<bool> {
+    let index = APP_HOTKEYS.iter().position(|(k, _)| *k == key)?;
+    APP_HOTKEY_STATUS.lock().ok().and_then(|s| s[index])
+}
+
 fn setting(app: &AppHandle, key: &str) -> Option<String> {
     crate::utils::get_setting_str(app, key)
 }
@@ -128,10 +192,11 @@ struct QueryHotkey {
     query: String,
 }
 
-/// Registers the main hotkey and the custom query hotkeys from settings.
-/// Returns the ids that were registered.
+/// Registers Bloom's own shortcuts, the search bar's main hotkey and its
+/// custom query hotkeys from settings. Returns the ids that were registered.
 fn register_all(app: &AppHandle) -> Vec<i32> {
     let mut registered = Vec::new();
+    register_app_hotkeys(app, &mut registered);
     if !setting_on(app, "bloom-launcher-enabled", true) {
         if let Ok(mut status) = HOTKEY_STATUS.lock() {
             *status = None;
@@ -181,6 +246,15 @@ pub fn start_hotkey_listener(app: AppHandle) {
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             if msg.message == WM_HOTKEY {
                 let id = msg.wParam.0 as i32;
+                if let Some((_, what)) = id
+                    .checked_sub(APP_HOTKEY_BASE)
+                    .and_then(|index| APP_HOTKEYS.get(index as usize))
+                {
+                    if !RECORDING.load(Ordering::Relaxed) {
+                        run_app_hotkey(&app, *what);
+                    }
+                    continue;
+                }
                 if GAME_MODE.load(Ordering::Relaxed) {
                     continue;
                 }
@@ -206,6 +280,7 @@ pub fn start_hotkey_listener(app: AppHandle) {
                 }
                 registered = register_all(&app);
                 let _ = app.emit("launcher-hotkey-status", hotkey_status());
+                let _ = app.emit("app-hotkeys-changed", ());
             }
         }
     });

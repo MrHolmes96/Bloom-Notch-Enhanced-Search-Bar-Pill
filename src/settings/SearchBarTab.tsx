@@ -183,15 +183,17 @@ function keyName(code: string): string | null {
 }
 
 /** Click, then press the shortcut. The search bar's own shortcuts pause meanwhile. */
-function HotkeyRecorder({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+export function HotkeyRecorder({ value, onChange }: { value: string; onChange: (v: string) => void }) {
 	const [recording, setRecording] = useState(false);
 	const ref = useRef<HTMLButtonElement>(null);
 
 	useEffect(() => {
 		if (!recording) return;
 		void invoke("launcher_set_game_mode", { enabled: true });
+		void invoke("set_hotkey_recording", { recording: true });
 		return () => {
 			void invoke("launcher_set_game_mode", { enabled: false });
+			void invoke("set_hotkey_recording", { recording: false });
 		};
 	}, [recording]);
 

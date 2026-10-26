@@ -2576,6 +2576,13 @@ pub fn open_sound_settings() {
     }
 }
 
+/// The Notification Center shortcut: opens the notification center the bell
+/// opens (Bloom's or Windows'), or closes Bloom's when it is open.
+pub fn toggle_notification_center(_app: &AppHandle) {
+    crate::foreground::grant();
+    open_notification_center();
+}
+
 #[tauri::command]
 pub fn open_notification_center() {
     if crate::notifications::try_open_bloom_center() {
@@ -3539,7 +3546,7 @@ pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Re
     if crate::utils::is_scale_key(&key) {
         re_register_appbars(&app, &settings);
     }
-    if key.starts_with("bloom-launcher-") {
+    if key.starts_with("bloom-launcher-") || key.starts_with("bloom-hotkey-") {
         crate::launcher::reload_hotkeys();
     }
     if key.starts_with("bloom-notify-") {
@@ -4334,7 +4341,9 @@ pub fn setup_settings_watcher(app: AppHandle) {
                             .iter()
                             .map(|(key, _)| key)
                             .chain(removed.iter())
-                            .any(|key| key.starts_with("bloom-launcher-"))
+                            .any(|key| {
+                                key.starts_with("bloom-launcher-") || key.starts_with("bloom-hotkey-")
+                            })
                         {
                             crate::launcher::reload_hotkeys();
                         }

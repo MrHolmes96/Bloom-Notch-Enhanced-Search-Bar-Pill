@@ -21,7 +21,8 @@ import {
 	Share2,
 	Shield,
 	SunMoon,
-	X
+	X,
+	MonitorOff
 } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { useStoredString } from "./useStoredSetting";
@@ -43,6 +44,7 @@ const ICONS: Record<CCButtonId, typeof Bell> = {
 	notifications: Bell,
 	"bloom-settings": Settings,
 	"restart-bloom": RotateCw,
+	"screen-off": MonitorOff,
 	"night-light": SunMoon,
 	airplane: Plane,
 	hotspot: RadioTower,

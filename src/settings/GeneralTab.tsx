@@ -1,8 +1,9 @@
 import { Power, Clock, BatteryWarning, RefreshCw, RotateCcw, LogOut } from "lucide-react";
 import { SettingRow } from "./SettingRow";
+import { ShortcutsSettings } from "./ShortcutsSettings";
 
 /** Settings > General's sub-sections. */
-export type GeneralSection = "startup" | "time" | "bloom";
+export type GeneralSection = "startup" | "time" | "shortcuts" | "bloom";
 
 interface GeneralTabProps {
 	section: GeneralSection;
@@ -62,6 +63,9 @@ export function GeneralTab({
 				</div>
 			</>
 		);
+	}
+	if (section === "shortcuts") {
+		return <ShortcutsSettings />;
 	}
 	if (section === "bloom") {
 		return (
