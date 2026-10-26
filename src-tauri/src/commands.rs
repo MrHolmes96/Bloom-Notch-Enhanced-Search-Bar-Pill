@@ -752,6 +752,137 @@ fn is_pwa_shortcut_for(app: &AppInfo, name: &str, host_exe: &str) -> bool {
             .is_some_and(|exe| exe.eq_ignore_ascii_case(host_exe))
 }
 
+/// Whether Windows can find this shell path (an app in its list of apps).
+pub(crate) fn shell_item_exists(path: &str) -> bool {
+    use windows::Win32::UI::Shell::{IShellItem, SHCreateItemFromParsingName};
+    let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        SHCreateItemFromParsingName::<_, _, IShellItem>(
+            windows::core::PCWSTR(wide.as_ptr()),
+            None,
+        )
+        .is_ok()
+    }
+}
+
+/// The entry in Windows' list of apps (`shell:AppsFolder`) for a program, the
+/// way the Start menu opens it. Windows names a desktop app there by its
+/// folder's id and the rest of its path ("{1AC14E77-...}\WindowsPowerShell\
+/// v1.0\powershell.exe" for System32), so the program's path is turned back
+/// into that name. None when it has no entry.
+pub(crate) fn start_menu_entry(path: &str) -> Option<String> {
+    use windows::Win32::UI::Shell::{
+        FOLDERID_LocalAppData, FOLDERID_ProgramFilesCommonX64, FOLDERID_ProgramFilesCommonX86,
+        FOLDERID_ProgramFilesX64, FOLDERID_ProgramFilesX86, FOLDERID_RoamingAppData,
+        FOLDERID_System, FOLDERID_SystemX86, FOLDERID_UserProgramFiles, FOLDERID_Windows,
+        SHGetKnownFolderPath, KF_FLAG_DEFAULT,
+    };
+    let path = path.trim().trim_matches('"');
+    if !path.to_lowercase().ends_with(".exe") || !std::path::Path::new(path).is_file() {
+        return None;
+    }
+    let lower = path.to_lowercase();
+    // The most specific folder first (System32 before Windows).
+    let folders = [
+        FOLDERID_System,
+        FOLDERID_SystemX86,
+        FOLDERID_UserProgramFiles,
+        FOLDERID_ProgramFilesCommonX64,
+        FOLDERID_ProgramFilesCommonX86,
+        FOLDERID_ProgramFilesX64,
+        FOLDERID_ProgramFilesX86,
+        FOLDERID_Windows,
+        FOLDERID_LocalAppData,
+        FOLDERID_RoamingAppData,
+    ];
+    for id in folders {
+        let folder = unsafe {
+            let Ok(found) = SHGetKnownFolderPath(&id, KF_FLAG_DEFAULT, None) else {
+                continue;
+            };
+            let text = found.to_string().ok();
+            windows::Win32::System::Com::CoTaskMemFree(Some(found.0 as *const _));
+            text
+        };
+        let Some(folder) = folder else {
+            continue;
+        };
+        let prefix = format!("{}\\", folder.trim_end_matches('\\').to_lowercase());
+        let Some(rest) = lower.strip_prefix(&prefix) else {
+            continue;
+        };
+        // The rest as written, not lower-cased.
+        let rest = &path[path.len() - rest.len()..];
+        let entry = format!("shell:AppsFolder\\{{{id:?}}}\\{rest}");
+        if shell_item_exists(&entry) {
+            return Some(entry);
+        }
+    }
+    let plain = format!("shell:AppsFolder\\{path}");
+    shell_item_exists(&plain).then_some(plain)
+}
+
+/// Whether a program runs in a console window (Command Prompt, PowerShell,
+/// command-line tools) rather than a window of its own.
+fn is_console_program(path: &str) -> bool {
+    use windows::Win32::UI::Shell::{SHGetFileInfoW, SHGFI_EXETYPE};
+    let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    let kind = unsafe {
+        SHGetFileInfoW(
+            windows::core::PCWSTR(wide.as_ptr()),
+            Default::default(),
+            None,
+            0,
+            SHGFI_EXETYPE,
+        )
+    };
+    // "PE" with no Windows version: a console program.
+    kind & 0xFFFF == 0x4550 && kind >> 16 == 0
+}
+
+/// Windows Terminal, when it is the default terminal (Settings > System >
+/// For developers > Terminal, or "Let Windows decide" with it installed):
+/// where Windows opens console programs.
+fn default_terminal() -> Option<String> {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
+    const WINDOWS_DECIDES: &str = "{00000000-0000-0000-0000-000000000000}";
+    const TERMINAL: [&str; 2] = [
+        "{E12CFF52-A866-4C77-9A90-F570A7AA2C6B}",
+        "{86633F1F-6454-40EC-89CE-DA4EBA977EE2}",
+    ];
+    let key: Vec<u16> = "Console\\%%Startup\0".encode_utf16().collect();
+    let value: Vec<u16> = "DelegationTerminal\0".encode_utf16().collect();
+    let mut buffer = [0u16; 64];
+    let mut size = (buffer.len() * 2) as u32;
+    let chosen = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            windows::core::PCWSTR(key.as_ptr()),
+            windows::core::PCWSTR(value.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buffer.as_mut_ptr() as *mut _),
+            Some(&mut size),
+        )
+        .is_ok()
+    }
+    .then(|| {
+        let length = (size as usize / 2).min(buffer.len());
+        String::from_utf16_lossy(&buffer[..length])
+            .trim_end_matches('\0')
+            .to_uppercase()
+    })
+    .unwrap_or_else(|| WINDOWS_DECIDES.to_string());
+    if chosen != WINDOWS_DECIDES && !TERMINAL.contains(&chosen.as_str()) {
+        return None;
+    }
+    let local = std::env::var("LOCALAPPDATA").ok()?;
+    let terminal = std::path::Path::new(&local).join("Microsoft\\WindowsApps\\wt.exe");
+    terminal
+        .exists()
+        .then(|| terminal.to_string_lossy().into_owned())
+}
+
 /// Opens a file path, shortcut, or shell application id through the shell.
 pub(crate) fn launch_path(path: &str) {
     // The app opens in front, as from the taskbar, not behind the window
@@ -766,13 +897,16 @@ pub(crate) fn launch_path(path: &str) {
 
         // Shortcuts and shell app ids must be launched through the shell itself so
         // that arguments (Chrome/Edge PWAs) and package identities (Store apps) survive.
+        // A program with an entry in Windows' list of apps opens through it,
+        // as from Start: with its own app identity and as Windows' settings
+        // say (a console program in the default terminal).
         let shell_target = if path.to_lowercase().ends_with(".lnk") {
             Some(path.to_string())
         } else if is_aumid_path(path) {
             let id = path.trim().trim_start_matches("shell:AppsFolder\\");
             Some(format!("shell:AppsFolder\\{}", id))
         } else {
-            None
+            start_menu_entry(path)
         };
 
         if let Some(target) = shell_target {
@@ -849,6 +983,30 @@ pub(crate) fn launch_path(path: &str) {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // A console program opens in the default terminal, as Windows opens
+        // it from Start and Explorer.
+        if is_console_program(&final_path) {
+            if let Some(terminal) = default_terminal() {
+                let wide_terminal: Vec<u16> =
+                    terminal.encode_utf16().chain(std::iter::once(0)).collect();
+                let arguments: Vec<u16> = format!("new-tab -- \"{final_path}\"")
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                let res = ShellExecuteW(
+                    None,
+                    windows::core::PCWSTR(wide_open.as_ptr()),
+                    windows::core::PCWSTR(wide_terminal.as_ptr()),
+                    windows::core::PCWSTR(arguments.as_ptr()),
+                    None,
+                    SW_SHOWNORMAL,
+                );
+                if res.0 as usize > 32 {
+                    return;
                 }
             }
         }
@@ -1109,6 +1267,17 @@ pub async fn get_active_windows() -> Vec<AppInfo> {
     })
     .await
     .unwrap_or_default()
+}
+
+/// Switches to a window (the search bar's Open Windows): always brings it
+/// forward, never minimizes it as a second click on its dock icon does.
+#[tauri::command]
+pub async fn switch_to_window(hwnd: isize) {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::foreground::switch_to(HWND(hwnd as *mut _));
+    })
+    .await
+    .ok();
 }
 
 #[tauri::command]

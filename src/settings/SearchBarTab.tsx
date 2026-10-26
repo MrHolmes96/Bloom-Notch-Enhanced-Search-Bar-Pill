@@ -29,6 +29,7 @@ import {
 	Plus,
 	Power,
 	Puzzle,
+	Layers,
 	RefreshCw,
 	RotateCcw,
 	Rows3,
@@ -536,7 +537,34 @@ const PLUGIN_ICONS: Record<string, typeof Search> = {
 	shell: SquareTerminal,
 	processes: Cpu,
 	bookmarks: Bookmark,
+	windows: Layers,
 	indicator: Puzzle
+};
+
+/** A short guide at the top of each section of the page. */
+const SECTION_GUIDE: Record<SearchBarSection, string> = {
+	general:
+		"Open the search bar with its shortcut (or the Windows key, when chosen below) and type. " +
+		"It searches everything switched on under What It Searches; start with a keyword and a " +
+		'space to search one thing only ("?" lists the keywords). Enter opens the top result, ' +
+		"Shift+Enter or a right-click shows its other actions, Ctrl+Enter opens its location, " +
+		"Ctrl+Shift+Enter runs it as administrator and Esc closes the bar.",
+	look: "How the search bar looks: its colors, size, clock and the text in the empty box.",
+	engines:
+		"The search engine used for each kind of web search, and the sites with a keyword of their " +
+		'own. Type an engine\'s keyword and your search ("g cats"); one with * is offered under ' +
+		"every search. Suggestions send what you type to the engine you choose.",
+	plugins:
+		"Choose what the search bar searches. A source with * joins every search; give it a " +
+		'keyword instead and it is searched only when you type that keyword first ("kill chrome"). ' +
+		"Switched off, it isn't searched at all.",
+	apps:
+		"Apps come from Windows' own list of apps, the same list as Start, and open the way Start " +
+		"opens them: console programs such as PowerShell open in your default terminal (Settings > " +
+		"System > For developers > Terminal). Files and folders come from Windows Search's index.",
+	advanced:
+		"Commands run from the search bar, text that expands as you type, hotkeys that open the " +
+		"bar with a search already typed, and clearing what it has learned."
 };
 
 function readFlag(key: string, fallback: boolean) {
@@ -557,6 +585,9 @@ export function SearchBarTab({ section }: { section: SearchBarSection }) {
 		() => localStorage.getItem(BACKEND_KEYS.position) || "notch"
 	);
 	const [screen, setScreen] = useState(() => localStorage.getItem(BACKEND_KEYS.screen) || "cursor");
+	const [windowsKey, setWindowsKey] = useState(
+		() => localStorage.getItem(BACKEND_KEYS.windowsKey) || "off"
+	);
 	const [queryHotkeys, setQueryHotkeys] = useState<QueryHotkey[]>(() => {
 		try {
 			return JSON.parse(localStorage.getItem(BACKEND_KEYS.queryHotkeys) || "[]");
@@ -596,6 +627,7 @@ export function SearchBarTab({ section }: { section: SearchBarSection }) {
 	const setBackend = (key: string, value: string) => saveBackendSetting(key, value);
 	return (
 		<>
+			<div className="sb-note sb-guide">{SECTION_GUIDE[section]}</div>
 			{!enabled && section !== "general" && (
 				<div className="setting-group-note">
 					The Search Bar Pill is off; switch it on under Search Bar Pill &gt; General.
@@ -638,9 +670,36 @@ export function SearchBarTab({ section }: { section: SearchBarSection }) {
 									/>
 								</SettingRow>
 								<SettingRow
+									icon={Command}
+									label="Open With the Windows Key"
+									desc={
+										windowsKey === "start"
+											? "The Windows key alone opens the search bar instead of Start (Start stays on the dock)"
+											: windowsKey === "search"
+												? "Win+S opens the search bar instead of Windows Search"
+												: windowsKey === "both"
+													? "The Windows key and Win+S open the search bar instead of Start and Windows Search"
+													: "Use it like Windows' own search"
+									}
+								>
+									<Select
+										value={windowsKey}
+										options={[
+											["off", "Off"],
+											["start", "Windows key"],
+											["search", "Win+S"],
+											["both", "Both"]
+										]}
+										onChange={(v) => {
+											setWindowsKey(v);
+											setBackend(BACKEND_KEYS.windowsKey, v);
+										}}
+									/>
+								</SettingRow>
+								<SettingRow
 									icon={Gamepad2}
 									label="Ignore in Full Screen"
-									desc="The shortcut does nothing while a full-screen app or game is in front"
+									desc="The shortcut (and the Windows key) does nothing to the search bar while a full-screen app or game is in front"
 								>
 									<Toggle
 										checked={ignoreFullscreen}
@@ -1028,7 +1087,7 @@ export function SearchBarTab({ section }: { section: SearchBarSection }) {
 
 			{enabled && section === "plugins" && (
 				<>
-					<div className="setting-group-label">Plugins & Keywords</div>
+					<div className="setting-group-label">What It Searches</div>
 					<div className="setting-group">
 						{PLUGINS.map((plugin, i) => {
 							const p = config.plugins[plugin.id];

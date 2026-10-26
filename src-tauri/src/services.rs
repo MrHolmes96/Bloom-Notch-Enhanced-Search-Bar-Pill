@@ -31,6 +31,61 @@ const MASK_VK: u16 = 0xE8;
 
 /// Raw handle of the installed keyboard hook, 0 while none is installed.
 static KEYBOARD_HOOK: AtomicIsize = AtomicIsize::new(0);
+/// Settings > Search Bar Pill > Open With the Windows Key: which of Windows'
+/// own keys open the search bar instead. Bits: `WIN_KEY_START` for the
+/// Windows key alone (the Start menu), `WIN_KEY_SEARCH` for Win+S (Windows
+/// Search). Read from the settings by the hook's thread, never in the hook.
+static WIN_KEY_TAKES: AtomicU8 = AtomicU8::new(0);
+const WIN_KEY_START: u8 = 1;
+const WIN_KEY_SEARCH: u8 = 2;
+/// Another key was pressed while the Windows key was down (so letting go of
+/// it isn't a press of the Windows key alone).
+static WIN_KEY_COMBO: AtomicBool = AtomicBool::new(false);
+/// Win+S was taken: its S keyup is taken too.
+static WIN_S_TAKEN: AtomicBool = AtomicBool::new(false);
+
+/// What the Windows key setting asks for, now (also whether the search bar
+/// is on, and Bloom's game mode / full-screen rule for it).
+fn win_key_setting() -> u8 {
+    let Some(app) = KEYBOARD_HOOK_APP_HANDLE.get() else {
+        return 0;
+    };
+    let get = |key: &str| crate::utils::get_setting_str(app, key);
+    if get("bloom-launcher-enabled").as_deref() == Some("false") {
+        return 0;
+    }
+    match get("bloom-launcher-windows-key").as_deref() {
+        Some("start") => WIN_KEY_START,
+        Some("search") => WIN_KEY_SEARCH,
+        Some("both") => WIN_KEY_START | WIN_KEY_SEARCH,
+        _ => 0,
+    }
+}
+
+/// Whether the search bar may take a Windows key press right now: not in
+/// the search bar's game mode, and not over a full-screen app when it is set
+/// to leave those alone (the Start menu then opens as usual).
+fn win_key_may_open_search_bar() -> bool {
+    if crate::launcher::launcher_game_mode() {
+        return false;
+    }
+    let Some(app) = KEYBOARD_HOOK_APP_HANDLE.get() else {
+        return false;
+    };
+    !(crate::utils::get_setting_str(app, "bloom-launcher-ignore-fullscreen").as_deref()
+        == Some("true")
+        && CURRENT_FOREGROUND_FULLSCREEN.load(Ordering::Relaxed))
+}
+
+/// Opens the search bar for a Windows key press, off the hook's thread.
+fn open_search_bar_from_key() {
+    let Some(app) = KEYBOARD_HOOK_APP_HANDLE.get().cloned() else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        crate::launcher::toggle_launcher(&app, None);
+    });
+}
 
 /// Win+1-9 is the only feature that needs a global keyboard hook: Explorer
 /// already registers those hotkeys, so `RegisterHotKey` can't claim them.
@@ -63,8 +118,11 @@ pub fn setup_keyboard_hook(app_handle: AppHandle) {
                 if SHUTTING_DOWN.load(Ordering::Relaxed) {
                     break;
                 }
+                let takes = win_key_setting();
+                WIN_KEY_TAKES.store(takes, Ordering::Relaxed);
                 set_keyboard_hook(
-                    NATIVE_TASKBAR_HIDDEN.load(Ordering::Relaxed) && dock_win_number_enabled(),
+                    (NATIVE_TASKBAR_HIDDEN.load(Ordering::Relaxed) && dock_win_number_enabled())
+                        || takes != 0,
                 );
                 if GetMessageW(&mut message, None, 0, 0).0 <= 0 {
                     break;
@@ -207,15 +265,44 @@ unsafe extern "system" fn keyboard_hook_proc(
         if (kb.flags.0 & LLKHF_INJECTED.0) == 0 {
             if vk_code == VK_LWIN || vk_code == VK_RWIN {
                 if is_down {
-                    WIN_KEY_DOWN.store(true, Ordering::Relaxed);
+                    if !WIN_KEY_DOWN.swap(true, Ordering::Relaxed) {
+                        WIN_KEY_COMBO.store(false, Ordering::Relaxed);
+                    }
                     // A fresh Win press always starts a fresh combo, even if the
                     // previous digit's keyup was missed.
                     WIN_NUMBER_HELD.store(0, Ordering::Relaxed);
                 } else if is_up {
-                    WIN_KEY_DOWN.store(false, Ordering::Relaxed);
+                    let was_down = WIN_KEY_DOWN.swap(false, Ordering::Relaxed);
                     WIN_NUMBER_HELD.store(0, Ordering::Relaxed);
+                    // The Windows key pressed alone: the search bar instead of
+                    // Start, when set to. A tap of an unassigned key first
+                    // keeps Explorer from opening Start as the key comes up.
+                    if was_down
+                        && !WIN_KEY_COMBO.load(Ordering::Relaxed)
+                        && WIN_KEY_TAKES.load(Ordering::Relaxed) & WIN_KEY_START != 0
+                        && win_key_may_open_search_bar()
+                    {
+                        send_start_menu_mask();
+                        open_search_bar_from_key();
+                    }
                 }
             } else if WIN_KEY_DOWN.load(Ordering::Relaxed) {
+                if is_down {
+                    WIN_KEY_COMBO.store(true, Ordering::Relaxed);
+                }
+                // Win+S: the search bar instead of Windows Search.
+                if vk_code.0 == 0x53 && WIN_KEY_TAKES.load(Ordering::Relaxed) & WIN_KEY_SEARCH != 0 {
+                    if is_down && win_key_may_open_search_bar() && win_key_physically_down() {
+                        if !WIN_S_TAKEN.swap(true, Ordering::Relaxed) {
+                            send_start_menu_mask();
+                            open_search_bar_from_key();
+                        }
+                        return windows::Win32::Foundation::LRESULT(1);
+                    }
+                    if is_up && WIN_S_TAKEN.swap(false, Ordering::Relaxed) {
+                        return windows::Win32::Foundation::LRESULT(1);
+                    }
+                }
                 if let Some(index) = win_number_index(vk_code.0) {
                     let slot = index + 1;
                     if is_up {

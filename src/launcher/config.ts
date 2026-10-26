@@ -24,6 +24,7 @@ export type PluginId =
 	| "shell"
 	| "processes"
 	| "bookmarks"
+	| "windows"
 	| "indicator";
 
 export interface PluginInfo {
@@ -105,6 +106,13 @@ export const PLUGINS: PluginInfo[] = [
 		name: "Browser Bookmarks",
 		description: "Search bookmarks from Chrome, Edge, Brave, Vivaldi and Opera",
 		defaultKeyword: "b",
+		hasKeyword: true
+	},
+	{
+		id: "windows",
+		name: "Open Windows",
+		description: "Switch to any open window by its title or app, like Alt+Tab",
+		defaultKeyword: "*",
 		hasKeyword: true
 	},
 	{
@@ -332,7 +340,8 @@ export const BACKEND_KEYS = {
 	ignoreFullscreen: "bloom-launcher-ignore-fullscreen",
 	position: "bloom-launcher-position",
 	screen: "bloom-launcher-screen",
-	queryHotkeys: "bloom-launcher-query-hotkeys"
+	queryHotkeys: "bloom-launcher-query-hotkeys",
+	windowsKey: "bloom-launcher-windows-key"
 } as const;
 
 export function saveBackendSetting(key: string, value: string) {

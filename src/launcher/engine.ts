@@ -13,6 +13,7 @@ import {
 	searchWindowsSettings
 } from "./plugins/system";
 import { searchBookmarks, searchUrl, searchWeb, webSuggestions } from "./plugins/web";
+import { searchWindows } from "./plugins/windows";
 import type { ParsedQuery, Replay, Result, SearchContext } from "./types";
 
 /** What a keyword switches the bar to. */
@@ -122,6 +123,9 @@ function runGlobal(ctx: SearchContext, search: string, isCurrent: () => boolean)
 	if (isGlobal(config, "bookmarks") && !location && q.length > 1) {
 		later.push(() => searchBookmarks(ctx, q, isCurrent));
 	}
+	if (isGlobal(config, "windows") && !location) {
+		later.push(() => searchWindows(ctx, q, isCurrent));
+	}
 	return { now, later };
 }
 
@@ -170,6 +174,9 @@ function runKeyword(
 			break;
 		case "indicator":
 			now.push(...searchIndicator(ctx, search));
+			break;
+		case "windows":
+			later.push(() => searchWindows(ctx, search, isCurrent, true));
 			break;
 		case "web":
 			now.push(...searchWeb(ctx, keyword, search));

@@ -1198,6 +1198,12 @@ input:checked + .slider:before {
 	line-height: 1.4;
 }
 
+/* The guide at the top of each Search Bar Pill section. */
+.sb-guide {
+	margin: 0 6px 14px;
+	opacity: 0.9;
+}
+
 /* Hides a divider left at the end of a group. */
 .sb-group-end {
 	display: none;
