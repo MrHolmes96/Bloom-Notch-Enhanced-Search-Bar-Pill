@@ -1268,6 +1268,25 @@ pub async fn get_active_windows() -> Vec<AppInfo> {
     .unwrap_or_default()
 }
 
+/// Saves a note from the notch as a file, where the save dialog said: a
+/// Markdown (.md) or a text (.txt) file only.
+#[tauri::command]
+pub async fn save_note_file(path: String, contents: String) -> Result<(), String> {
+    let path = std::path::PathBuf::from(path);
+    let allowed = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("txt"));
+    if !allowed || !path.is_absolute() {
+        return Err("Notes are saved as .md or .txt files".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::write(&path, contents.as_bytes()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Switches to a window (the search bar's Open Windows): always brings it
 /// forward, never minimizes it as a second click on its dock icon does.
 #[tauri::command]

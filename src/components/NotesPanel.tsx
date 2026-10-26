@@ -1,16 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ArrowDownUp,
 	Check,
-	ChevronLeft,
 	ListTodo,
 	Maximize2,
 	StickyNote,
-	Trash2,
 	X
 } from "lucide-react";
 import { saveStoredSetting } from "../settings/useStoredSetting";
+import { noteHasMore, noteTitle } from "./noteFormat";
 import "./NotesPanel.css";
+
+// The editor (and its toolbar) loads only when a note is opened.
+const NoteEditor = lazy(() => import("./NoteEditor"));
 
 /**
  * Quick notes and to-dos in the notch, for things that don't belong in a
@@ -28,6 +30,9 @@ export interface NoteItem {
 	created: number;
 	/** When the text was last changed (absent until it is). */
 	updated?: number;
+	/** The text is Markdown, as the note's editor writes it (notes from
+	 * before the editor's toolbar are plain text). */
+	md?: boolean;
 }
 
 export type NotesView = "all" | "notes" | "todos";
@@ -134,21 +139,6 @@ function sorted(items: NoteItem[], sort: NotesSort, kind: "notes" | "todos") {
 	return list;
 }
 
-/** A note's first line, as it is listed. */
-const firstLine = (text: string) => text.split("\n").find((line) => line.trim())?.trim() ?? "";
-
-/** "17:42", or "26 Oct 17:42" on another day (24-hour clock). */
-function whenText(time: number) {
-	const date = new Date(time);
-	const clock = date.toLocaleTimeString(undefined, {
-		hour: "2-digit",
-		minute: "2-digit",
-		hour12: false
-	});
-	if (date.toDateString() === new Date().toDateString()) return clock;
-	return `${date.toLocaleDateString(undefined, { day: "numeric", month: "short" })} ${clock}`;
-}
-
 const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
 interface NotesPanelProps {
@@ -238,6 +228,7 @@ export function NotesPanel({ items, onChange, onPinChange, onLayoutChange }: Not
 	const note = openNote ? items.find((n) => n.id === openNote) : undefined;
 	if (note) {
 		return (
+			<Suspense fallback={<div className="notes-panel notes-editor" />}>
 			<NoteEditor
 				key={note.id}
 				note={note}
@@ -245,9 +236,11 @@ export function NotesPanel({ items, onChange, onPinChange, onLayoutChange }: Not
 				onSave={(text) => {
 					const current = itemsRef.current;
 					const known = current.find((n) => n.id === note.id);
-					if (!known || known.text === text) return;
+					if (!known || (known.text === text && known.md)) return;
 					onChange(
-						current.map((n) => (n.id === note.id ? { ...n, text, updated: Date.now() } : n))
+						current.map((n) =>
+							n.id === note.id ? { ...n, text, md: true, updated: Date.now() } : n
+						)
 					);
 				}}
 				onClose={(text) => {
@@ -261,6 +254,7 @@ export function NotesPanel({ items, onChange, onPinChange, onLayoutChange }: Not
 					setOpenNote(null);
 				}}
 			/>
+			</Suspense>
 		);
 	}
 
@@ -406,8 +400,8 @@ export function NotesPanel({ items, onChange, onPinChange, onLayoutChange }: Not
 												}
 											}}
 										>
-											{firstLine(item.text) || "Empty note"}
-											{!item.todo && item.text.trim().includes("\n") && (
+											{noteTitle(item.text, !!item.md) || "Empty note"}
+											{!item.todo && noteHasMore(item.text) && (
 												<span className="notes-more"> …</span>
 											)}
 										</span>
@@ -436,110 +430,6 @@ export function NotesPanel({ items, onChange, onPinChange, onLayoutChange }: Not
 					Clear {doneCount} done
 				</button>
 			)}
-		</div>
-	);
-}
-
-interface NoteEditorProps {
-	note: NoteItem;
-	onPinChange: (pinned: boolean) => void;
-	/** Saves the text (called while typing, a moment after each pause). */
-	onSave: (text: string) => void;
-	/** Back to the list, with the text as it is now. */
-	onClose: (text: string) => void;
-	onDelete: () => void;
-}
-
-/** A note as a full page in the notch, like a small Notepad. */
-function NoteEditor({ note, onPinChange, onSave, onClose, onDelete }: NoteEditorProps) {
-	const [text, setText] = useState(note.text);
-	const textRef = useRef(text);
-	textRef.current = text;
-	const saveTimer = useRef<number | null>(null);
-
-	const saveNow = () => {
-		if (saveTimer.current !== null) {
-			window.clearTimeout(saveTimer.current);
-			saveTimer.current = null;
-		}
-		onSave(textRef.current);
-	};
-
-	// Leaving the page (or the notch closing) saves it.
-	useEffect(() => {
-		return () => {
-			saveNow();
-			onPinChange(false);
-		};
-	}, []);
-
-	const close = () => {
-		saveNow();
-		onClose(textRef.current);
-	};
-
-	const lines = text.split("\n").length;
-	return (
-		<div className="notes-panel notes-editor" onClick={(e) => e.stopPropagation()}>
-			<div className="notes-editor-bar">
-				<button type="button" className="notes-back" onClick={close} title="Back to the list (Esc)">
-					<ChevronLeft size={14} />
-					Notes
-				</button>
-				<span className="notes-editor-meta">
-					{note.updated ? `Edited ${whenText(note.updated)}` : `Created ${whenText(note.created)}`}
-					{" · "}
-					{text.length} {text.length === 1 ? "character" : "characters"}
-					{lines > 1 ? ` · ${lines} lines` : ""}
-				</span>
-				<button type="button" className="notes-delete visible" title="Delete note" onClick={onDelete}>
-					<Trash2 size={12} />
-				</button>
-			</div>
-			<textarea
-				className="notes-editor-text"
-				autoFocus
-				value={text}
-				spellCheck={false}
-				placeholder="Write your note…"
-				onChange={(e) => {
-					setText(e.target.value);
-					if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
-					saveTimer.current = window.setTimeout(saveNow, 500);
-				}}
-				onFocus={(e) => {
-					// Typing keeps the notch open; clicking another app lets it close.
-					onPinChange(true);
-					// The caret starts at the end, as in Notepad on reopening.
-					const end = e.currentTarget.value.length;
-					e.currentTarget.setSelectionRange(end, end);
-				}}
-				onBlur={() => {
-					saveNow();
-					onPinChange(false);
-				}}
-				onKeyDown={(e) => {
-					e.stopPropagation();
-					if (e.key === "Escape") {
-						e.preventDefault();
-						close();
-					}
-					// Tab indents instead of leaving the page.
-					if (e.key === "Tab") {
-						e.preventDefault();
-						const area = e.currentTarget;
-						const { selectionStart, selectionEnd } = area;
-						const next = `${text.slice(0, selectionStart)}\t${text.slice(selectionEnd)}`;
-						setText(next);
-						requestAnimationFrame(() =>
-							area.setSelectionRange(selectionStart + 1, selectionStart + 1)
-						);
-						if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
-						saveTimer.current = window.setTimeout(saveNow, 500);
-					}
-				}}
-				onWheel={(e) => e.stopPropagation()}
-			/>
 		</div>
 	);
 }

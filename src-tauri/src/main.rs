@@ -237,6 +237,7 @@ fn main() {
             set_menu_open,
             focus_window,
             switch_to_window,
+            save_note_file,
             black_screen::screen_off_now,
             launcher::app_hotkey_status,
             launcher::set_hotkey_recording,
