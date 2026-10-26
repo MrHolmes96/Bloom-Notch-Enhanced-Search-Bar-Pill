@@ -1227,7 +1227,14 @@ fn host_state() -> TrayState {
             icon_path: app.map(|(_, program)| program),
         });
     }
-    write_icon_list(&candidates_summary(&summary));
+    let collapsed = collapse_same_tiles(&mut list);
+    let mut text = candidates_summary(&summary);
+    for (name, path) in collapsed {
+        text.push_str(&format!(
+            "\nleft out at the end: looks the same as another tile: {name} ({path})"
+        ));
+    }
+    write_icon_list(&text);
     list.sort_by_key(|a| a.name.to_lowercase());
     TrayState {
         icons: list,
@@ -1247,6 +1254,115 @@ fn host_state() -> TrayState {
             })
             .collect(),
     }
+}
+
+/// What the tile shows for a picture: the icon's own picture, or else the
+/// program whose icon is drawn (the app's, for a background program).
+fn shown_program(icon: &TrayIconInfo) -> String {
+    icon.icon_path
+        .clone()
+        .unwrap_or_else(|| icon.path.clone())
+        .to_lowercase()
+}
+
+/// Whether two tiles look the same in the notch: the same name, and the same
+/// picture, or one of them drawn from the other's program. This catches an
+/// app's icon however many ways it reaches Bloom (NVIDIA's from more than one
+/// of its programs, or added again under a new id, with a state after its
+/// name in one tooltip), and still keeps an app's different icons apart (a
+/// personal and a work OneDrive differ in picture).
+fn looks_the_same(a: &TrayIconInfo, b: &TrayIconInfo) -> bool {
+    if !a.name.trim().eq_ignore_ascii_case(b.name.trim()) || a.name.trim().is_empty() {
+        return false;
+    }
+    match (&a.image, &b.image) {
+        (Some(left), Some(right)) => same_picture(left, right),
+        _ => shown_program(a) == shown_program(b),
+    }
+}
+
+/// A picture shrunk to 16 x 16 (red, green, blue, alpha), to compare how two
+/// pictures look: one app's logo loaded from two of its programs is the same
+/// to the eye but not byte for byte.
+fn fingerprint(data_uri: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    type Cache = HashMap<u64, Option<Vec<u8>>>;
+    static CACHE: std::sync::Mutex<Option<Cache>> = std::sync::Mutex::new(None);
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        data_uri.hash(&mut hasher);
+        hasher.finish()
+    };
+    if let Some(found) = CACHE.lock().ok()?.as_ref().and_then(|c| c.get(&key)) {
+        return found.clone();
+    }
+    let made = (|| {
+        let encoded = data_uri.split_once(',').map_or(data_uri, |(_, data)| data);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .ok()?;
+        let picture = image::load_from_memory(&bytes).ok()?;
+        Some(
+            picture
+                .resize_exact(16, 16, image::imageops::FilterType::Triangle)
+                .to_rgba8()
+                .into_raw(),
+        )
+    })();
+    if let Ok(mut cache) = CACHE.lock() {
+        let cache = cache.get_or_insert_with(HashMap::new);
+        if cache.len() > 512 {
+            cache.clear();
+        }
+        cache.insert(key, made.clone());
+    }
+    made
+}
+
+/// Whether two pictures look the same: equal, or differing on average by
+/// less than 4 % per colour once shrunk (what scaling one logo differently
+/// leaves). Two different icons, even of one app, differ far more.
+fn same_picture(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    let (Some(a), Some(b)) = (fingerprint(left), fingerprint(right)) else {
+        return false;
+    };
+    if a.len() != b.len() || a.is_empty() {
+        return false;
+    }
+    let total: u64 = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs() as u64)
+        .sum();
+    total * 100 < a.len() as u64 * 255 * 4
+}
+
+/// Keeps one tile of each set that looks the same: the one shown most
+/// plainly (not hidden by Tray Icon Manager or in Windows' tray, on the
+/// taskbar). Returns the name and program of each tile left out.
+fn collapse_same_tiles(list: &mut Vec<TrayIconInfo>) -> Vec<(String, String)> {
+    let rank = |icon: &TrayIconInfo| (icon.manager_hidden, icon.hidden_in_windows, !icon.promoted);
+    let mut kept: Vec<TrayIconInfo> = Vec::with_capacity(list.len());
+    let mut left_out = Vec::new();
+    for icon in list.drain(..) {
+        match kept.iter().position(|other| looks_the_same(other, &icon)) {
+            Some(index) => {
+                let dropped = if rank(&icon) < rank(&kept[index]) {
+                    std::mem::replace(&mut kept[index], icon)
+                } else {
+                    icon
+                };
+                left_out.push((dropped.name, dropped.path));
+            }
+            None => kept.push(icon),
+        }
+    }
+    *list = kept;
+    left_out
 }
 
 /// The dock's tray apps from Bloom's tray host, with each app's windows.
@@ -1867,6 +1983,81 @@ pub(crate) fn interact_in_explorer(key: &str, context_menu: bool) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tile(name: &str, path: &str, image: Option<&str>, icon_path: Option<&str>) -> TrayIconInfo {
+        TrayIconInfo {
+            id: format!("{name}{path}{image:?}"),
+            key: String::new(),
+            name: name.into(),
+            tooltip: String::new(),
+            path: path.into(),
+            promoted: false,
+            manager_hidden: false,
+            hidden_in_windows: false,
+            image: image.map(str::to_string),
+            icon_path: icon_path.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn tiles_that_look_the_same_are_shown_once() {
+        let container = r"C:\Program Files\NVIDIA Corporation\NvContainer\nvcontainer.exe";
+        let app = r"C:\Program Files\NVIDIA Corporation\NVIDIA app\CEF\NVIDIA app.exe";
+        let mut list = vec![
+            // Two copies of the container's icon, the same picture.
+            tile("NVIDIA app", container, Some("png-a"), None),
+            tile("NVIDIA app", container, Some("png-a"), None),
+            // Shown as the app (no picture of its own) and the app's own icon.
+            tile("NVIDIA app", container, None, Some(app)),
+            tile("nvidia APP", app, Some("png-b"), None),
+            // A personal and a work OneDrive: one name, different pictures.
+            tile("OneDrive", r"C:\OneDrive\OneDrive.exe", Some("white"), None),
+            tile("OneDrive", r"C:\OneDrive\OneDrive.exe", Some("blue"), None),
+        ];
+        let left_out = collapse_same_tiles(&mut list);
+        let names: Vec<_> = list.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["NVIDIA app", "NVIDIA app", "OneDrive", "OneDrive"]);
+        assert_eq!(left_out.len(), 2);
+    }
+
+    fn png(size: u32, colour: [u8; 4]) -> String {
+        use base64::Engine;
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(size, size, |x, _| {
+            if x < size / 2 {
+                image::Rgba(colour)
+            } else {
+                image::Rgba([0, 0, 0, 0])
+            }
+        }))
+        .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .unwrap();
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        )
+    }
+
+    #[test]
+    fn one_logo_at_two_sizes_is_one_picture() {
+        let green = [118, 185, 0, 255];
+        assert!(same_picture(&png(64, green), &png(32, green)));
+        assert!(!same_picture(&png(64, green), &png(64, [0, 120, 215, 255])));
+    }
+
+    #[test]
+    fn the_plainest_copy_is_kept() {
+        let path = r"C:\App\app.exe";
+        let mut hidden = tile("App", path, Some("p"), None);
+        hidden.manager_hidden = true;
+        let mut shown = tile("App", path, Some("p"), None);
+        shown.promoted = true;
+        let mut list = vec![hidden, shown];
+        collapse_same_tiles(&mut list);
+        assert_eq!(list.len(), 1);
+        assert!(!list[0].manager_hidden && list[0].promoted);
+    }
+
     #[test]
     #[ignore = "read-only check against the current Windows desktop"]
     fn live_tray_discovery() {
