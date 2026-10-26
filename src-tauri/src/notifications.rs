@@ -238,12 +238,19 @@ fn find_toast_window() -> Option<HWND> {
 
 // ---------------------------------------------------------------- how long Windows' pop-up stays
 
-/// Windows' pop-up stays this long (seconds) while Bloom's cards stand in for
-/// it, so it can still be clicked for as long as a card shows (and is closed
-/// with the card). Apps such as Discord take their notification back the
-/// moment Windows' pop-up goes; a click after that could only open the app,
-/// never the chat it was about.
-const POPUP_SECONDS: u32 = 60;
+/// Windows' hidden pop-up stays this long (seconds) while Bloom's cards
+/// stand in for it: Windows' own longest choice (5 minutes). Apps built on
+/// Electron (Discord, Slack, WhatsApp and many more) forget a notification
+/// the moment its pop-up closes, by its time running out or being
+/// dismissed: from then on a click, even in Windows' own notification
+/// center, can only open the app, never the message. So the hidden pop-up is
+/// kept after its card goes (time up), and a click on the notification in
+/// Bloom's center within these minutes is a click on it, landing on the
+/// exact message. Dismissing the card (its X) closes it at once.
+const POPUP_SECONDS: u32 = 300;
+/// The time earlier Bloom versions kept the pop-up (their value is Bloom's
+/// too, never the user's).
+const EARLIER_POPUP_SECONDS: [u32; 1] = [60];
 /// SPI_GETMESSAGEDURATION / SPI_SETMESSAGEDURATION: Settings > Accessibility >
 /// Visual effects > "Dismiss notifications after this amount of time".
 const SPI_GETMESSAGEDURATION: u32 = 0x2016;
@@ -304,6 +311,10 @@ fn keep_popups_for_cards() {
         return;
     };
     if backup.exists() {
+        // Kept by an earlier Bloom, for a shorter time: Bloom's time now.
+        if message_duration().is_some_and(|now| EARLIER_POPUP_SECONDS.contains(&now)) {
+            set_message_duration(POPUP_SECONDS);
+        }
         return;
     }
     let Some(own) = message_duration() else {
@@ -330,15 +341,17 @@ fn put_back_popup_time() {
         return;
     };
     // Only Bloom's own value is replaced: one the user changed meanwhile stays.
-    if message_duration() == Some(POPUP_SECONDS) {
+    if message_duration()
+        .is_some_and(|now| now == POPUP_SECONDS || EARLIER_POPUP_SECONDS.contains(&now))
+    {
         set_message_duration(own);
     }
     let _ = std::fs::remove_file(&backup);
 }
 
-/// Bloom's card for a notification closed (its time was up, it was
-/// dismissed, or a newer card pushed it out): Windows' hidden pop-up for it
-/// closes too, as it would have on its own.
+/// Bloom's card for a notification was dismissed (its X): Windows' hidden
+/// pop-up for it closes too. A card whose time ran out leaves the pop-up up,
+/// for clicks from Bloom's center (see `POPUP_SECONDS`).
 #[tauri::command]
 pub async fn notification_card_closed(title: String, body: String) {
     let _ = tauri::async_runtime::spawn_blocking(move || {

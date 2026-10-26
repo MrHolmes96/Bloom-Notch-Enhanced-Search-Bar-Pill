@@ -88,7 +88,7 @@ export default function Notifications() {
 			setCards((prev) => {
 				const next = [card, ...prev];
 				// Pushed out by newer cards: closed like any other.
-				next.slice(MAX_CARDS).forEach(closeWindowsPopup);
+				// Pushed out by newer cards: their pop-ups stay, as for time up.
 				return next.slice(0, MAX_CARDS);
 			});
 		};
@@ -116,7 +116,10 @@ export default function Notifications() {
 			if (timers.current.has(card.key)) continue;
 			timers.current.set(
 				card.key,
-				window.setTimeout(() => remove(card.key), Math.max(2, duration) * 1000)
+				// Time up: only the card goes. Windows' hidden pop-up stays, so a
+				// click from Bloom's center later still reaches the app (apps such
+				// as Discord forget a notification once its pop-up closes).
+				window.setTimeout(() => remove(card.key, false), Math.max(2, duration) * 1000)
 			);
 		}
 	}, [cards, hovered, typing, duration]);
