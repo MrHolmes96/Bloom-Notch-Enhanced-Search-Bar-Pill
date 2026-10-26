@@ -3,6 +3,13 @@
 //! headphones and speakers; pairing new devices, with PIN prompts answered in
 //! Bloom's own UI; and removing devices.
 //!
+//! Battery: what Windows shows in Settings (a property of the device), else
+//! what a Bluetooth LE device says through its Battery Service, and for Xbox
+//! controllers what Windows.Gaming.Input reports, which also says whether it
+//! is charging. A monitor keeps the connected devices' levels fresh for the
+//! notch's battery bubble and warns once when one runs low (Settings > Notch
+//! > Bluetooth Battery).
+//!
 //! Windows has no public "connect this device" call. Audio devices are the
 //! exception: their Bluetooth audio driver accepts a one-shot reconnect or
 //! disconnect request, the same one the Settings app sends. Other devices
@@ -49,12 +56,14 @@ const PAIRING_ANSWER_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct BtDevice {
     pub id: String,
     pub name: String,
-    /// "audio", "phone", "computer", "keyboard", "mouse", "gamepad",
-    /// "wearable" or "other".
+    /// "earbuds", "headset", "headphones", "speaker", "audio", "phone",
+    /// "computer", "keyboard", "mouse", "gamepad", "wearable" or "other".
     pub kind: &'static str,
     pub connected: bool,
     /// Percent, when the device reports it.
     pub battery: Option<u8>,
+    /// Whether it is charging, when it says (Xbox controllers do).
+    pub charging: Option<bool>,
     /// Bloom can connect and disconnect it (headphones and speakers).
     pub can_connect: bool,
 }
@@ -121,7 +130,14 @@ fn classic_kind(raw: u32) -> &'static str {
     match major {
         1 => "computer",
         2 => "phone",
-        4 => "audio",
+        4 => match minor {
+            // Wearable headset, hands-free.
+            0x01 | 0x02 => "headset",
+            0x06 => "headphones",
+            // Loudspeaker, portable audio, car audio, hi-fi.
+            0x05 | 0x07 | 0x08 | 0x0A => "speaker",
+            _ => "audio",
+        },
         5 if minor & 0x10 != 0 => "keyboard",
         5 if minor & 0x20 != 0 => "mouse",
         5 if matches!(minor & 0x0F, 1 | 2) => "gamepad",
@@ -142,9 +158,33 @@ fn le_kind(category: u16, subcategory: u16) -> &'static str {
             0x03 | 0x04 => "gamepad",
             _ => "other",
         },
-        0x21 | 0x22 | 0x25 | 0x29 => "audio",
+        // Wearable audio device: earbud, headset, headphones, neck band.
+        0x25 => match subcategory {
+            0x01 => "earbuds",
+            0x02 | 0x04 => "headset",
+            0x03 => "headphones",
+            _ => "audio",
+        },
+        0x21 => "speaker",
+        0x22 | 0x29 => "audio",
         _ => "other",
     }
+}
+
+/// Earbuds usually call themselves headphones or a headset to Windows; their
+/// names tell them apart.
+fn refine_kind(kind: &'static str, name: &str) -> &'static str {
+    let lower = name.to_lowercase();
+    let earbuds = ["buds", "pods", "earbud", "earphone", "in-ear", "wf-", "elite", "liberty"];
+    if matches!(kind, "audio" | "headset" | "headphones")
+        && earbuds.iter().any(|word| lower.contains(word))
+    {
+        return "earbuds";
+    }
+    if kind == "other" && (lower.contains("controller") || lower.contains("gamepad")) {
+        return "gamepad";
+    }
+    kind
 }
 
 fn device_kind(id: &HSTRING) -> &'static str {
@@ -271,6 +311,8 @@ fn list_sync() -> Vec<BtDevice> {
     let mut by_container: HashMap<GUID, BtDevice> = HashMap::new();
     let mut unknown_container = Vec::new();
     let mut containers = HashMap::new();
+    // Connected Bluetooth LE devices by name, for reading their Battery Service.
+    let mut le_ids: HashMap<String, String> = HashMap::new();
 
     for selector in selectors(true) {
         for info in find_all(
@@ -282,12 +324,17 @@ fn list_sync() -> Vec<BtDevice> {
             let name = info.Name().map(|n| n.to_string()).unwrap_or_default();
             let connected = prop::<bool>(&info, PROP_CONNECTED).unwrap_or(false);
             let container = prop::<GUID>(&info, PROP_CONTAINER);
+            let kind = refine_kind(device_kind(&id), &name);
+            if connected && id.to_string().starts_with("BluetoothLE#") {
+                le_ids.insert(name.to_lowercase(), id.to_string());
+            }
             let device = BtDevice {
                 id: id.to_string(),
                 name,
-                kind: device_kind(&id),
+                kind,
                 connected,
                 battery: None,
+                charging: None,
                 can_connect: container.is_some_and(|c| audio.contains_key(&c)),
             };
             match container {
@@ -343,6 +390,19 @@ fn list_sync() -> Vec<BtDevice> {
         }
     }
     let mut devices = merged;
+    // What the monitor read itself, for devices Windows has no level for.
+    let extra = EXTRA_BATTERY.lock().ok().and_then(|e| e.clone()).unwrap_or_default();
+    for device in devices.iter_mut().filter(|d| d.connected) {
+        if let Some(&(level, charging)) = extra.get(&device.name.to_lowercase()) {
+            if device.battery.is_none() {
+                device.battery = Some(level);
+            }
+            device.charging = charging.or(device.charging);
+        }
+    }
+    if let Ok(mut known) = LE_IDS.lock() {
+        *known = Some(le_ids);
+    }
     devices.sort_by(|a, b| {
         b.connected
             .cmp(&a.connected)
@@ -398,6 +458,233 @@ pub async fn bluetooth_set_connected(id: String, connected: bool) -> Result<(), 
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+// ── Battery levels Windows doesn't show, and the monitor ──────────────────────
+
+/// Levels read by the monitor (device name, lower case, to percent and
+/// whether it is charging when known).
+type Extra = HashMap<String, (u8, Option<bool>)>;
+static EXTRA_BATTERY: Mutex<Option<Extra>> = Mutex::new(None);
+/// Connected Bluetooth LE devices by name, from the last listing.
+static LE_IDS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+/// Wakes the monitor (a device connected, disconnected or changed).
+static MONITOR_WAKE: OnceLock<Sender<()>> = OnceLock::new();
+
+/// A Bluetooth LE device's battery, from its Battery Service.
+fn gatt_battery(le_id: &str) -> Option<u8> {
+    use windows::Devices::Bluetooth::BluetoothCacheMode;
+    use windows::Devices::Bluetooth::GenericAttributeProfile::{
+        GattCharacteristicUuids, GattCommunicationStatus, GattServiceUuids,
+    };
+    use windows::Storage::Streams::DataReader;
+    let device = BluetoothLEDevice::FromIdAsync(&HSTRING::from(le_id))
+        .and_then(|op| op.get())
+        .ok()?;
+    let level = (|| -> Option<u8> {
+        let services = device
+            .GetGattServicesForUuidWithCacheModeAsync(
+                GattServiceUuids::Battery().ok()?,
+                BluetoothCacheMode::Cached,
+            )
+            .and_then(|op| op.get())
+            .ok()?;
+        if services.Status().ok()? != GattCommunicationStatus::Success {
+            return None;
+        }
+        let list = services.Services().ok()?;
+        if list.Size().ok()? == 0 {
+            return None;
+        }
+        let service = list.GetAt(0).ok()?;
+        let read = (|| -> Option<u8> {
+            let characteristics = service
+                .GetCharacteristicsForUuidWithCacheModeAsync(
+                    GattCharacteristicUuids::BatteryLevel().ok()?,
+                    BluetoothCacheMode::Cached,
+                )
+                .and_then(|op| op.get())
+                .ok()?;
+            let found = characteristics.Characteristics().ok()?;
+            if found.Size().ok()? == 0 {
+                return None;
+            }
+            let value = found
+                .GetAt(0)
+                .ok()?
+                .ReadValueWithCacheModeAsync(BluetoothCacheMode::Uncached)
+                .and_then(|op| op.get())
+                .ok()?;
+            if value.Status().ok()? != GattCommunicationStatus::Success {
+                return None;
+            }
+            let reader = DataReader::FromBuffer(&value.Value().ok()?).ok()?;
+            reader.ReadByte().ok()
+        })();
+        let _ = service.Close();
+        read
+    })();
+    let _ = device.Close();
+    level.filter(|level| *level <= 100)
+}
+
+/// Xbox (and other Windows.Gaming.Input) controllers' batteries, by name.
+fn gamepad_batteries() -> Extra {
+    use windows::Gaming::Input::{Gamepad, RawGameController};
+    use windows::System::Power::BatteryStatus;
+    let mut found = Extra::new();
+    let Ok(pads) = Gamepad::Gamepads() else {
+        return found;
+    };
+    for index in 0..pads.Size().unwrap_or(0) {
+        let Ok(pad) = pads.GetAt(index) else { continue };
+        let Some(name) = RawGameController::FromGameController(&pad)
+            .and_then(|raw| raw.DisplayName())
+            .ok()
+            .map(|n| n.to_string().to_lowercase())
+        else {
+            continue;
+        };
+        let Ok(report) = pad.TryGetBatteryReport() else {
+            continue;
+        };
+        let full = report
+            .FullChargeCapacityInMilliwattHours()
+            .and_then(|v| v.Value())
+            .ok();
+        let left = report
+            .RemainingCapacityInMilliwattHours()
+            .and_then(|v| v.Value())
+            .ok();
+        let (Some(full), Some(left)) = (full, left) else {
+            continue;
+        };
+        if full <= 0 {
+            continue;
+        }
+        let level = ((left as f64 / full as f64) * 100.0).round().clamp(0.0, 100.0) as u8;
+        let charging = report
+            .Status()
+            .ok()
+            .and_then(|status| match status {
+                BatteryStatus::Charging => Some(true),
+                BatteryStatus::Discharging | BatteryStatus::Idle => Some(false),
+                _ => None,
+            });
+        found.insert(name, (level, charging));
+    }
+    found
+}
+
+fn setting_number(app: &AppHandle, key: &str, fallback: u32) -> u32 {
+    crate::utils::get_setting_str(app, key)
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .unwrap_or(fallback)
+}
+
+/// Keeps the connected devices' battery levels fresh (every minute, and at
+/// once when a device connects or changes) for the notch's battery bubble
+/// ("bluetooth-devices"), and warns once when a device drops to the level
+/// set in Settings > Notch > Bluetooth Battery (again only after it charged).
+pub fn start_battery_monitor(app: AppHandle) {
+    let (wake, woken) = channel::<()>();
+    if MONITOR_WAKE.set(wake).is_err() {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("bloom-bt-battery".into())
+        .spawn(move || {
+            com_init();
+            // Devices already warned about, until they charge back above.
+            let mut warned: std::collections::HashSet<String> = Default::default();
+            let mut gatt_read_at: HashMap<String, std::time::Instant> = HashMap::new();
+            loop {
+                let _ = woken.recv_timeout(Duration::from_secs(60));
+                // A burst of changes (a device connecting) is one update.
+                std::thread::sleep(Duration::from_millis(400));
+                while woken.try_recv().is_ok() {}
+                if crate::state::SHUTTING_DOWN.load(std::sync::atomic::Ordering::Relaxed) {
+                    continue;
+                }
+                // Nothing to do with the bubble and the warning both off.
+                let bubble = crate::utils::get_setting_str(&app, "bloom-bt-bubble").as_deref()
+                    != Some("false");
+                if !bubble && setting_number(&app, "bloom-bt-low-battery", 20) == 0 {
+                    continue;
+                }
+                let mut devices = list_sync();
+                // Levels Windows doesn't show: controllers every time (cheap),
+                // a Battery Service every five minutes per device (it may wake
+                // the device).
+                let mut extra = gamepad_batteries();
+                let le_ids = LE_IDS.lock().ok().and_then(|m| m.clone()).unwrap_or_default();
+                let old = EXTRA_BATTERY.lock().ok().and_then(|e| e.clone()).unwrap_or_default();
+                for device in devices.iter().filter(|d| d.connected && d.battery.is_none()) {
+                    let key = device.name.to_lowercase();
+                    if extra.contains_key(&key) {
+                        continue;
+                    }
+                    let due = gatt_read_at
+                        .get(&key)
+                        .is_none_or(|at| at.elapsed() >= Duration::from_secs(300));
+                    if due {
+                        if let Some(id) = le_ids.get(&key) {
+                            gatt_read_at.insert(key.clone(), std::time::Instant::now());
+                            if let Some(level) = gatt_battery(id) {
+                                extra.insert(key.clone(), (level, None));
+                            }
+                        }
+                    } else if let Some(previous) = old.get(&key) {
+                        extra.insert(key.clone(), *previous);
+                    }
+                }
+                if let Ok(mut saved) = EXTRA_BATTERY.lock() {
+                    *saved = Some(extra.clone());
+                }
+                for device in devices.iter_mut().filter(|d| d.connected) {
+                    if let Some(&(level, charging)) = extra.get(&device.name.to_lowercase()) {
+                        device.battery = device.battery.or(Some(level));
+                        device.charging = charging.or(device.charging);
+                    }
+                }
+                emit("bluetooth-devices", devices.clone());
+
+                let threshold = setting_number(&app, "bloom-bt-low-battery", 20).min(95);
+                for device in &devices {
+                    let key = device.name.to_lowercase();
+                    let Some(level) = device.battery.filter(|_| device.connected) else {
+                        continue;
+                    };
+                    if threshold == 0
+                        || device.charging == Some(true)
+                        || level as u32 > threshold + 5
+                    {
+                        warned.remove(&key);
+                        continue;
+                    }
+                    if level as u32 <= threshold && warned.insert(key) {
+                        crate::notifications::show_bloom_notice(
+                            &app,
+                            &format!("{} battery low", device.name),
+                            &format!("{level}% left. Charge it soon."),
+                        );
+                    }
+                }
+            }
+        });
+}
+
+fn wake_monitor() {
+    if let Some(wake) = MONITOR_WAKE.get() {
+        let _ = wake.send(());
+    }
+}
+
+/// The connected devices with their batteries, at once (the notch asks when
+/// it starts, then hears "bluetooth-devices").
+#[tauri::command]
+pub fn bluetooth_battery_refresh() {
+    wake_monitor();
 }
 
 // ── Watching ─────────────────────────────────────────────────────────────────
@@ -459,7 +746,10 @@ pub fn setup_bluetooth_notifications(app: AppHandle) {
         com_init();
         let mut watchers = Vec::new();
         for selector in selectors(true) {
-            let changed = || emit("bluetooth-changed", ());
+            let changed = || {
+                emit("bluetooth-changed", ());
+                wake_monitor();
+            };
             if let Ok(watcher) = watch(
                 &selector,
                 move |_| changed(),

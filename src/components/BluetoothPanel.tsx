@@ -2,28 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
-	Bluetooth,
 	ChevronLeft,
-	Gamepad2,
-	Headphones,
-	Keyboard,
-	Laptop,
 	LoaderCircle,
-	Mouse,
-	Plus,
-	Smartphone,
-	Watch
+	Plus
 } from "lucide-react";
+import { DeviceKindIcon, MiniBattery, type BtDeviceInfo } from "./BluetoothBattery";
 import "./QuickPanel.css";
 
-interface BtDevice {
-	id: string;
-	name: string;
-	kind: string;
-	connected: boolean;
-	battery: number | null;
-	can_connect: boolean;
-}
+type BtDevice = BtDeviceInfo;
 
 interface BtNearbyDevice {
 	id: string;
@@ -49,24 +35,7 @@ const ERROR_TEXT: Record<string, string> = {
 const errorText = (e: unknown) => ERROR_TEXT[String(e)] ?? String(e);
 
 function KindIcon({ kind }: { kind: string }) {
-	switch (kind) {
-		case "audio":
-			return <Headphones />;
-		case "phone":
-			return <Smartphone />;
-		case "computer":
-			return <Laptop />;
-		case "keyboard":
-			return <Keyboard />;
-		case "mouse":
-			return <Mouse />;
-		case "gamepad":
-			return <Gamepad2 />;
-		case "wearable":
-			return <Watch />;
-		default:
-			return <Bluetooth />;
-	}
+	return <DeviceKindIcon kind={kind} />;
 }
 
 interface BluetoothPanelProps {
@@ -79,6 +48,8 @@ interface BluetoothPanelProps {
 
 export function BluetoothPanel({ enabled, onToggle, onBack, onPinChange }: BluetoothPanelProps) {
 	const [devices, setDevices] = useState<BtDevice[] | null>(null);
+	// Batteries go red at the low-battery warning's level.
+	const lowLevel = Number(localStorage.getItem("bloom-bt-low-battery") ?? "20") || 20;
 	const [selected, setSelected] = useState<string | null>(null);
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState<{ id: string; text: string } | null>(null);
@@ -111,6 +82,10 @@ export function BluetoothPanel({ enabled, onToggle, onBack, onPinChange }: Bluet
 				void refresh();
 			}, 300);
 		});
+		// Fresh battery levels from Bloom's monitor (every minute).
+		const unlistenBatteries = listen<BtDevice[]>("bluetooth-devices", (e) =>
+			setDevices(e.payload)
+		);
 		const unlistenNearby = listen<BtNearbyDevice[]>("bluetooth-nearby", (e) =>
 			setNearby(e.payload)
 		);
@@ -121,6 +96,7 @@ export function BluetoothPanel({ enabled, onToggle, onBack, onPinChange }: Bluet
 		return () => {
 			if (debounce !== null) window.clearTimeout(debounce);
 			unlistenChanged.then((f) => f());
+			unlistenBatteries.then((f) => f());
 			unlistenNearby.then((f) => f());
 			unlistenPrompt.then((f) => f());
 			onPinChange(false);
@@ -196,7 +172,7 @@ export function BluetoothPanel({ enabled, onToggle, onBack, onPinChange }: Bluet
 	const statusText = (d: BtDevice) => {
 		if (busy === d.id) return d.connected ? "Disconnecting…" : "Connecting…";
 		if (!d.connected) return "Not connected";
-		return d.battery !== null ? `Connected · ${d.battery}%` : "Connected";
+		return d.charging ? "Connected · Charging" : "Connected";
 	};
 
 	const renderPrompt = () => {
@@ -332,6 +308,12 @@ export function BluetoothPanel({ enabled, onToggle, onBack, onPinChange }: Bluet
 									<span className="qp-row-name">{d.name}</span>
 									<span className="qp-row-sub">{statusText(d)}</span>
 								</span>
+								{d.connected && (
+									<span className="qp-row-battery">
+										{d.battery !== null && `${d.battery}%`}
+										<MiniBattery level={d.battery} charging={d.charging} low={lowLevel} />
+									</span>
+								)}
 							</button>
 							{expanded && (
 								<div className="qp-row-actions">

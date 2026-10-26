@@ -41,7 +41,8 @@ import {
 	Puzzle,
 	FolderSearch,
 	SlidersHorizontal,
-	Keyboard
+	Keyboard,
+	Bluetooth
 } from "lucide-react";
 import {
 	useSettings,
@@ -120,7 +121,8 @@ const CATEGORIES: {
 			{ id: "weather", label: "Weather", icon: CloudSun },
 			{ id: "widgets", label: "Status Widgets", icon: Gauge },
 			{ id: "controls", label: "Controls", icon: LayoutGrid },
-			{ id: "tray", label: "System Tray", icon: PanelRightDashed }
+			{ id: "tray", label: "System Tray", icon: PanelRightDashed },
+			{ id: "bluetooth", label: "Bluetooth", icon: Bluetooth }
 		]
 	},
 	{

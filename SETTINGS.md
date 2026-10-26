@@ -80,6 +80,8 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-music-mode-enabled`  | `"true"` / `"false"`              | `"true"` | Enable interactive music media widget.                                                                   |
 | `bloom-music-compact-notch` | `"true"` / `"false"`              | `"true"` | Show compact music display (visualizer + artwork) in collapsed notch.                                    |
 | `bloom-music-rest` | `"player"` / `"widgets"` / `"compact"` | `"player"` | What the notch shows at rest while music plays (Settings > Notch > While Music Plays): the full player (the same as when pointed at), the clock and widgets with the full player under them, or the small pill whose artwork opens the player. |
+| `bloom-bt-bubble` | `"true"` / `"false"` | `"true"` | The battery bubble beside the notch while a Bluetooth device is connected: each device's type and battery (Settings > Notch > Bluetooth). A click opens the Bluetooth page. |
+| `bloom-bt-low-battery` | number string (percent), `"0"` = off | `"20"` | A notification when a connected Bluetooth device is at this level or less, once until it is charged above it. Batteries are red at this level. |
 | `bloom-notch-notes-view` | `"all"` / `"notes"` / `"todos"` | `"all"` | What the notch's Notes page lists: both sections (Notes and To-Do), or one of them. |
 | `bloom-notch-notes-sort` | `"newest"` / `"oldest"` / `"az"` / `"za"` | `"newest"` | The order of the Notes page's lists (open to-dos always come before done ones). |
 | `bloom-notch-remember-panel` | `"true"` / `"false"` | `"true"` | Click opens the last-used panel when on; when off, click opens `bloom-notch-default-panel`. |

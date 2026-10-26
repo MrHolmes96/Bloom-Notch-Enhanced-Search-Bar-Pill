@@ -350,3 +350,33 @@
 	font-variant-numeric: tabular-nums;
 	letter-spacing: 0.08em;
 }
+
+/* A Bluetooth device's battery (the notch's bubble and the Bluetooth page). */
+.mini-battery {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	height: 14px;
+	flex: none;
+}
+
+.mini-battery-bolt {
+	position: absolute;
+	top: 50%;
+	left: 9px;
+	transform: translate(-50%, -50%);
+	filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.8));
+}
+
+.qp-row-battery {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	margin-left: auto;
+	padding-left: 8px;
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.7));
+	flex: none;
+}

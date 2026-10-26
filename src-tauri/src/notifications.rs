@@ -1563,6 +1563,25 @@ pub fn notifications_allow_typing(app: AppHandle, typing: bool) {
 }
 
 /// A sample card, for trying the look from Settings.
+/// A notice from Bloom itself (a Bluetooth device's battery running low), as
+/// a card in the chosen corner.
+pub fn show_bloom_notice(app: &AppHandle, title: &str, body: &str) {
+    show_card(
+        app,
+        BloomNotification {
+            id: 0,
+            app: "Bloom".into(),
+            aumid: String::new(),
+            icon: None,
+            title: title.into(),
+            body: body.into(),
+            time: crate::utils::get_now_ms(),
+            buttons: Vec::new(),
+            inputs: Vec::new(),
+        },
+    );
+}
+
 #[tauri::command]
 pub fn notifications_test(app: AppHandle) {
     show_card(

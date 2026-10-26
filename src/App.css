@@ -2558,3 +2558,21 @@ img {
 	justify-content: space-between;
 	row-gap: 10px;
 }
+
+/* The Bluetooth battery bubble: the Bluetooth mark, then each connected
+   device's type and battery. */
+.activity-bubble.bt-bubble {
+	width: auto;
+	gap: 7px;
+	padding: 0 9px 0 8px;
+}
+
+.bt-bubble-mark {
+	opacity: 0.7;
+}
+
+.bt-bubble-device {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}

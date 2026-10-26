@@ -232,6 +232,7 @@ fn main() {
             black_screen::screen_off_now,
             launcher::app_hotkey_status,
             launcher::set_hotkey_recording,
+            bluetooth::bluetooth_battery_refresh,
             focus_app_windows,
             close_window,
             quit_bloom,
@@ -508,6 +509,7 @@ fn main() {
             setup_settings_watcher(app.handle().clone());
             wifi::setup_wifi_notifications(app.handle().clone());
             bluetooth::setup_bluetooth_notifications(app.handle().clone());
+            bluetooth::start_battery_monitor(app.handle().clone());
 
             // Listen for second-instance signal to open settings
             if let Some(&h_event) = SINGLE_INSTANCE_EVENT_HANDLE.get() {

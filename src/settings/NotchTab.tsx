@@ -1,3 +1,4 @@
+import { BluetoothBatterySettings } from "./BluetoothBatterySettings";
 import {
 	PanelTop,
 	Calendar,
@@ -32,7 +33,8 @@ export type NotchSection =
 	| "weather"
 	| "widgets"
 	| "controls"
-	| "tray";
+	| "tray"
+	| "bluetooth";
 
 interface NotchTabProps {
 	section: NotchSection;
@@ -127,6 +129,7 @@ export function NotchTab({
 	if (section === "pages") return <NotchPagesSettings />;
 	if (section === "controls") return <ControlCenterSettings />;
 	if (section === "tray") return <TraySettings />;
+	if (section === "bluetooth") return <BluetoothBatterySettings />;
 
 	if (section === "calendar") {
 		return (

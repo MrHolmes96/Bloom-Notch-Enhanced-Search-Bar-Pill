@@ -19,6 +19,7 @@ import {
 	HeadphonesIcon
 } from "./icons";
 import { CompactMediaPlayer } from "./CompactMediaPlayer";
+import { DeviceKindIcon, MiniBattery, type BtDeviceInfo } from "./components/BluetoothBattery";
 import { useWeather } from "./hooks/useWeather";
 import { useSettingsSync } from "./hooks/useSettingsSync";
 import { useTrailingThrottle } from "./hooks/useTrailingThrottle";
@@ -57,7 +58,8 @@ import {
 	Share2 as Share2Glyph,
 	Shield as ShieldGlyph,
 	SunMoon as SunMoonGlyph,
-	MonitorOff
+	MonitorOff,
+	Bluetooth
 } from "lucide-react";
 import {
 	CC_KEY,
@@ -759,6 +761,7 @@ function App() {
 	const bloomRef = useRef<HTMLDivElement>(null);
 	const musicBubbleRef = useRef<HTMLButtonElement>(null);
 	const shelfBubbleRef = useRef<HTMLButtonElement>(null);
+	const btBubbleRef = useRef<HTMLButtonElement>(null);
 	const reportNotchRect = useRef<() => void>(() => {});
 	const dockEnabledInitial = useRef(true);
 	const dockModeInitial = useRef(true);
@@ -807,7 +810,12 @@ function App() {
 		const updateRect = () => {
 			if (bloomRef.current && windowLabel === "main") {
 				// Activity bubbles sit beside the pill and must stay clickable too.
-				const rects = [bloomRef.current, musicBubbleRef.current, shelfBubbleRef.current]
+				const rects = [
+					bloomRef.current,
+					musicBubbleRef.current,
+					shelfBubbleRef.current,
+					btBubbleRef.current
+				]
 					.filter((el): el is NonNullable<typeof el> => el !== null)
 					.map((el) => el.getBoundingClientRect());
 				const left = Math.min(...rects.map((r) => r.left));
@@ -1043,6 +1051,22 @@ function App() {
 	const [settingsCornersEnabled, setSettingsCornersEnabled] = useState(
 		() => localStorage.getItem("bloom-corners-enabled") === "true"
 	);
+	// Connected Bluetooth devices and their batteries (Bloom's monitor), for
+	// the battery bubble beside the notch (Settings > Notch > Bluetooth).
+	const [btDevices, setBtDevices] = useState<BtDeviceInfo[]>([]);
+	const [btBubbleEnabled, setBtBubbleEnabled] = useState(
+		() => localStorage.getItem("bloom-bt-bubble") !== "false"
+	);
+	const [btLowLevel, setBtLowLevel] = useState(
+		() => Number(localStorage.getItem("bloom-bt-low-battery") ?? "20") || 20
+	);
+	useEffect(() => {
+		const unlisten = listen<BtDeviceInfo[]>("bluetooth-devices", (e) => setBtDevices(e.payload));
+		invoke("bluetooth_battery_refresh").catch(() => {});
+		return () => {
+			unlisten.then((f) => f());
+		};
+	}, []);
 	const [musicRest, setMusicRest] = useState<MusicRest>(() =>
 		readMusicRest(localStorage.getItem("bloom-music-rest"))
 	);
@@ -1272,6 +1296,12 @@ function App() {
 			"bloom-notch-blitzit": (v: unknown) => setBlitzitInScroll(v !== false && v !== "false"),
 			"bloom-music-compact-notch": setSettingsMusicCompactNotch,
 			"bloom-music-rest": (v: unknown) => setMusicRest(readMusicRest(v)),
+			"bloom-bt-bubble": (v: unknown) => {
+				const on = v !== false && v !== "false";
+				setBtBubbleEnabled(on);
+				if (on) invoke("bluetooth_battery_refresh").catch(() => {});
+			},
+			"bloom-bt-low-battery": (v: unknown) => setBtLowLevel(Number(v) || 20),
 			"bloom-notch-widgets-on-hover": setWidgetsOnHoverOnly,
 			"bloom-notch-last-panel": (v: unknown) => setLastPanel(asNotchPage(v)),
 			"bloom-media-visualizer-enabled": setSettingsVisualizerEnabled,
@@ -2191,6 +2221,9 @@ function App() {
 		musicActivityVisible;
 	const collapsedMode = musicActivity && !timerActive ? "music" : "status";
 	const showMusicBubble = musicActivity && timerActive && !isOpen && isVisible && !isHidden;
+	// The battery bubble: while a Bluetooth device is connected.
+	const btConnected = btDevices.filter((d) => d.connected);
+	const showBtBubble = btBubbleEnabled && btConnected.length > 0 && !isOpen && isVisible && !isHidden;
 	const showShelfBubble =
 		shelfItems.length > 0 && !isOpen && isVisible && !isHidden;
 	restingModeRef.current = collapsedMode;
@@ -4454,6 +4487,61 @@ function App() {
 							) : (
 								<Music size={14} strokeWidth={2.2} />
 							)}
+						</motion.button>
+					)}
+				</AnimatePresence>
+				{/* Connected Bluetooth devices and their batteries */}
+				<AnimatePresence onExitComplete={() => reportNotchRect.current()}>
+					{showBtBubble && (
+						<motion.button
+							key="bt-bubble"
+							ref={btBubbleRef}
+							type="button"
+							className={`activity-bubble bt-bubble ${isHovered ? "expanded" : ""}`}
+							aria-label={`Bluetooth: ${btConnected
+								.map((d) => (d.battery !== null ? `${d.name} ${d.battery}%` : d.name))
+								.join(", ")}`}
+							title={btConnected
+								.map(
+									(d) =>
+										`${d.name}${d.battery !== null ? `: ${d.battery}%` : ""}${d.charging ? " (charging)" : ""}`
+								)
+								.join("\n")}
+							// Past the pill's right edge, after the music bubble when it shows.
+							style={{ left: "50%" }}
+							initial={{
+								opacity: 0,
+								scale: 0.4,
+								x: -28,
+								marginLeft: getDynamicWidth() / 2 + 8 + (showMusicBubble ? 42 : 0)
+							}}
+							animate={{
+								opacity: 1,
+								scale: 1,
+								x: 0,
+								marginLeft: getDynamicWidth() / 2 + 8 + (showMusicBubble ? 42 : 0)
+							}}
+							exit={{ opacity: 0, scale: 0.4, x: -28 }}
+							transition={{
+								type: "spring",
+								stiffness: 400,
+								damping: 31,
+								opacity: { duration: 0.15 }
+							}}
+							onAnimationComplete={() => reportNotchRect.current()}
+							onClick={(e) => {
+								e.stopPropagation();
+								setIsHovered(true);
+								openNotch("bluetooth");
+							}}
+						>
+							<Bluetooth size={12} strokeWidth={2.4} className="bt-bubble-mark" />
+							{btConnected.slice(0, 3).map((d) => (
+								<span key={d.id} className="bt-bubble-device">
+									<DeviceKindIcon kind={d.kind} size={13} strokeWidth={2.2} />
+									<MiniBattery level={d.battery} charging={d.charging} low={btLowLevel} />
+								</span>
+							))}
 						</motion.button>
 					)}
 				</AnimatePresence>
