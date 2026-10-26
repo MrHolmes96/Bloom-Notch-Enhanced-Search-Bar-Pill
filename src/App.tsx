@@ -36,8 +36,11 @@ import { PAGE_ORDER_KEY, isNotchPageId, parsePageOrder, type NotchPageId } from 
 import { isoWeek } from "./weekNumber";
 import {
 	NOTES_KEY,
+	NOTES_EDITOR_WIDTH,
 	NotesPanel,
+	initialNotesLayout,
 	notesPanelHeight,
+	type NotesLayout,
 	parseNotes,
 	type NoteItem
 } from "./components/NotesPanel";
@@ -1001,6 +1004,9 @@ function App() {
 	const [trayHeight, setTrayHeight] = useState(() => trayPanelHeight(5, 0, false));
 	// Quick notes and to-dos, reached through the scroll menu.
 	const [notes, setNotes] = useState<NoteItem[]>(() => parseNotes(localStorage.getItem(NOTES_KEY)));
+	// The notes page's view (All, Notes, To-Do) and whether a note is open as
+	// a full page, which the notch is sized around.
+	const [notesLayout, setNotesLayout] = useState<NotesLayout>(initialNotesLayout);
 	const [notesInScroll, setNotesInScroll] = useState(
 		() => localStorage.getItem("bloom-notch-notes-in-scroll") !== "false"
 	);
@@ -2854,6 +2860,7 @@ function App() {
 	// Calculate width dynamically based on enabled features
 	const getDynamicWidth = () => {
 		if (isCalendarMode) return 480;
+		if (bloomMode === "notes" && notesLayout.editorOpen) return NOTES_EDITOR_WIDTH;
 		if (bloomMode === "shelf" || bloomMode === "notes" || bloomMode === "blitzit") return 380;
 		if (bloomMode === "command-center" && isOpen) return 350;
 		if (bloomMode === "wifi" || bloomMode === "bluetooth" || bloomMode === "tray") return 350;
@@ -2897,7 +2904,7 @@ function App() {
 			const actions = shelfLocalSend ? (sendMode ? 46 : 28) : 0;
 			return (shelfOverflowing ? 190 : 176) + actions;
 		}
-		if (bloomMode === "notes") return 36 + notesPanelHeight(notes);
+		if (bloomMode === "notes") return 36 + notesPanelHeight(notes, notesLayout);
 		if (bloomMode === "blitzit") return 36 + blitzitHeight;
 		// One row of round buttons is part of the control center's base height;
 		// each extra row adds a button and the gap above it, and an empty row
@@ -4200,7 +4207,12 @@ function App() {
 											exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.1 } }}
 											transition={{ type: "spring", stiffness: 400, damping: 30 }}
 										>
-											<NotesPanel items={notes} onChange={saveNotes} onPinChange={setNotchPinned} />
+											<NotesPanel
+												items={notes}
+												onChange={saveNotes}
+												onPinChange={setNotchPinned}
+												onLayoutChange={setNotesLayout}
+											/>
 										</motion.div>
 									)}
 								</AnimatePresence>

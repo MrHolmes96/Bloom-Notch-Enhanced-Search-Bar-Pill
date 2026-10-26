@@ -192,3 +192,148 @@
 .notes-clear:hover {
 	color: var(--bloom-text, white);
 }
+
+/* Show: All / Notes / To-Do, and the order. */
+.notes-toolbar {
+	height: 22px;
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.notes-views {
+	display: flex;
+	gap: 2px;
+	padding: 2px;
+	border-radius: 999px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.06));
+}
+
+.notes-view,
+.notes-sort {
+	height: 18px;
+	padding: 0 9px;
+	border: none;
+	border-radius: 999px;
+	background: transparent;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.6));
+	font-size: 10.5px;
+	font-family: inherit;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.notes-view:hover,
+.notes-sort:hover {
+	color: var(--bloom-text, white);
+}
+
+.notes-view.active {
+	background: var(--bloom-border, rgba(255, 255, 255, 0.14));
+	color: var(--bloom-text, white);
+}
+
+.notes-sort {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 0 6px;
+}
+
+.notes-section-title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0 4px;
+	box-sizing: border-box;
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.5));
+}
+
+.notes-section-title span {
+	font-weight: 500;
+	opacity: 0.8;
+}
+
+.notes-more {
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.5));
+}
+
+/* A note as a full page. */
+.notes-editor {
+	gap: 8px;
+}
+
+.notes-editor-bar {
+	height: 24px;
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.notes-back {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	height: 22px;
+	padding: 0 8px 0 4px;
+	flex: none;
+	border: none;
+	border-radius: 999px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.06));
+	color: var(--bloom-text, white);
+	font-size: 11px;
+	font-family: inherit;
+	cursor: pointer;
+}
+
+.notes-back:hover {
+	background: var(--bloom-border, rgba(255, 255, 255, 0.12));
+}
+
+.notes-editor-meta {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 10.5px;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.5));
+}
+
+.notes-delete.visible {
+	opacity: 1;
+}
+
+.notes-editor-text {
+	flex: 1;
+	min-height: 0;
+	width: 100%;
+	box-sizing: border-box;
+	resize: none;
+	padding: 10px 12px;
+	border-radius: 12px;
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.08));
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.05));
+	color: var(--bloom-text, white);
+	font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+	font-size: 12px;
+	line-height: 1.5;
+	tab-size: 4;
+	outline: none;
+	user-select: text;
+	-webkit-user-select: text;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+	scrollbar-color: var(--bloom-scrollbar-thumb, rgba(255, 255, 255, 0.15)) transparent;
+}
+
+.notes-editor-text::placeholder {
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.4));
+}

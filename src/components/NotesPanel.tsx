@@ -1,10 +1,23 @@
-import { useState } from "react";
-import { Check, ListTodo, StickyNote, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+	ArrowDownUp,
+	Check,
+	ChevronLeft,
+	ListTodo,
+	Maximize2,
+	StickyNote,
+	Trash2,
+	X
+} from "lucide-react";
+import { saveStoredSetting } from "../settings/useStoredSetting";
 import "./NotesPanel.css";
 
 /**
  * Quick notes and to-dos in the notch, for things that don't belong in a
- * calendar. Newest first; to-dos can be ticked off and cleared.
+ * calendar. They are shown in two sections, Notes and To-Do (or one of them),
+ * sorted as chosen. To-dos can be ticked off and cleared; a note opens as a
+ * full page in the notch on a double-click, for longer text, so no separate
+ * notes app is needed.
  */
 
 export interface NoteItem {
@@ -13,12 +26,39 @@ export interface NoteItem {
 	todo: boolean;
 	done: boolean;
 	created: number;
+	/** When the text was last changed (absent until it is). */
+	updated?: number;
+}
+
+export type NotesView = "all" | "notes" | "todos";
+export type NotesSort = "newest" | "oldest" | "az" | "za";
+
+/** What the notch needs to know to size itself around the panel. */
+export interface NotesLayout {
+	view: NotesView;
+	/** A note is open as a full page. */
+	editorOpen: boolean;
 }
 
 export const NOTES_KEY = "bloom-notch-notes";
-/** Rows shown before the list scrolls. */
-export const NOTES_VISIBLE_ROWS = 5;
+const VIEW_KEY = "bloom-notch-notes-view";
+const SORT_KEY = "bloom-notch-notes-sort";
 export const NOTES_ROW_HEIGHT = 30;
+/** A section's heading in the list. */
+const HEADER_HEIGHT = 22;
+/** The list scrolls past this height. */
+const LIST_MAX_HEIGHT = 5 * NOTES_ROW_HEIGHT + 2 * HEADER_HEIGHT;
+/** The panel's height and the notch's width while a note is open. */
+export const NOTES_EDITOR_HEIGHT = 300;
+export const NOTES_EDITOR_WIDTH = 480;
+
+const SORT_LABELS: Record<NotesSort, string> = {
+	newest: "Newest first",
+	oldest: "Oldest first",
+	az: "A to Z",
+	za: "Z to A"
+};
+const SORT_ORDER: NotesSort[] = ["newest", "oldest", "az", "za"];
 
 export function parseNotes(raw: unknown): NoteItem[] {
 	if (Array.isArray(raw)) return raw as NoteItem[];
@@ -33,41 +73,134 @@ export function parseNotes(raw: unknown): NoteItem[] {
 	}
 }
 
-/** Panel height inside the open notch, below its 36 px header. */
-export function notesPanelHeight(items: NoteItem[]) {
-	const rows = Math.min(items.length, NOTES_VISIBLE_ROWS);
-	const list = items.length === 0 ? 34 : rows * NOTES_ROW_HEIGHT;
-	const clear = items.some((n) => n.done) ? 28 : 0;
-	return 12 + 34 + 8 + list + clear + 12;
+export const readNotesView = (value: unknown): NotesView =>
+	value === "notes" || value === "todos" ? value : "all";
+const readNotesSort = (value: unknown): NotesSort =>
+	value === "oldest" || value === "az" || value === "za" ? value : "newest";
+
+export const initialNotesLayout = (): NotesLayout => ({
+	view: readNotesView(localStorage.getItem(VIEW_KEY)),
+	editorOpen: false
+});
+
+/** The sections shown for a view, each with its items. */
+function sections(items: NoteItem[], view: NotesView) {
+	const notes = items.filter((n) => !n.todo);
+	const todos = items.filter((n) => n.todo);
+	const shown: { kind: "notes" | "todos"; items: NoteItem[] }[] = [];
+	if (view !== "todos") shown.push({ kind: "notes", items: notes });
+	if (view !== "notes") shown.push({ kind: "todos", items: todos });
+	// In "All", an empty section isn't shown.
+	return view === "all" ? shown.filter((s) => s.items.length > 0) : shown;
 }
+
+/** Panel height inside the open notch, below its 36 px header. */
+export function notesPanelHeight(items: NoteItem[], layout: NotesLayout) {
+	if (layout.editorOpen) return NOTES_EDITOR_HEIGHT;
+	const shown = sections(items, layout.view);
+	const rows = shown.reduce((sum, s) => sum + s.items.length, 0);
+	const headers = layout.view === "all" ? shown.length : 0;
+	const content = rows * NOTES_ROW_HEIGHT + headers * HEADER_HEIGHT;
+	const list = rows === 0 ? 34 : Math.min(content, LIST_MAX_HEIGHT);
+	const clear = items.some((n) => n.done) && layout.view !== "notes" ? 28 : 0;
+	// Padding, input row, gap, toolbar, gap, list, "clear done", padding.
+	return 12 + 34 + 8 + 22 + 8 + list + clear + 12;
+}
+
+function sorted(items: NoteItem[], sort: NotesSort, kind: "notes" | "todos") {
+	const list = [...items];
+	const by: Record<NotesSort, (a: NoteItem, b: NoteItem) => number> = {
+		newest: (a, b) => b.created - a.created,
+		oldest: (a, b) => a.created - b.created,
+		az: (a, b) => a.text.localeCompare(b.text, undefined, { sensitivity: "base" }),
+		za: (a, b) => b.text.localeCompare(a.text, undefined, { sensitivity: "base" })
+	};
+	list.sort(by[sort]);
+	// Open to-dos come before the ones that are done.
+	if (kind === "todos") list.sort((a, b) => Number(a.done) - Number(b.done));
+	return list;
+}
+
+/** A note's first line, as it is listed. */
+const firstLine = (text: string) => text.split("\n").find((line) => line.trim())?.trim() ?? "";
+
+/** "17:42", or "26 Oct 17:42" on another day (24-hour clock). */
+function whenText(time: number) {
+	const date = new Date(time);
+	const clock = date.toLocaleTimeString(undefined, {
+		hour: "2-digit",
+		minute: "2-digit",
+		hour12: false
+	});
+	if (date.toDateString() === new Date().toDateString()) return clock;
+	return `${date.toLocaleDateString(undefined, { day: "numeric", month: "short" })} ${clock}`;
+}
+
+const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
 interface NotesPanelProps {
 	items: NoteItem[];
 	onChange: (next: NoteItem[]) => void;
 	/** Keeps the notch open while typing. */
 	onPinChange: (pinned: boolean) => void;
+	/** The view and whether a note is open, for the notch's size. */
+	onLayoutChange: (layout: NotesLayout) => void;
 }
 
-export function NotesPanel({ items, onChange, onPinChange }: NotesPanelProps) {
+export function NotesPanel({ items, onChange, onPinChange, onLayoutChange }: NotesPanelProps) {
 	const [draft, setDraft] = useState("");
 	const [todo, setTodo] = useState(() => localStorage.getItem("bloom-notch-notes-kind") !== "note");
 	const [editing, setEditing] = useState<string | null>(null);
 	const [editText, setEditText] = useState("");
+	const [view, setViewState] = useState<NotesView>(() =>
+		readNotesView(localStorage.getItem(VIEW_KEY))
+	);
+	const [sort, setSortState] = useState<NotesSort>(() =>
+		readNotesSort(localStorage.getItem(SORT_KEY))
+	);
+	const [openNote, setOpenNote] = useState<string | null>(null);
+
+	// The latest list, for the editor's saves (it keeps typing between them).
+	const itemsRef = useRef(items);
+	itemsRef.current = items;
+
+	useEffect(() => {
+		onLayoutChange({ view, editorOpen: openNote !== null });
+	}, [view, openNote]);
+
+	// A note deleted elsewhere (another window) closes its page.
+	useEffect(() => {
+		if (openNote && !items.some((n) => n.id === openNote)) setOpenNote(null);
+	}, [items, openNote]);
+
+	const setView = (next: NotesView) => {
+		setViewState(next);
+		saveStoredSetting(VIEW_KEY, next);
+	};
+	const nextSort = () => {
+		const next = SORT_ORDER[(SORT_ORDER.indexOf(sort) + 1) % SORT_ORDER.length];
+		setSortState(next);
+		saveStoredSetting(SORT_KEY, next);
+	};
 
 	const add = () => {
 		const text = draft.trim();
 		if (!text) return;
+		onChange([{ id: newId(), text, todo, done: false, created: Date.now() }, ...items]);
+		setDraft("");
+		// A new item shows in its section.
+		if (view !== "all" && (view === "todos") !== todo) setView("all");
+	};
+
+	/** Opens a new note as a full page, starting with what was typed. */
+	const addFullNote = () => {
+		const id = newId();
 		onChange([
-			{
-				id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-				text,
-				todo,
-				done: false,
-				created: Date.now()
-			},
+			{ id, text: draft, todo: false, done: false, created: Date.now() },
 			...items
 		]);
 		setDraft("");
+		setOpenNote(id);
 	};
 
 	const update = (id: string, change: Partial<NoteItem>) =>
@@ -76,13 +209,47 @@ export function NotesPanel({ items, onChange, onPinChange }: NotesPanelProps) {
 	const finishEdit = (save: boolean) => {
 		if (save && editing) {
 			const text = editText.trim();
-			if (text) update(editing, { text });
+			if (text) update(editing, { text, updated: Date.now() });
 		}
 		setEditing(null);
 		onPinChange(false);
 	};
 
+	const shown = useMemo(() => sections(items, view), [items, view]);
 	const doneCount = items.filter((n) => n.done).length;
+	const counts = {
+		notes: items.filter((n) => !n.todo).length,
+		todos: items.filter((n) => n.todo).length
+	};
+
+	const note = openNote ? items.find((n) => n.id === openNote) : undefined;
+	if (note) {
+		return (
+			<NoteEditor
+				key={note.id}
+				note={note}
+				onPinChange={onPinChange}
+				onSave={(text) => {
+					const current = itemsRef.current;
+					const known = current.find((n) => n.id === note.id);
+					if (!known || known.text === text) return;
+					onChange(
+						current.map((n) => (n.id === note.id ? { ...n, text, updated: Date.now() } : n))
+					);
+				}}
+				onClose={(text) => {
+					const current = itemsRef.current;
+					// A note left empty isn't kept.
+					if (!text.trim()) onChange(current.filter((n) => n.id !== note.id));
+					setOpenNote(null);
+				}}
+				onDelete={() => {
+					onChange(itemsRef.current.filter((n) => n.id !== note.id));
+					setOpenNote(null);
+				}}
+			/>
+		);
+	}
 
 	return (
 		<div className="notes-panel" onClick={(e) => e.stopPropagation()}>
@@ -109,74 +276,145 @@ export function NotesPanel({ items, onChange, onPinChange }: NotesPanelProps) {
 					onBlur={() => onPinChange(false)}
 					onKeyDown={(e) => {
 						e.stopPropagation();
+						// Shift+Enter writes a note as a full page.
+						if (e.key === "Enter" && e.shiftKey && !todo) {
+							e.preventDefault();
+							addFullNote();
+							return;
+						}
 						if (e.key === "Enter") add();
 						if (e.key === "Escape") (e.target as HTMLInputElement).blur();
 					}}
 				/>
+				{!todo && (
+					<button
+						type="button"
+						className="notes-kind"
+						title="Write a full note (Shift+Enter)"
+						onClick={addFullNote}
+					>
+						<Maximize2 size={13} />
+					</button>
+				)}
 			</div>
 
-			{items.length === 0 ? (
-				<div className="notes-empty">Nothing here yet. Type above and press Enter</div>
-			) : (
-				<div className="notes-list" style={{ maxHeight: NOTES_VISIBLE_ROWS * NOTES_ROW_HEIGHT }}>
-					{items.map((item) => (
-						<div
-							key={item.id}
-							className={`notes-row${item.done ? " done" : ""}`}
-							style={{ minHeight: NOTES_ROW_HEIGHT }}
+			<div className="notes-toolbar">
+				<div className="notes-views" role="tablist">
+					{(
+						[
+							["all", "All"],
+							["notes", `Notes ${counts.notes}`],
+							["todos", `To-Do ${counts.todos}`]
+						] as [NotesView, string][]
+					).map(([id, label]) => (
+						<button
+							key={id}
+							type="button"
+							role="tab"
+							aria-selected={view === id}
+							className={`notes-view${view === id ? " active" : ""}`}
+							onClick={() => setView(id)}
 						>
-							{item.todo ? (
-								<button
-									type="button"
-									className={`notes-check${item.done ? " checked" : ""}`}
-									title={item.done ? "Mark as not done" : "Mark as done"}
-									onClick={() => update(item.id, { done: !item.done })}
-								>
-									{item.done && <Check size={11} strokeWidth={3} />}
-								</button>
-							) : (
-								<span className="notes-dot" />
+							{label}
+						</button>
+					))}
+				</div>
+				<button
+					type="button"
+					className="notes-sort"
+					title="Change the order"
+					onClick={nextSort}
+				>
+					<ArrowDownUp size={11} />
+					{SORT_LABELS[sort]}
+				</button>
+			</div>
+
+			{shown.every((s) => s.items.length === 0) ? (
+				<div className="notes-empty">
+					{view === "todos"
+						? "No to-dos. Type above and press Enter"
+						: view === "notes"
+							? "No notes. Type above and press Enter"
+							: "Nothing here yet. Type above and press Enter"}
+				</div>
+			) : (
+				<div className="notes-list" style={{ maxHeight: LIST_MAX_HEIGHT }}>
+					{shown.map((section) => (
+						<div key={section.kind} className="notes-section">
+							{view === "all" && (
+								<div className="notes-section-title" style={{ height: HEADER_HEIGHT }}>
+									{section.kind === "notes" ? "Notes" : "To-Do"}
+									<span>{section.items.length}</span>
+								</div>
 							)}
-							{editing === item.id ? (
-								<input
-									className="notes-edit"
-									autoFocus
-									value={editText}
-									onChange={(e) => setEditText(e.target.value)}
-									onFocus={() => onPinChange(true)}
-									onBlur={() => finishEdit(true)}
-									onKeyDown={(e) => {
-										e.stopPropagation();
-										if (e.key === "Enter") finishEdit(true);
-										if (e.key === "Escape") finishEdit(false);
-									}}
-								/>
-							) : (
-								<span
-									className="notes-text"
-									title="Double-click to edit"
-									onDoubleClick={() => {
-										setEditing(item.id);
-										setEditText(item.text);
-									}}
+							{sorted(section.items, sort, section.kind).map((item) => (
+								<div
+									key={item.id}
+									className={`notes-row${item.done ? " done" : ""}`}
+									style={{ minHeight: NOTES_ROW_HEIGHT }}
 								>
-									{item.text}
-								</span>
-							)}
-							<button
-								type="button"
-								className="notes-delete"
-								title="Delete"
-								onClick={() => onChange(items.filter((n) => n.id !== item.id))}
-							>
-								<X size={12} />
-							</button>
+									{item.todo ? (
+										<button
+											type="button"
+											className={`notes-check${item.done ? " checked" : ""}`}
+											title={item.done ? "Mark as not done" : "Mark as done"}
+											onClick={() => update(item.id, { done: !item.done })}
+										>
+											{item.done && <Check size={11} strokeWidth={3} />}
+										</button>
+									) : (
+										<span className="notes-dot" />
+									)}
+									{editing === item.id ? (
+										<input
+											className="notes-edit"
+											autoFocus
+											value={editText}
+											onChange={(e) => setEditText(e.target.value)}
+											onFocus={() => onPinChange(true)}
+											onBlur={() => finishEdit(true)}
+											onKeyDown={(e) => {
+												e.stopPropagation();
+												if (e.key === "Enter") finishEdit(true);
+												if (e.key === "Escape") finishEdit(false);
+											}}
+										/>
+									) : (
+										<span
+											className="notes-text"
+											title={item.todo ? "Double-click to edit" : "Double-click to open"}
+											onDoubleClick={() => {
+												if (item.todo) {
+													setEditing(item.id);
+													setEditText(item.text);
+												} else {
+													setOpenNote(item.id);
+												}
+											}}
+										>
+											{firstLine(item.text) || "Empty note"}
+											{!item.todo && item.text.trim().includes("\n") && (
+												<span className="notes-more"> …</span>
+											)}
+										</span>
+									)}
+									<button
+										type="button"
+										className="notes-delete"
+										title="Delete"
+										onClick={() => onChange(items.filter((n) => n.id !== item.id))}
+									>
+										<X size={12} />
+									</button>
+								</div>
+							))}
 						</div>
 					))}
 				</div>
 			)}
 
-			{doneCount > 0 && (
+			{doneCount > 0 && view !== "notes" && (
 				<button
 					type="button"
 					className="notes-clear"
@@ -185,6 +423,110 @@ export function NotesPanel({ items, onChange, onPinChange }: NotesPanelProps) {
 					Clear {doneCount} done
 				</button>
 			)}
+		</div>
+	);
+}
+
+interface NoteEditorProps {
+	note: NoteItem;
+	onPinChange: (pinned: boolean) => void;
+	/** Saves the text (called while typing, a moment after each pause). */
+	onSave: (text: string) => void;
+	/** Back to the list, with the text as it is now. */
+	onClose: (text: string) => void;
+	onDelete: () => void;
+}
+
+/** A note as a full page in the notch, like a small Notepad. */
+function NoteEditor({ note, onPinChange, onSave, onClose, onDelete }: NoteEditorProps) {
+	const [text, setText] = useState(note.text);
+	const textRef = useRef(text);
+	textRef.current = text;
+	const saveTimer = useRef<number | null>(null);
+
+	const saveNow = () => {
+		if (saveTimer.current !== null) {
+			window.clearTimeout(saveTimer.current);
+			saveTimer.current = null;
+		}
+		onSave(textRef.current);
+	};
+
+	// Leaving the page (or the notch closing) saves it.
+	useEffect(() => {
+		return () => {
+			saveNow();
+			onPinChange(false);
+		};
+	}, []);
+
+	const close = () => {
+		saveNow();
+		onClose(textRef.current);
+	};
+
+	const lines = text.split("\n").length;
+	return (
+		<div className="notes-panel notes-editor" onClick={(e) => e.stopPropagation()}>
+			<div className="notes-editor-bar">
+				<button type="button" className="notes-back" onClick={close} title="Back to the list (Esc)">
+					<ChevronLeft size={14} />
+					Notes
+				</button>
+				<span className="notes-editor-meta">
+					{note.updated ? `Edited ${whenText(note.updated)}` : `Created ${whenText(note.created)}`}
+					{" · "}
+					{text.length} {text.length === 1 ? "character" : "characters"}
+					{lines > 1 ? ` · ${lines} lines` : ""}
+				</span>
+				<button type="button" className="notes-delete visible" title="Delete note" onClick={onDelete}>
+					<Trash2 size={12} />
+				</button>
+			</div>
+			<textarea
+				className="notes-editor-text"
+				autoFocus
+				value={text}
+				spellCheck={false}
+				placeholder="Write your note…"
+				onChange={(e) => {
+					setText(e.target.value);
+					if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+					saveTimer.current = window.setTimeout(saveNow, 500);
+				}}
+				onFocus={(e) => {
+					// Typing keeps the notch open; clicking another app lets it close.
+					onPinChange(true);
+					// The caret starts at the end, as in Notepad on reopening.
+					const end = e.currentTarget.value.length;
+					e.currentTarget.setSelectionRange(end, end);
+				}}
+				onBlur={() => {
+					saveNow();
+					onPinChange(false);
+				}}
+				onKeyDown={(e) => {
+					e.stopPropagation();
+					if (e.key === "Escape") {
+						e.preventDefault();
+						close();
+					}
+					// Tab indents instead of leaving the page.
+					if (e.key === "Tab") {
+						e.preventDefault();
+						const area = e.currentTarget;
+						const { selectionStart, selectionEnd } = area;
+						const next = `${text.slice(0, selectionStart)}\t${text.slice(selectionEnd)}`;
+						setText(next);
+						requestAnimationFrame(() =>
+							area.setSelectionRange(selectionStart + 1, selectionStart + 1)
+						);
+						if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+						saveTimer.current = window.setTimeout(saveNow, 500);
+					}
+				}}
+				onWheel={(e) => e.stopPropagation()}
+			/>
 		</div>
 	);
 }
