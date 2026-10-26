@@ -403,6 +403,31 @@ unsafe extern "system" fn window_change_event_proc(
         return;
     }
 
+    // Explorer's taskbar shown (made at sign-in after Bloom started, or
+    // again after Explorer restarted): hidden at once while Bloom's dock
+    // replaces it, before the 2 s check that registers the dock again.
+    if id_object == 0
+        && id_child == 0
+        && (event == windows::Win32::UI::WindowsAndMessaging::EVENT_OBJECT_SHOW
+            || event == windows::Win32::UI::WindowsAndMessaging::EVENT_OBJECT_CREATE)
+        && (NATIVE_TASKBAR_HIDDEN.load(Ordering::Relaxed)
+            || TASKBAR_TAKEOVER.load(Ordering::Relaxed))
+    {
+        let mut class_name = [0u8; 32];
+        let len = windows::Win32::UI::WindowsAndMessaging::GetClassNameA(hwnd, &mut class_name);
+        let class = &class_name[..len as usize];
+        if class == b"Shell_TrayWnd" || class == b"Shell_SecondaryTrayWnd" {
+            let mut pid = 0u32;
+            windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
+                hwnd,
+                Some(&mut pid),
+            );
+            if pid != std::process::id() && set_taskbar_visibility(false, false) {
+                NATIVE_TASKBAR_HIDDEN.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
     // A top-level window appeared/disappeared (or focus moved): capture UI
     // state may have changed. Cheap flag; the worker thread does the scan.
     {
@@ -4604,7 +4629,14 @@ unsafe extern "system" fn display_monitor_proc(
     const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
     const WM_SETTINGCHANGE: u32 = 0x001A;
 
+    const WM_ENDSESSION: u32 = 0x0016;
     match msg {
+        // Signing out or shutting down: Explorer's taskbar stays in auto-hide
+        // and hidden, so the next sign-in starts without it on screen.
+        WM_ENDSESSION if wparam.0 != 0 => {
+            crate::utils::hand_over_taskbar("session-end");
+            LRESULT(0)
+        }
         WM_DISPLAYCHANGE => {
             let now = get_now_ms();
             let last = LAST_DISPLAY_CHANGE_MS.load(Ordering::Relaxed);

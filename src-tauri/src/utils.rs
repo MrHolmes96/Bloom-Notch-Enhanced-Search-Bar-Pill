@@ -150,6 +150,24 @@ pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
     }
     let asked_to_quit =
         quit.is_some_and(|event| unsafe { WaitForSingleObject(event, 0) } == WAIT_OBJECT_0);
+    // Left hidden on purpose. Signing out or shutting down: Explorer keeps
+    // it in auto-hide, so the next sign-in starts without a taskbar on
+    // screen. Restarting: the next Bloom takes it over; should none do so
+    // within 20 s, it is put back after all.
+    let handover = std::fs::read_to_string(&marker)
+        .ok()
+        .and_then(|contents| parse_marker_handover(&contents).map(str::to_string));
+    if session_ending() || handover.as_deref() == Some("session-end") {
+        return;
+    }
+    if handover.as_deref() == Some("restart") {
+        for _ in 0..80 {
+            if !owned(&marker) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    }
     // Explorer can be restarting at the same time. Retry briefly, but never
     // act on a marker owned by a replacement Bloom process.
     let mut popups_restored = false;
@@ -315,6 +333,95 @@ fn parse_marker_state(contents: &str) -> Option<i32> {
         .strip_prefix("abstate=")?
         .parse()
         .ok()
+}
+
+/// Why the taskbar was left hidden on purpose ("session-end", "restart"),
+/// for the next Bloom to take over. None after a crash or a kill.
+fn parse_marker_handover(contents: &str) -> Option<&str> {
+    contents
+        .lines()
+        .find_map(|line| line.strip_prefix("handover="))
+        .map(str::trim)
+}
+
+/// Whether Windows is signing out or shutting down right now.
+pub fn session_ending() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SHUTTINGDOWN};
+    unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
+}
+
+/// Leaves Explorer's taskbar hidden for the next Bloom: Windows is ending
+/// the session (Explorer keeps it in auto-hide, so the next sign-in starts
+/// without a taskbar on screen), or Bloom is restarting. Noted in the marker,
+/// so the watchdog leaves it too.
+pub fn hand_over_taskbar(reason: &str) {
+    crate::state::HANDING_OVER.store(true, std::sync::atomic::Ordering::Relaxed);
+    let Some(path) = TASKBAR_MARKER.get() else {
+        return;
+    };
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return;
+    };
+    if parse_marker_pid(&contents) != Some(std::process::id()) {
+        return;
+    }
+    let mut kept: String = contents
+        .lines()
+        .filter(|line| !line.starts_with("handover=") && !line.starts_with("at="))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    kept.push_str(&format!("handover={reason}\nat={}\n", get_now_ms()));
+    let _ = write_marker(path, &kept);
+}
+
+fn write_marker(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(contents.as_bytes())?;
+    file.sync_all()
+}
+
+/// At start, with a marker left by the Bloom before: the taskbar was left
+/// hidden on purpose or by a crash. This Bloom takes it over as it is (the
+/// user's own auto-hide setting and position come from the marker), instead
+/// of showing Windows' taskbar and hiding it again a moment later. False for
+/// a marker from an old version without the user's state: then the taskbar is
+/// put back first, as before.
+pub fn adopt_taskbar_marker() -> bool {
+    let Some(path) = TASKBAR_MARKER.get() else {
+        return false;
+    };
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Some(state) = parse_marker_state(&contents) else {
+        return false;
+    };
+    let primary = parse_marker_rect(&contents, "primary=");
+    let secondary = parse_marker_rect(&contents, "secondary=");
+    // A position from the screen's edge Bloom parks it at is no place to
+    // put it back to.
+    let real = |rect: &windows::Win32::Foundation::RECT| rect.left > -9000 && rect.top > -9000;
+    let primary = primary.filter(real);
+    let secondary = secondary.filter(real);
+    ORIGINAL_TASKBAR_STATE.store(state, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut guard) = ORIGINAL_TRAY_RECT.lock() {
+        *guard = primary;
+    }
+    if let Ok(mut guard) = ORIGINAL_SEC_TRAY_RECT.lock() {
+        *guard = secondary;
+    }
+    if write_marker(
+        path,
+        &marker_contents(state, std::process::id(), primary, secondary),
+    )
+    .is_err()
+    {
+        return false;
+    }
+    // The watchdog that restores the taskbar if this Bloom dies.
+    let _ = start_taskbar_watchdog();
+    true
 }
 
 fn parse_marker_pid(contents: &str) -> Option<u32> {
@@ -1272,8 +1379,21 @@ pub fn re_assert_topmost(hwnd: HWND) {
 #[cfg(test)]
 mod tests {
     use super::{
-        expand_env_vars, marker_contents, parse_marker_pid, parse_marker_rect, parse_marker_state,
+        expand_env_vars, marker_contents, parse_marker_handover, parse_marker_pid,
+        parse_marker_rect, parse_marker_state,
     };
+
+    #[test]
+    fn a_handed_over_marker_keeps_the_original_state() {
+        let marker = format!(
+            "{}handover=session-end\nat=1\n",
+            marker_contents(3, 42, None, None)
+        );
+        assert_eq!(parse_marker_state(&marker), Some(3));
+        assert_eq!(parse_marker_pid(&marker), Some(42));
+        assert_eq!(parse_marker_handover(&marker), Some("session-end"));
+        assert_eq!(parse_marker_handover(&marker_contents(0, 1, None, None)), None);
+    }
 
     #[test]
     fn taskbar_marker_round_trips_the_original_state() {

@@ -362,9 +362,25 @@ fn main() {
             // Crash-recovery: if a previous session was force-killed while the native
             // taskbar was hidden, restore it now. Runs before the frontend re-hides it
             // (init_dock fires after a delay), so the flag must be removed first.
+            // A marker means the Bloom before left Explorer's taskbar hidden:
+            // on purpose (sign-out, restart) or by a crash. It is taken over
+            // as it is, so Windows' taskbar never shows in between; only a
+            // marker from an old version is put back first.
             if taskbar_marker_exists() {
-                restore_taskbar_after_crash();
-                NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
+                if adopt_taskbar_marker() {
+                    if dock_enabled() {
+                        TASKBAR_TAKEOVER.store(true, Ordering::Relaxed);
+                        if set_taskbar_visibility(false, false) {
+                            NATIVE_TASKBAR_HIDDEN.store(true, Ordering::Relaxed);
+                        }
+                    } else {
+                        set_taskbar_visibility(true, true);
+                        NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
+                    }
+                } else {
+                    restore_taskbar_after_crash();
+                    NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
+                }
             }
 
             let window = app.get_webview_window("main").unwrap();
@@ -576,7 +592,14 @@ fn main() {
         .expect("error while building tauri application");
     app.run(|_, event| {
         if let tauri::RunEvent::Exit = event {
-            set_taskbar_visibility(true, true);
+            // Signing out or shutting down: the taskbar stays in auto-hide and
+            // hidden for the next sign-in (see `hand_over_taskbar`).
+            if session_ending() {
+                hand_over_taskbar("session-end");
+            }
+            if !HANDING_OVER.load(Ordering::Relaxed) {
+                set_taskbar_visibility(true, true);
+            }
             NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
             set_native_osd_suppressed(false);
             notifications::restore_native_toasts();

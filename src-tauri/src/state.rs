@@ -13,6 +13,14 @@ pub static DOCK_APPBAR_REGISTERED: AtomicBool = AtomicBool::new(false);
 pub static CURRENT_DOCK_OVERLAP: AtomicI32 = AtomicI32::new(-1);
 pub static CURRENT_NOTCH_OVERLAP: AtomicI32 = AtomicI32::new(-1);
 pub static NATIVE_TASKBAR_HIDDEN: AtomicBool = AtomicBool::new(false);
+/// Bloom took the taskbar over from the Bloom before it (sign-in after a
+/// sign-out, or a restart): Explorer's taskbar is hidden the moment it shows,
+/// even before the dock is up.
+pub static TASKBAR_TAKEOVER: AtomicBool = AtomicBool::new(false);
+/// Windows is signing out or shutting down, or Bloom is restarting: the
+/// taskbar stays hidden for the next Bloom instead of being shown on the way
+/// out.
+pub static HANDING_OVER: AtomicBool = AtomicBool::new(false);
 /// A scoped native tray operation temporarily exposes Explorer's UI to UIA.
 pub static TRAY_INTERACTION_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Set first on every quit/restart path. While windows and webviews are torn

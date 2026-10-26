@@ -3277,15 +3277,25 @@ pub async fn quit_bloom(handle: AppHandle) {
 pub async fn restart_bloom(handle: AppHandle) {
     SHUTTING_DOWN.store(true, Ordering::Relaxed);
     if let Some(w) = handle.get_webview_window("main") {
-        unregister_appbar_native(w.hwnd().unwrap());
+        if let Ok(hwnd) = w.hwnd() {
+            unregister_appbar_native(hwnd);
+        }
     }
     if let Some(w) = handle.get_webview_window("dock") {
-        unregister_appbar_native(w.hwnd().unwrap());
+        if let Ok(hwnd) = w.hwnd() {
+            unregister_appbar_native(hwnd);
+        }
     }
     if let Some(w) = handle.get_webview_window("settings") {
         let _ = w.destroy();
     }
-    set_taskbar_visibility(true, true);
+    // The next Bloom takes the hidden taskbar over (its watchdog puts it
+    // back should none do so), so it never shows during a restart.
+    if NATIVE_TASKBAR_HIDDEN.load(Ordering::Relaxed) {
+        hand_over_taskbar("restart");
+    } else {
+        set_taskbar_visibility(true, true);
+    }
     NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
     crate::services::set_native_osd_suppressed(false);
     crate::notifications::restore_native_toasts();
