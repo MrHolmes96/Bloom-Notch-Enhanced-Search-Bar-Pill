@@ -114,6 +114,10 @@ export function NotchTab({
 	statusWidgets,
 	handleWidgetsChange
 }: NotchTabProps) {
+	// What the notch shows while music plays (see App.tsx, MusicRest).
+	const [musicRestRaw, setMusicRest] = useStoredString("bloom-music-rest", "player");
+	const musicRest =
+		musicRestRaw === "widgets" || musicRestRaw === "compact" ? musicRestRaw : "player";
 	const [shelfLocalSend, setShelfLocalSend] = useStoredFlag("bloom-shelf-localsend", true);
 	const [receiveMinutes, setReceiveMinutes] = useStoredString(
 		"bloom-shelf-localsend-receive-minutes",
@@ -171,17 +175,38 @@ export function NotchTab({
 						<>
 							<SettingRow
 								icon={Minimize2}
-								label="Compact Mode"
-								desc="Show visualizer & artwork when collapsed"
+								label="While Music Plays"
+								desc={
+									musicRest === "widgets"
+										? "The clock and widgets, with the full player under them"
+										: musicRest === "compact"
+											? "A small pill with the visualizer and artwork; click the artwork for the player"
+											: "The full player, the same as when you point at it"
+								}
 							>
-								<label className="toggle-switch">
-									<input
-										type="checkbox"
-										checked={musicCompactNotch}
-										onChange={toggleMusicCompactNotch}
-									/>
-									<span className="slider"></span>
-								</label>
+								<div className="unit-toggle-minimal wide">
+									<span
+										className={musicRest === "player" ? "active" : ""}
+										onClick={() => setMusicRest("player")}
+									>
+										Player
+									</span>
+									<span
+										className={musicRest === "widgets" ? "active" : ""}
+										onClick={() => setMusicRest("widgets")}
+									>
+										Under Widgets
+									</span>
+									<span
+										className={musicRest === "compact" ? "active" : ""}
+										onClick={() => {
+											setMusicRest("compact");
+											if (!musicCompactNotch) toggleMusicCompactNotch();
+										}}
+									>
+										Compact
+									</span>
+								</div>
 							</SettingRow>
 
 							<SettingRow icon={LayoutList} label="Media Layout" desc="Choose expanded player style">

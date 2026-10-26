@@ -1397,6 +1397,13 @@ img {
 	z-index: 1;
 }
 
+/* "Under the Widgets": the player below the status row. */
+.music-below-widgets {
+	flex: 1 1 auto;
+	height: auto;
+	min-height: 0;
+}
+
 .calendar-timer-content {
 	position: absolute;
 	top: 36px;
