@@ -314,6 +314,7 @@ pub fn export_logs(app: Option<&AppHandle>) -> Result<PathBuf, String> {
         "crash.log",
         "focus.log",
         "taskbar-progress.log",
+        "notification-clicks.log",
         "tray-icons.txt",
         "restarts.txt",
         "windows-build.txt",

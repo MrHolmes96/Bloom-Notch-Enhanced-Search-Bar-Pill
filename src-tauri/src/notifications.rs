@@ -1167,15 +1167,23 @@ enum PopupOutcome {
 }
 
 fn on_windows_popup(title: &str, body: &str, act: PopupAct) -> PopupOutcome {
+    let Some(hwnd) = find_toast_window() else {
+        trace("  Windows' pop-up: not there any more");
+        return PopupOutcome::Gone;
+    };
+    act_in_window(hwnd, "Windows' pop-up", title, body, act)
+}
+
+/// Finds a notification in `hwnd` (Windows' pop-up, or its notification
+/// center) by its title and first line, and clicks or dismisses it there,
+/// through Windows' accessibility interface, which does exactly what a click
+/// there does.
+fn act_in_window(hwnd: HWND, place: &str, title: &str, body: &str, act: PopupAct) -> PopupOutcome {
     use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
     use windows::Win32::UI::Accessibility::{
         CUIAutomation8, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
         IUIAutomationLegacyIAccessiblePattern, TreeScope_Descendants, UIA_InvokePatternId,
         UIA_LegacyIAccessiblePatternId, UIA_TextControlTypeId,
-    };
-    let Some(hwnd) = find_toast_window() else {
-        trace("  Windows' pop-up: not there any more");
-        return PopupOutcome::Gone;
     };
     let title = squash(title);
     let body = squash(body.lines().next().unwrap_or_default());
@@ -1195,11 +1203,11 @@ fn on_windows_popup(title: &str, body: &str, act: PopupAct) -> PopupOutcome {
             return PopupOutcome::Failed;
         };
         let Ok(elements) = root.FindAll(TreeScope_Descendants, &condition) else {
-            trace("  Windows' pop-up: its contents can't be read");
+            trace(&format!("  {place}: its contents can't be read"));
             return PopupOutcome::Failed;
         };
         trace(&format!(
-            "  Windows' pop-up: {} parts",
+            "  {place}: {} parts",
             elements.Length().unwrap_or(0)
         ));
         // The notification itself: the outermost element that names it
@@ -1281,7 +1289,7 @@ fn on_windows_popup(title: &str, body: &str, act: PopupAct) -> PopupOutcome {
             }
         }
         let Some((_, element)) = best else {
-            trace("  Windows' pop-up: this notification isn't in it");
+            trace(&format!("  {place}: this notification isn't in it"));
             return PopupOutcome::Gone;
         };
         if act == PopupAct::Dismiss {
@@ -1293,7 +1301,7 @@ fn on_windows_popup(title: &str, body: &str, act: PopupAct) -> PopupOutcome {
             element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
         {
             if pattern.Invoke().is_ok() {
-                trace("  Windows' pop-up: clicked");
+                trace(&format!("  {place}: clicked"));
                 return PopupOutcome::Done;
             }
         }
@@ -1302,10 +1310,10 @@ fn on_windows_popup(title: &str, body: &str, act: PopupAct) -> PopupOutcome {
                 UIA_LegacyIAccessiblePatternId,
             )
             .is_ok_and(|p| p.DoDefaultAction().is_ok());
-        trace(if done {
-            "  Windows' pop-up: clicked (default action)"
+        trace(&if done {
+            format!("  {place}: clicked (default action)")
         } else {
-            "  Windows' pop-up: the click didn't go through"
+            format!("  {place}: the click didn't go through")
         });
         if done {
             PopupOutcome::Done
@@ -1367,6 +1375,151 @@ unsafe fn dismiss_in_popup(
     PopupOutcome::Failed
 }
 
+/// Windows of Windows' shell UI (ShellExperienceHost: the notification
+/// center, the pop-ups, the quick settings), with whether each is hidden
+/// (cloaked) right now.
+fn shell_ui_windows() -> Vec<(HWND, bool)> {
+    unsafe extern "system" fn visit(hwnd: HWND, found: LPARAM) -> windows::core::BOOL {
+        let list = &mut *(found.0 as *mut Vec<(HWND, bool)>);
+        if class_name(hwnd) == "Windows.UI.Core.CoreWindow"
+            && process_file_name(hwnd).eq_ignore_ascii_case("shellexperiencehost.exe")
+        {
+            let mut cloaked = 0u32;
+            let _ = windows::Win32::Graphics::Dwm::DwmGetWindowAttribute(
+                hwnd,
+                windows::Win32::Graphics::Dwm::DWMWA_CLOAKED,
+                &mut cloaked as *mut u32 as *mut _,
+                4,
+            );
+            list.push((hwnd, cloaked != 0));
+        }
+        true.into()
+    }
+    let mut list: Vec<(HWND, bool)> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(visit), LPARAM(&mut list as *mut _ as isize));
+    }
+    list
+}
+
+/// Clicks the notification in Windows' own notification center, for a
+/// notification Windows still has but whose pop-up is gone. Apps that take
+/// their clicks inside the running app (Discord and other Electron apps)
+/// only open the right place from a click in Windows' own UI; their own
+/// notification handler, called directly, only brings the app forward.
+///
+/// The center is made see-through before it opens (its window is there,
+/// hidden, all the time), so it never shows; Windows closes it after the
+/// click, and its look is put back once it has.
+fn click_in_windows_center(title: &str, body: &str) -> PopupOutcome {
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    // The hidden shell windows, see-through until the click is done (one of
+    // them is the center); shown ones (a pop-up on screen) are left alone.
+    let hidden: Vec<(HWND, isize)> = shell_ui_windows()
+        .into_iter()
+        .filter(|(_, cloaked)| *cloaked)
+        .map(|(hwnd, _)| unsafe { (hwnd, GetWindowLongPtrW(hwnd, GWL_EXSTYLE)) })
+        .collect();
+    for (hwnd, style) in &hidden {
+        unsafe {
+            SetWindowLongPtrW(
+                *hwnd,
+                GWL_EXSTYLE,
+                style | WS_EX_LAYERED.0 as isize | WS_EX_TRANSPARENT.0 as isize,
+            );
+            let _ = SetLayeredWindowAttributes(*hwnd, Default::default(), 0, LWA_ALPHA);
+        }
+    }
+    let put_back = || {
+        for (hwnd, style) in &hidden {
+            unsafe {
+                let _ = SetLayeredWindowAttributes(*hwnd, Default::default(), 255, LWA_ALPHA);
+                SetWindowLongPtrW(*hwnd, GWL_EXSTYLE, *style);
+            }
+        }
+    };
+    crate::commands::open_windows_notification_center();
+    // The center: the shell window now in front.
+    let mut center = None;
+    for _ in 0..40 {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        let front = unsafe { GetForegroundWindow() };
+        if hidden.iter().any(|(hwnd, _)| *hwnd == front) {
+            center = Some(front);
+            break;
+        }
+    }
+    let Some(center) = center else {
+        trace("  Windows' notification center: didn't open");
+        // It may have opened after all, or be about to: leave it shown.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        put_back();
+        return PopupOutcome::Failed;
+    };
+    // Its notifications are drawn a moment after it opens.
+    let mut outcome = PopupOutcome::Gone;
+    for _ in 0..6 {
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        outcome = act_in_window(
+            center,
+            "Windows' notification center",
+            title,
+            body,
+            PopupAct::Click,
+        );
+        if outcome == PopupOutcome::Done {
+            break;
+        }
+    }
+    if outcome != PopupOutcome::Done {
+        // Closed again, unseen: Escape while it is in front.
+        if unsafe { GetForegroundWindow() } == center {
+            press_escape();
+        }
+    }
+    // Put back once it has closed (cloaked again), so it never shows.
+    for _ in 0..40 {
+        let closed = shell_ui_windows()
+            .iter()
+            .any(|(hwnd, cloaked)| *hwnd == center && *cloaked);
+        if closed {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    put_back();
+    outcome
+}
+
+fn press_escape() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_ESCAPE,
+    };
+    let key = |flags| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VK_ESCAPE,
+                dwFlags: flags,
+                ..Default::default()
+            },
+        },
+    };
+    unsafe {
+        SendInput(
+            &[key(Default::default()), key(KEYEVENTF_KEYUP)],
+            std::mem::size_of::<INPUT>() as i32,
+        );
+    }
+}
+
+/// Whether Windows still has the notification (in its notification center).
+fn windows_still_has(id: u32) -> bool {
+    windows::UI::Notifications::Management::UserNotificationListener::Current()
+        .and_then(|listener| listener.GetNotification(id))
+        .is_ok()
+}
+
 /// Does what clicking the notification in Windows does (opens what it is
 /// about: its chat or page, or its app with its arguments) and clears it from
 /// the notification center, as Windows does. While Windows' own pop-up still
@@ -1386,8 +1539,19 @@ pub async fn notification_activate(
         trace(&format!("click: notification {id} from {aumid}"));
         // Windows' own pop-up first; it counts once something came forward
         // (an app that takes its clicks inside, like Discord, opens the chat).
-        let clicked_in_windows =
-            texts_of(id).is_some_and(|(title, body)| click_windows_popup(&title, &body));
+        let texts = texts_of(id);
+        let mut clicked_in_windows = texts
+            .as_ref()
+            .is_some_and(|(title, body)| click_windows_popup(title, body));
+        // The pop-up is gone, but Windows still has the notification: it is
+        // clicked in Windows' own notification center, as the user would.
+        if !clicked_in_windows && windows_still_has(id) {
+            if let Some((title, body)) = &texts {
+                clicked_in_windows = click_in_windows_center(title, body) == PopupOutcome::Done;
+            }
+        } else if !clicked_in_windows {
+            trace("  Windows no longer has it (the app took it back)");
+        }
         let opened_by_windows = clicked_in_windows && came_forward(before, 1800);
         if clicked_in_windows {
             trace(&format!("  app came forward: {opened_by_windows}"));
