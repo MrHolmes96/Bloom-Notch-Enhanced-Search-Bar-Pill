@@ -328,6 +328,7 @@ fn main() {
             localsend_receive::localsend_receive_status,
             localsend::localsend_cancel,
             notifications::notification_action,
+            notifications::notification_card_closed,
             notifications::notification_center_fit,
             notifications::notifications_allow_typing,
             notifications::notifications_set_size,

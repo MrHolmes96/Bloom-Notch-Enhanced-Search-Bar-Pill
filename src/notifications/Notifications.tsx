@@ -60,17 +60,37 @@ export default function Notifications() {
 		"bloom-notify-position": (v) => setPosition(String(v))
 	});
 
-	const remove = (key: number) => {
+	// Windows' own pop-up for a notification stays (hidden) while its card
+	// shows, so a click on the card can still open what it is about; a card
+	// that closes without being clicked closes that pop-up too.
+	const closeWindowsPopup = (card: { id: number; title: string; body?: string }) => {
+		if (card.id === 0) return;
+		void invoke("notification_card_closed", {
+			title: card.title ?? "",
+			body: card.body ?? ""
+		}).catch(() => {});
+	};
+
+	const remove = (key: number, closeInWindows = true) => {
 		const timer = timers.current.get(key);
 		if (timer !== undefined) window.clearTimeout(timer);
 		timers.current.delete(key);
-		setCards((prev) => prev.filter((c) => c.key !== key));
+		setCards((prev) => {
+			const gone = prev.find((c) => c.key === key);
+			if (gone && closeInWindows) closeWindowsPopup(gone);
+			return prev.filter((c) => c.key !== key);
+		});
 	};
 
 	useEffect(() => {
 		const add = (incoming: Incoming) => {
 			const card = { ...incoming, key: nextKey.current++ };
-			setCards((prev) => [card, ...prev].slice(0, MAX_CARDS));
+			setCards((prev) => {
+				const next = [card, ...prev];
+				// Pushed out by newer cards: closed like any other.
+				next.slice(MAX_CARDS).forEach(closeWindowsPopup);
+				return next.slice(0, MAX_CARDS);
+			});
 		};
 		const unlisten = listen<Incoming>("bloom-notification", (event) => add(event.payload));
 		// Listening now: the cards that came before this page was ready
@@ -142,7 +162,8 @@ export default function Notifications() {
 						exit={{ opacity: 0, x: fromLeft ? -40 : 40, transition: { duration: 0.15 } }}
 						transition={{ type: "spring", stiffness: 420, damping: 34 }}
 						onClick={() => {
-							remove(card.key);
+							// Bloom clicks Windows' pop-up for it, which closes it.
+							remove(card.key, false);
 							if (card.id !== 0) {
 								invoke("notification_activate", {
 									id: card.id,
@@ -179,7 +200,7 @@ export default function Notifications() {
 							inputs={card.inputs ?? []}
 							onTyping={allowTyping}
 							onPress={(button, typed) => {
-								remove(card.key);
+								remove(card.key, false);
 								allowTyping(false);
 								invoke("notification_action", {
 									id: card.id,

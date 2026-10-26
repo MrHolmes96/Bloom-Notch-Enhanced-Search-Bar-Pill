@@ -236,8 +236,128 @@ fn find_toast_window() -> Option<HWND> {
     (found != 0).then_some(HWND(found as *mut _))
 }
 
+// ---------------------------------------------------------------- how long Windows' pop-up stays
+
+/// Windows' pop-up stays this long (seconds) while Bloom's cards stand in for
+/// it, so it can still be clicked for as long as a card shows (and is closed
+/// with the card). Apps such as Discord take their notification back the
+/// moment Windows' pop-up goes; a click after that could only open the app,
+/// never the chat it was about.
+const POPUP_SECONDS: u32 = 60;
+/// SPI_GETMESSAGEDURATION / SPI_SETMESSAGEDURATION: Settings > Accessibility >
+/// Visual effects > "Dismiss notifications after this amount of time".
+const SPI_GETMESSAGEDURATION: u32 = 0x2016;
+const SPI_SETMESSAGEDURATION: u32 = 0x2017;
+/// Set once Windows refused to close a pop-up for Bloom: its own time is put
+/// back for the rest of this run, so pop-ups never pile up.
+static KEEP_POPUPS_OFF: AtomicBool = AtomicBool::new(false);
+
+/// Where the user's own pop-up time is kept while Bloom's is in use (also
+/// after a crash, until it is put back).
+fn duration_backup() -> Option<std::path::PathBuf> {
+    let dir = std::path::PathBuf::from(std::env::var_os("APPDATA")?)
+        .join(crate::data_folders::IDENTIFIER);
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join("notification-duration.txt"))
+}
+
+fn message_duration() -> Option<u32> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SYSTEM_PARAMETERS_INFO_ACTION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+    let mut seconds = 0u32;
+    unsafe {
+        SystemParametersInfoW(
+            SYSTEM_PARAMETERS_INFO_ACTION(SPI_GETMESSAGEDURATION),
+            0,
+            Some(&mut seconds as *mut u32 as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .ok()?;
+    }
+    (seconds > 0).then_some(seconds)
+}
+
+fn set_message_duration(seconds: u32) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SYSTEM_PARAMETERS_INFO_ACTION,
+    };
+    unsafe {
+        // The value goes in the pointer argument itself.
+        SystemParametersInfoW(
+            SYSTEM_PARAMETERS_INFO_ACTION(SPI_SETMESSAGEDURATION),
+            0,
+            Some(seconds as usize as *mut _),
+            SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
+        )
+        .is_ok()
+    }
+}
+
+/// Lets Windows' hidden pop-up stay while Bloom's card does (the user's own
+/// time is kept to put back). Only while Bloom's cards replace the pop-ups.
+fn keep_popups_for_cards() {
+    if KEEP_POPUPS_OFF.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some(backup) = duration_backup() else {
+        return;
+    };
+    if backup.exists() {
+        return;
+    }
+    let Some(own) = message_duration() else {
+        return;
+    };
+    if own >= POPUP_SECONDS {
+        return;
+    }
+    if std::fs::write(&backup, own.to_string()).is_ok() && !set_message_duration(POPUP_SECONDS) {
+        let _ = std::fs::remove_file(&backup);
+    }
+}
+
+/// Puts the user's own pop-up time back (Bloom style off, Bloom quitting, or
+/// left over from a run that crashed).
+fn put_back_popup_time() {
+    let Some(backup) = duration_backup() else {
+        return;
+    };
+    let Some(own) = std::fs::read_to_string(&backup)
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok())
+    else {
+        return;
+    };
+    // Only Bloom's own value is replaced: one the user changed meanwhile stays.
+    if message_duration() == Some(POPUP_SECONDS) {
+        set_message_duration(own);
+    }
+    let _ = std::fs::remove_file(&backup);
+}
+
+/// Bloom's card for a notification closed (its time was up, it was
+/// dismissed, or a newer card pushed it out): Windows' hidden pop-up for it
+/// closes too, as it would have on its own.
+#[tauri::command]
+pub async fn notification_card_closed(title: String, body: String) {
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        if on_windows_popup(&title, &body, PopupAct::Dismiss) == PopupOutcome::Failed {
+            // Windows won't close it for Bloom: back to Windows' own time,
+            // so hidden pop-ups never pile up and hold new ones back.
+            KEEP_POPUPS_OFF.store(true, Ordering::Relaxed);
+            put_back_popup_time();
+            trace("  Windows' own pop-up time is used again for this run");
+        }
+    })
+    .await;
+}
+
 /// Makes the pop-up invisible and click-through (the way TopNotify fades it).
 fn hide_toast(hwnd: HWND) {
+    keep_popups_for_cards();
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         if HIDDEN_TOAST.load(Ordering::SeqCst) != hwnd.0 as isize {
@@ -254,6 +374,7 @@ fn hide_toast(hwnd: HWND) {
 
 /// Puts back the pop-up Bloom hid, if any.
 pub fn restore_native_toasts() {
+    put_back_popup_time();
     let hidden = HIDDEN_TOAST.swap(0, Ordering::SeqCst);
     if hidden == 0 {
         return;
@@ -272,6 +393,7 @@ pub fn restore_native_toasts() {
 /// Clears a hidden pop-up left by an earlier run that ended without cleaning
 /// up (a crash), before anything else.
 pub(crate) fn repair_leftover() {
+    put_back_popup_time();
     if let Some(hwnd) = find_toast_window() {
         unsafe {
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -1023,6 +1145,28 @@ fn texts_of(id: u32) -> Option<(String, String)> {
 /// being launched with it (Discord and other Electron apps) only answer this
 /// way, and then open what the notification is about (the chat, the page).
 fn click_windows_popup(title: &str, body: &str) -> bool {
+    on_windows_popup(title, body, PopupAct::Click) == PopupOutcome::Done
+}
+
+/// What to do to a notification in Windows' own (hidden) pop-up.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PopupAct {
+    /// Click it: the app opens what it is about.
+    Click,
+    /// Close it with its own dismiss button, as when Windows' time is up.
+    Dismiss,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PopupOutcome {
+    Done,
+    /// It isn't in the pop-up (already gone, or never shown there).
+    Gone,
+    /// It is there, but Windows didn't take the click.
+    Failed,
+}
+
+fn on_windows_popup(title: &str, body: &str, act: PopupAct) -> PopupOutcome {
     use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
     use windows::Win32::UI::Accessibility::{
         CUIAutomation8, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern,
@@ -1031,28 +1175,28 @@ fn click_windows_popup(title: &str, body: &str) -> bool {
     };
     let Some(hwnd) = find_toast_window() else {
         trace("  Windows' pop-up: not there any more");
-        return false;
+        return PopupOutcome::Gone;
     };
     let title = squash(title);
     let body = squash(body.lines().next().unwrap_or_default());
     if title.is_empty() && body.is_empty() {
-        return false;
+        return PopupOutcome::Gone;
     }
     unsafe {
         let Ok(automation) =
             CoCreateInstance::<_, IUIAutomation>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)
         else {
-            return false;
+            return PopupOutcome::Failed;
         };
         let Ok(root) = automation.ElementFromHandle(hwnd) else {
-            return false;
+            return PopupOutcome::Failed;
         };
         let Ok(condition) = automation.CreateTrueCondition() else {
-            return false;
+            return PopupOutcome::Failed;
         };
         let Ok(elements) = root.FindAll(TreeScope_Descendants, &condition) else {
             trace("  Windows' pop-up: its contents can't be read");
-            return false;
+            return PopupOutcome::Failed;
         };
         trace(&format!(
             "  Windows' pop-up: {} parts",
@@ -1138,8 +1282,11 @@ fn click_windows_popup(title: &str, body: &str) -> bool {
         }
         let Some((_, element)) = best else {
             trace("  Windows' pop-up: this notification isn't in it");
-            return false;
+            return PopupOutcome::Gone;
         };
+        if act == PopupAct::Dismiss {
+            return dismiss_in_popup(&automation, &element);
+        }
         // The app may bring its window forward, as from Windows' pop-up.
         crate::foreground::grant();
         if let Ok(pattern) =
@@ -1147,7 +1294,7 @@ fn click_windows_popup(title: &str, body: &str) -> bool {
         {
             if pattern.Invoke().is_ok() {
                 trace("  Windows' pop-up: clicked");
-                return true;
+                return PopupOutcome::Done;
             }
         }
         let done = element
@@ -1160,8 +1307,62 @@ fn click_windows_popup(title: &str, body: &str) -> bool {
         } else {
             "  Windows' pop-up: the click didn't go through"
         });
-        done
+        if done {
+            PopupOutcome::Done
+        } else {
+            PopupOutcome::Failed
+        }
     }
+}
+
+/// Presses the dismiss button of the notification `element` stands for: the
+/// nearest one at or above it (the button sits beside the notification's
+/// text, inside the notification).
+unsafe fn dismiss_in_popup(
+    automation: &windows::Win32::UI::Accessibility::IUIAutomation,
+    element: &windows::Win32::UI::Accessibility::IUIAutomationElement,
+) -> PopupOutcome {
+    use windows::core::Interface;
+    use windows::Win32::System::Variant::VARIANT;
+    use windows::Win32::UI::Accessibility::{
+        IUIAutomationInvokePattern, TreeScope_Descendants, UIA_AutomationIdPropertyId,
+        UIA_InvokePatternId,
+    };
+    let Ok(condition) = automation.CreatePropertyCondition(
+        UIA_AutomationIdPropertyId,
+        &VARIANT::from("DismissButton"),
+    ) else {
+        return PopupOutcome::Failed;
+    };
+    let Ok(walker) = automation.RawViewWalker() else {
+        return PopupOutcome::Failed;
+    };
+    let mut current = Some(element.clone());
+    for _ in 0..4 {
+        let Some(node) = current.take() else {
+            break;
+        };
+        if let Ok(button) = node.FindFirst(TreeScope_Descendants, &condition) {
+            if let Ok(pattern) =
+                button.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+            {
+                let done = pattern.Invoke().is_ok();
+                trace(if done {
+                    "  Windows' pop-up: dismissed"
+                } else {
+                    "  Windows' pop-up: its dismiss button didn't respond"
+                });
+                return if done {
+                    PopupOutcome::Done
+                } else {
+                    PopupOutcome::Failed
+                };
+            }
+        }
+        current = walker.GetParentElement(&node).ok().filter(|p| p.as_raw() != node.as_raw());
+    }
+    trace("  Windows' pop-up: no dismiss button found");
+    PopupOutcome::Failed
 }
 
 /// Does what clicking the notification in Windows does (opens what it is
@@ -1220,6 +1421,12 @@ pub async fn notification_activate(
             }
         };
         trace(&format!("  result: {result:?}"));
+        // Opened another way: Windows' hidden pop-up for it closes now too.
+        if !clicked_in_windows {
+            if let Some((title, body)) = texts_of(id) {
+                on_windows_popup(&title, &body, PopupAct::Dismiss);
+            }
+        }
         // Cleared once it did something, as in Windows; a click that did
         // nothing leaves it in the center.
         if result.is_ok() {
@@ -1251,6 +1458,9 @@ pub async fn notification_action(
         let content =
             content_of(id, &aumid, time.unwrap_or_default()).ok_or("This notification is gone")?;
         let result = crate::toast::press(&aumid, &content, button, &typed);
+        if let Some((title, body)) = texts_of(id) {
+            on_windows_popup(&title, &body, PopupAct::Dismiss);
+        }
         if let Ok(listener) =
             windows::UI::Notifications::Management::UserNotificationListener::Current()
         {

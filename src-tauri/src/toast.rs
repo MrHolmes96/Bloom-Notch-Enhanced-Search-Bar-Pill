@@ -632,10 +632,48 @@ pub fn open_app(aumid: &str) -> Result<(), String> {
     if bring_app_forward(aumid) {
         return Ok(());
     }
-    shell_open(
-        "explorer.exe",
-        Some(&format!("shell:AppsFolder\\{}", aumid)),
-    )
+    // Some apps go by their program's path (Windows writes its own folders
+    // as {GUID}\...): the program itself is started.
+    if let Some(program) = program_of_id(aumid) {
+        crate::notifications::trace("  opening the app's program");
+        return shell_open(&program, None);
+    }
+    // An app Windows knows by this id (its Start menu entry). Explorer was
+    // given ids it didn't know too, and then opened a folder (C:\) instead.
+    let entry = format!("shell:AppsFolder\\{aumid}");
+    if shell_item_exists(&entry) {
+        crate::notifications::trace("  opening the app from Windows' list of apps");
+        return shell_open(&entry, None);
+    }
+    crate::notifications::trace("  no app found for this notification");
+    Err("Bloom couldn't find the app this notification came from".to_string())
+}
+
+/// The program an app id names, when the id is a program's path: plain, or
+/// starting with one of Windows' folders as a {GUID} ("{6D809377-...}\App\
+/// app.exe" is under Program Files). None when it isn't, or the file is gone.
+fn program_of_id(aumid: &str) -> Option<String> {
+    let path = if let Some(rest) = aumid.strip_prefix('{') {
+        let (guid, tail) = rest.split_once('}')?;
+        let folder = known_folder(&GUID::try_from(guid).ok()?)?;
+        folder.join(tail.trim_start_matches('\\'))
+    } else {
+        std::path::PathBuf::from(aumid)
+    };
+    let is_program = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("exe"));
+    (path.is_absolute() && is_program && path.is_file())
+        .then(|| path.to_string_lossy().into_owned())
+}
+
+/// Whether Windows can find this shell path (an app in its list of apps).
+fn shell_item_exists(path: &str) -> bool {
+    use windows::Win32::UI::Shell::{IShellItem, SHCreateItemFromParsingName};
+    let wide_path = wide(path);
+    unsafe {
+        SHCreateItemFromParsingName::<_, _, IShellItem>(PCWSTR(wide_path.as_ptr()), None).is_ok()
+    }
 }
 
 unsafe fn com_activate(
@@ -871,6 +909,13 @@ fn shortcut_activator(path: &std::path::Path) -> Option<(String, GUID)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_ids_that_are_not_programs_are_not_opened_as_files() {
+        assert_eq!(program_of_id("com.squirrel.Discord.Discord"), None);
+        assert_eq!(program_of_id("Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"), None);
+        assert_eq!(program_of_id(r"C:\No\Such\app.exe"), None);
+    }
 
     #[test]
     fn links_are_recognised() {
