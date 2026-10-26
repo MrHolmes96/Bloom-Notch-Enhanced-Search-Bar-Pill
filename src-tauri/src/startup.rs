@@ -29,6 +29,9 @@ pub const RESTORE_ARG: &str = "--restore-windows";
 /// Named event a running Bloom waits on to quit (the uninstaller and the
 /// installer set it).
 pub const QUIT_EVENT: &str = "BloomQuit";
+/// Named event the installer sets before updating Bloom: a running Bloom
+/// hands its hidden taskbar to the new version instead of showing it.
+pub const UPDATE_EVENT: &str = "BloomUpdate";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 fn schtasks(args: &[&str]) -> Option<std::process::Output> {
@@ -40,7 +43,7 @@ fn schtasks(args: &[&str]) -> Option<std::process::Output> {
         .ok()
 }
 
-fn task_xml() -> Option<String> {
+pub(crate) fn task_xml() -> Option<String> {
     let output = schtasks(&["/Query", "/TN", TASK_NAME, "/XML"])?;
     if !output.status.success() {
         return None;
@@ -60,7 +63,7 @@ fn task_xml() -> Option<String> {
     })
 }
 
-fn task_exists() -> bool {
+pub(crate) fn task_exists() -> bool {
     schtasks(&["/Query", "/TN", TASK_NAME])
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -129,7 +132,7 @@ pub fn task_definition(user: &str, exe: &str) -> String {
 }
 
 /// Registers (or replaces) the startup task for this user.
-fn create_task() -> bool {
+pub(crate) fn create_task() -> bool {
     let (Some(user), Ok(exe)) = (crate::utils::current_user_sid(), std::env::current_exe()) else {
         return false;
     };
@@ -151,7 +154,7 @@ fn create_task() -> bool {
     created
 }
 
-fn delete_task() {
+pub(crate) fn delete_task() {
     let _ = schtasks(&["/Delete", "/TN", TASK_NAME, "/F"]);
 }
 
@@ -317,6 +320,7 @@ fn set_priority(
 /// Waits (on its own thread) for the uninstaller or installer to ask Bloom
 /// to quit, then quits the normal way, which restores everything.
 pub fn listen_for_quit(app: AppHandle) {
+    let for_update = app.clone();
     std::thread::spawn(move || unsafe {
         use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
         let name: Vec<u16> = QUIT_EVENT
@@ -329,6 +333,61 @@ pub fn listen_for_quit(app: AppHandle) {
         };
         if WaitForSingleObject(event, INFINITE) == windows::Win32::Foundation::WAIT_OBJECT_0 {
             crate::commands::restore_taskbar_and_exit(&app);
+        }
+    });
+    let app = for_update;
+    std::thread::spawn(move || unsafe {
+        use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
+        let name: Vec<u16> = UPDATE_EVENT
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let Ok(event) = CreateEventW(None, true, false, windows::core::PCWSTR(name.as_ptr()))
+        else {
+            return;
+        };
+        if WaitForSingleObject(event, INFINITE) == windows::Win32::Foundation::WAIT_OBJECT_0 {
+            hand_over_for_update(&app);
+        }
+    });
+}
+
+/// The installer is about to update Bloom: the hidden taskbar is handed to
+/// the new version (which takes it over when it starts) instead of being
+/// shown. A small copy of Bloom outside its install folder watches over it
+/// (the install folder must be free to be updated) and shows the taskbar
+/// after all should no Bloom take it over within 3 minutes.
+fn hand_over_for_update(app: &AppHandle) {
+    use std::sync::atomic::Ordering;
+    if crate::state::NATIVE_TASKBAR_HIDDEN.load(Ordering::Relaxed) {
+        crate::utils::hand_over_taskbar("update");
+        if let (Ok(exe), Some(marker)) = (std::env::current_exe(), crate::utils::taskbar_marker()) {
+            let copy = std::env::temp_dir().join(format!("bloom-update-watch-{}.exe", std::process::id()));
+            if std::fs::copy(&exe, &copy).is_ok() {
+                let _ = Command::new(&copy)
+                    .arg("--update-watchdog")
+                    .arg(marker)
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .spawn();
+            }
+        }
+    }
+    crate::commands::restore_taskbar_and_exit(app);
+}
+
+/// Removes the update watchers' copies left in the temp folder by earlier
+/// updates (each deletes nothing of itself while it runs).
+pub fn clean_update_watchers() {
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if name.starts_with("bloom-update-watch-") && name.ends_with(".exe") {
+                let _ = std::fs::remove_file(entry.path());
+            }
         }
     });
 }

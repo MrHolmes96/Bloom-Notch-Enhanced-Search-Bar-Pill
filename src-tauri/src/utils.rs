@@ -157,7 +157,10 @@ pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
     let handover = std::fs::read_to_string(&marker)
         .ok()
         .and_then(|contents| parse_marker_handover(&contents).map(str::to_string));
-    if session_ending() || handover.as_deref() == Some("session-end") {
+    if session_ending()
+        || handover.as_deref() == Some("session-end")
+        || handover.as_deref() == Some("update")
+    {
         return;
     }
     if handover.as_deref() == Some("restart") {
@@ -267,7 +270,7 @@ fn may_restart() -> bool {
 
 /// A file in Bloom's data folder, found without the app (the watchdog and
 /// the panic handler have none).
-fn data_file(name: &str) -> Option<PathBuf> {
+pub(crate) fn data_file(name: &str) -> Option<PathBuf> {
     let dir = PathBuf::from(std::env::var_os("APPDATA")?).join(crate::data_folders::IDENTIFIER);
     let _ = std::fs::create_dir_all(&dir);
     Some(dir.join(name))
@@ -342,6 +345,39 @@ fn parse_marker_handover(contents: &str) -> Option<&str> {
         .lines()
         .find_map(|line| line.strip_prefix("handover="))
         .map(str::trim)
+}
+
+/// The marker's path (for the update watcher).
+pub fn taskbar_marker() -> Option<PathBuf> {
+    TASKBAR_MARKER.get().cloned()
+}
+
+/// `--update-watchdog <marker>`: a copy of Bloom outside its install folder,
+/// started as the installer updates Bloom. Once a new Bloom has taken the
+/// hidden taskbar over (it rewrites the marker), or the marker is gone, it
+/// leaves; after 3 minutes without either, it shows the taskbar again.
+pub fn run_update_watchdog(marker: PathBuf) {
+    let _ = TASKBAR_MARKER.set(marker.clone());
+    let started = std::time::Instant::now();
+    while started.elapsed() < std::time::Duration::from_secs(180) {
+        let Ok(contents) = std::fs::read_to_string(&marker) else {
+            return;
+        };
+        if parse_marker_handover(&contents) != Some("update") {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    note_crash("No Bloom took the taskbar over after the update: Windows' taskbar is shown");
+    for _ in 0..40 {
+        restore_taskbar_after_crash();
+        if !marker.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    crate::services::set_native_osd_suppressed(false);
+    crate::notifications::repair_leftover();
 }
 
 /// Whether Windows is signing out or shutting down right now.

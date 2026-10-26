@@ -3429,7 +3429,10 @@ pub fn release_appbars(handle: &AppHandle) {
 pub fn restore_taskbar_and_exit(handle: &AppHandle) {
     SHUTTING_DOWN.store(true, Ordering::Relaxed);
     release_appbars(handle);
-    set_taskbar_visibility(true, true);
+    // Handed to the next Bloom (an update): it stays hidden.
+    if !HANDING_OVER.load(Ordering::Relaxed) {
+        set_taskbar_visibility(true, true);
+    }
     NATIVE_TASKBAR_HIDDEN.store(false, Ordering::Relaxed);
     crate::services::set_native_osd_suppressed(false);
     // Windows' own notification pop-ups come back when Bloom's go away.

@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { Download, FileDown, Upload, FolderOpen, HardDrive } from "lucide-react";
+import {
+	Download,
+	FileDown,
+	Upload,
+	FolderOpen,
+	HardDrive,
+	Wrench,
+	FileArchive,
+	LifeBuoy
+} from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GithubIcon } from "../icons";
@@ -25,6 +34,20 @@ export function AboutTab({
 	handleImportSettings
 }: AboutTabProps) {
 	const [folderError, setFolderError] = useState("");
+	const [repairNote, setRepairNote] = useState<string | null>(null);
+	const [diagnosticsNote, setDiagnosticsNote] = useState<string | null>(null);
+	const repair = () => {
+		setRepairNote("Repairing…");
+		invoke<string[]>("bloom_repair")
+			.then((done) => setRepairNote(done.join(". ")))
+			.catch((e) => setRepairNote(String(e)));
+	};
+	const exportDiagnostics = () => {
+		setDiagnosticsNote("Saving…");
+		invoke<string>("diagnostics_export")
+			.then((path) => setDiagnosticsNote(`Saved on your desktop: ${path.split("\\").pop()}`))
+			.catch((e) => setDiagnosticsNote(String(e)));
+	};
 	const openFolder = (kind: "data" | "cache") => {
 		setFolderError("");
 		invoke("open_bloom_folder", { kind }).catch((e) => setFolderError(String(e)));
@@ -116,6 +139,36 @@ export function AboutTab({
 					onClick={handleImportSettings}
 				/>
 			</div>
+			<div className="setting-group-label setting-group-label--spaced">Recovery & Diagnostics</div>
+			<div className="setting-group">
+				<SettingRow
+					icon={Wrench}
+					label="Repair Bloom"
+					desc={
+						repairNote ??
+						"Puts back what Bloom needs (its startup, Explorer as Windows' shell). Done by itself after Windows updates"
+					}
+					action
+					onClick={repair}
+				/>
+				<SettingRow
+					icon={FileArchive}
+					label="Export Diagnostics"
+					desc={
+						diagnosticsNote ??
+						"Bloom's logs and a health report in a zip on your desktop (no settings, sign-ins or notification texts)"
+					}
+					action
+					onClick={exportDiagnostics}
+				/>
+				<SettingRow
+					icon={LifeBuoy}
+					label="Bloom Recovery"
+					desc='If Bloom ever leaves you without a taskbar: press the Windows key and type "Bloom Recovery" (or Ctrl+Shift+Esc > Run new task > "Bloom.exe --recovery"). Windows is put back as it was and Bloom stops starting with Windows'
+					divider={false}
+				/>
+			</div>
+
 			<div className="setting-group-note">
 				Everything Bloom keeps stays in these two folders on this PC, and nothing is sent anywhere
 				on its own. Bloom only goes online, always encrypted, for the weather (Open-Meteo, for the

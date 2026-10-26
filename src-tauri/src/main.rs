@@ -14,6 +14,7 @@ mod integrations;
 mod jumplist;
 mod later_windows;
 mod launcher;
+mod maintenance;
 mod live_preview;
 mod localsend;
 mod localsend_receive;
@@ -88,6 +89,13 @@ fn main() {
     if first.as_deref() == Some(std::ffi::OsStr::new(startup::RESTORE_ARG)) {
         startup::restore_windows();
         return;
+    }
+    // Recovery, repair, enable/disable, diagnostics, the update watcher.
+    if let Some(arg) = first.as_deref() {
+        let rest: Vec<std::ffi::OsString> = args.by_ref().collect();
+        if maintenance::run_command(arg, &rest) {
+            return;
+        }
     }
     // Started by the startup task as Windows signs in.
     let autostart = first.as_deref() == Some(std::ffi::OsStr::new(startup::AUTOSTART_ARG));
@@ -232,6 +240,8 @@ fn main() {
             black_screen::screen_off_now,
             launcher::app_hotkey_status,
             launcher::set_hotkey_recording,
+            maintenance::diagnostics_export,
+            maintenance::bloom_repair,
             bluetooth::bluetooth_battery_refresh,
             focus_app_windows,
             close_window,
@@ -503,6 +513,8 @@ fn main() {
             snap_borders::apply(app.handle());
             startup::listen_for_quit(app.handle().clone());
             startup::migrate(app.handle());
+            startup::clean_update_watchers();
+            maintenance::repair_after_windows_update();
             window_memory::start(app.handle().clone());
             setup_taskbar_hook();
             setup_audio_visualization(app.handle().clone());
