@@ -289,6 +289,13 @@ fn health(app: Option<&AppHandle>) -> String {
 /// pop-ups), as they are now: process, class, title, whether hidden. Only
 /// what each window is called, never what it shows. Used to find which
 /// window is which on a Windows build that moved them.
+fn class_name_of(hwnd: windows::Win32::Foundation::HWND) -> String {
+    let mut class = [0u16; 128];
+    let len = unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(hwnd, &mut class) }
+        as usize;
+    String::from_utf16_lossy(&class[..len.min(128)])
+}
+
 fn shell_windows() -> String {
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM, RECT};
@@ -303,16 +310,18 @@ fn shell_windows() -> String {
         let program = crate::commands::process_image_path(pid)
             .and_then(|p| p.rsplit('\\').next().map(str::to_lowercase))
             .unwrap_or_default();
-        const SHELL: [&str; 7] = [
-            "shellexperiencehost.exe",
-            "shellhost.exe",
-            "startmenuexperiencehost.exe",
-            "searchhost.exe",
-            "explorer.exe",
-            "notificationux.exe",
-            "windowsinternal.composableshell.experiences.textinput.inputapp.exe",
-        ];
-        if !SHELL.contains(&program.as_str()) {
+        // Every program under the Windows folder (Windows' own UI moves
+        // between programs from one build to the next).
+        let root = std::env::var("SystemRoot")
+            .unwrap_or_else(|_| "C:\\Windows".into())
+            .to_lowercase();
+        let in_windows = crate::commands::process_image_path(pid)
+            .is_some_and(|p| p.to_lowercase().starts_with(&root));
+        let skip = matches!(
+            class_name_of(hwnd).as_str(),
+            "IME" | "MSCTFIME UI" | "WorkerW"
+        );
+        if !in_windows || skip {
             return true.into();
         }
         let mut class = [0u16; 128];
@@ -371,6 +380,9 @@ pub fn export_logs(app: Option<&AppHandle>) -> Result<PathBuf, String> {
         .map_err(|e| e.to_string())?;
     if zip.start_file("shell-windows.txt", options).is_ok() {
         let _ = zip.write_all(shell_windows().as_bytes());
+    }
+    if zip.start_file("shell-events.txt", options).is_ok() {
+        let _ = zip.write_all(crate::shell_probe::report().as_bytes());
     }
     // The logs only: never settings.json (sign-in tokens), and nothing that
     // holds what notifications said.

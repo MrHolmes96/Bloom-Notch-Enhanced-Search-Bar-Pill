@@ -24,6 +24,7 @@ mod recycle_bin;
 mod services;
 mod shelf;
 mod shelf_preview;
+mod shell_probe;
 mod snap_borders;
 mod startup;
 mod state;
@@ -520,6 +521,7 @@ fn main() {
             startup::clean_update_watchers();
             maintenance::repair_after_windows_update();
             window_memory::start(app.handle().clone());
+            shell_probe::start();
             setup_taskbar_hook();
             setup_audio_visualization(app.handle().clone());
             setup_settings_watcher(app.handle().clone());
