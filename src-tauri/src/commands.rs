@@ -757,11 +757,8 @@ pub(crate) fn shell_item_exists(path: &str) -> bool {
     use windows::Win32::UI::Shell::{IShellItem, SHCreateItemFromParsingName};
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
-        SHCreateItemFromParsingName::<_, _, IShellItem>(
-            windows::core::PCWSTR(wide.as_ptr()),
-            None,
-        )
-        .is_ok()
+        SHCreateItemFromParsingName::<_, _, IShellItem>(windows::core::PCWSTR(wide.as_ptr()), None)
+            .is_ok()
     }
 }
 
@@ -854,7 +851,7 @@ fn default_terminal() -> Option<String> {
     let value: Vec<u16> = "DelegationTerminal\0".encode_utf16().collect();
     let mut buffer = [0u16; 64];
     let mut size = (buffer.len() * 2) as u32;
-    let chosen = unsafe {
+    let found = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,
             windows::core::PCWSTR(key.as_ptr()),
@@ -865,14 +862,15 @@ fn default_terminal() -> Option<String> {
             Some(&mut size),
         )
         .is_ok()
-    }
-    .then(|| {
+    };
+    let chosen = if found {
         let length = (size as usize / 2).min(buffer.len());
         String::from_utf16_lossy(&buffer[..length])
             .trim_end_matches('\0')
             .to_uppercase()
-    })
-    .unwrap_or_else(|| WINDOWS_DECIDES.to_string());
+    } else {
+        WINDOWS_DECIDES.to_string()
+    };
     if chosen != WINDOWS_DECIDES && !TERMINAL.contains(&chosen.as_str()) {
         return None;
     }
@@ -4345,7 +4343,8 @@ pub fn setup_settings_watcher(app: AppHandle) {
                             .map(|(key, _)| key)
                             .chain(removed.iter())
                             .any(|key| {
-                                key.starts_with("bloom-launcher-") || key.starts_with("bloom-hotkey-")
+                                key.starts_with("bloom-launcher-")
+                                    || key.starts_with("bloom-hotkey-")
                             })
                         {
                             crate::launcher::reload_hotkeys();

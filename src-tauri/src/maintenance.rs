@@ -149,15 +149,12 @@ pub fn repair() -> Vec<String> {
     let exe = std::env::current_exe()
         .map(|p| p.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    match crate::startup::task_xml() {
-        Some(xml) if xml.to_lowercase().contains(&exe) && !xml.contains("<Enabled>false</Enabled>") => {
+    if let Some(xml) = crate::startup::task_xml() {
+        let current =
+            xml.to_lowercase().contains(&exe) && !xml.contains("<Enabled>false</Enabled>");
+        if !current && crate::startup::create_task() {
+            done.push("Set the startup task to start this copy of Bloom again".into());
         }
-        Some(_) => {
-            if crate::startup::create_task() {
-                done.push("Set the startup task to start this copy of Bloom again".into());
-            }
-        }
-        None => {}
     }
     if let Some(path) = crate::utils::data_file("windows-build.txt") {
         let _ = std::fs::write(path, windows_build());
@@ -216,7 +213,8 @@ fn message(text: &str) {
 pub fn recovery() {
     crate::startup::restore_windows();
     let mut lines = vec![
-        "Windows' taskbar and pop-ups are back, and Bloom no longer starts with Windows.".to_string(),
+        "Windows' taskbar and pop-ups are back, and Bloom no longer starts with Windows."
+            .to_string(),
     ];
     if let Some(note) = make_explorer_the_shell() {
         lines.push(note);
@@ -245,8 +243,8 @@ pub fn enable() {
 /// What Bloom's parts are doing now, for the diagnostics.
 fn health(app: Option<&AppHandle>) -> String {
     let (policy, machine) = shell_values();
-    let shell_ok = policy.as_deref().is_none_or(is_explorer)
-        && machine.as_deref().is_none_or(is_explorer);
+    let shell_ok =
+        policy.as_deref().is_none_or(is_explorer) && machine.as_deref().is_none_or(is_explorer);
     let state = |ok: bool| if ok { "Healthy" } else { "Failed" };
     let mut lines = vec![
         format!("Bloom {}", env!("CARGO_PKG_VERSION")),
@@ -259,7 +257,11 @@ fn health(app: Option<&AppHandle>) -> String {
         ),
         format!(
             "Starts with Windows: {}",
-            if crate::startup::task_exists() { "yes (startup task)" } else { "no task" }
+            if crate::startup::task_exists() {
+                "yes (startup task)"
+            } else {
+                "no task"
+            }
         ),
     ];
     if app.is_some() {

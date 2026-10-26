@@ -118,7 +118,11 @@ enum Work {
     /// A line for `taskbar-progress.log`.
     Note(String),
     /// The first message of a kind, to note with the program that sent it.
-    First { msg: u32, window: isize, value: isize },
+    First {
+        msg: u32,
+        window: isize,
+        value: isize,
+    },
     /// Find which app a window showing progress belongs to.
     Resolve(isize),
     /// Tell the dock what changed.

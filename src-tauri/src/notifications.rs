@@ -1328,10 +1328,9 @@ unsafe fn dismiss_in_popup(
         IUIAutomationInvokePattern, TreeScope_Descendants, UIA_AutomationIdPropertyId,
         UIA_InvokePatternId,
     };
-    let Ok(condition) = automation.CreatePropertyCondition(
-        UIA_AutomationIdPropertyId,
-        &VARIANT::from("DismissButton"),
-    ) else {
+    let Ok(condition) = automation
+        .CreatePropertyCondition(UIA_AutomationIdPropertyId, &VARIANT::from("DismissButton"))
+    else {
         return PopupOutcome::Failed;
     };
     let Ok(walker) = automation.RawViewWalker() else {
@@ -1359,7 +1358,10 @@ unsafe fn dismiss_in_popup(
                 };
             }
         }
-        current = walker.GetParentElement(&node).ok().filter(|p| p.as_raw() != node.as_raw());
+        current = walker
+            .GetParentElement(&node)
+            .ok()
+            .filter(|p| p.as_raw() != node.as_raw());
     }
     trace("  Windows' pop-up: no dismiss button found");
     PopupOutcome::Failed

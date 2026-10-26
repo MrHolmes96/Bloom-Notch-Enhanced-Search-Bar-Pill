@@ -362,7 +362,8 @@ fn hand_over_for_update(app: &AppHandle) {
     if crate::state::NATIVE_TASKBAR_HIDDEN.load(Ordering::Relaxed) {
         crate::utils::hand_over_taskbar("update");
         if let (Ok(exe), Some(marker)) = (std::env::current_exe(), crate::utils::taskbar_marker()) {
-            let copy = std::env::temp_dir().join(format!("bloom-update-watch-{}.exe", std::process::id()));
+            let copy =
+                std::env::temp_dir().join(format!("bloom-update-watch-{}.exe", std::process::id()));
             if std::fs::copy(&exe, &copy).is_ok() {
                 let _ = Command::new(&copy)
                     .arg("--update-watchdog")

@@ -2030,7 +2030,10 @@ mod tests {
                 image::Rgba([0, 0, 0, 0])
             }
         }))
-        .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
         .unwrap();
         format!(
             "data:image/png;base64,{}",

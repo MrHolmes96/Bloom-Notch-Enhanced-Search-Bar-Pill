@@ -2,8 +2,8 @@
 
 mod app_icon;
 mod backup;
-mod bluetooth;
 mod black_screen;
+mod bluetooth;
 mod brightness;
 mod commands;
 mod data_folders;
@@ -14,10 +14,10 @@ mod integrations;
 mod jumplist;
 mod later_windows;
 mod launcher;
-mod maintenance;
 mod live_preview;
 mod localsend;
 mod localsend_receive;
+mod maintenance;
 mod notifications;
 mod quick_settings;
 mod recycle_bin;

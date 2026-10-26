@@ -1428,7 +1428,10 @@ mod tests {
         assert_eq!(parse_marker_state(&marker), Some(3));
         assert_eq!(parse_marker_pid(&marker), Some(42));
         assert_eq!(parse_marker_handover(&marker), Some("session-end"));
-        assert_eq!(parse_marker_handover(&marker_contents(0, 1, None, None)), None);
+        assert_eq!(
+            parse_marker_handover(&marker_contents(0, 1, None, None)),
+            None
+        );
     }
 
     #[test]

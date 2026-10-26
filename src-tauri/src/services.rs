@@ -291,7 +291,8 @@ unsafe extern "system" fn keyboard_hook_proc(
                     WIN_KEY_COMBO.store(true, Ordering::Relaxed);
                 }
                 // Win+S: the search bar instead of Windows Search.
-                if vk_code.0 == 0x53 && WIN_KEY_TAKES.load(Ordering::Relaxed) & WIN_KEY_SEARCH != 0 {
+                if vk_code.0 == 0x53 && WIN_KEY_TAKES.load(Ordering::Relaxed) & WIN_KEY_SEARCH != 0
+                {
                     if is_down && win_key_may_open_search_bar() && win_key_physically_down() {
                         if !WIN_S_TAKEN.swap(true, Ordering::Relaxed) {
                             send_start_menu_mask();
@@ -505,10 +506,7 @@ unsafe extern "system" fn window_change_event_proc(
         let class = &class_name[..len as usize];
         if class == b"Shell_TrayWnd" || class == b"Shell_SecondaryTrayWnd" {
             let mut pid = 0u32;
-            windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
-                hwnd,
-                Some(&mut pid),
-            );
+            windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, Some(&mut pid));
             if pid != std::process::id() && set_taskbar_visibility(false, false) {
                 NATIVE_TASKBAR_HIDDEN.store(true, Ordering::Relaxed);
             }
@@ -1786,7 +1784,9 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                 // for seconds by a media app that is slow to answer, and a
                 // dock told late (or never) stayed away after the game. Said
                 // again every 3 s, so a page that missed it catches up.
-                if current_is_fs == last_visible || last_visibility_said.elapsed() >= Duration::from_secs(3) {
+                if current_is_fs == last_visible
+                    || last_visibility_said.elapsed() >= Duration::from_secs(3)
+                {
                     let leaving_full_screen = !current_is_fs && !last_visible;
                     last_visible = !current_is_fs;
                     last_visibility_said = Instant::now();

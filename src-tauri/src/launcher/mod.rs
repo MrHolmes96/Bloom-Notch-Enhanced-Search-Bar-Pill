@@ -45,7 +45,10 @@ static HOTKEY_STATUS: Mutex<Option<bool>> = Mutex::new(None);
 /// on, and not muted by its game mode: the setting key, and what it does.
 const APP_HOTKEYS: [(&str, AppHotkey); 2] = [
     ("bloom-hotkey-screen-off", AppHotkey::ScreenOff),
-    ("bloom-hotkey-notification-center", AppHotkey::NotificationCenter),
+    (
+        "bloom-hotkey-notification-center",
+        AppHotkey::NotificationCenter,
+    ),
 ];
 /// Their ids follow the search bar's (main and up to 32 query hotkeys).
 const APP_HOTKEY_BASE: i32 = HOTKEY_ID + 64;

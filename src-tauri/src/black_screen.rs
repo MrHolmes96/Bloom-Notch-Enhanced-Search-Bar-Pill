@@ -23,8 +23,7 @@ use windows::Win32::System::Power::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, KillTimer, PeekMessageW,
     PostMessageW, RegisterClassExW, SetTimer, TranslateMessage, DEVICE_NOTIFY_WINDOW_HANDLE,
-    HWND_BROADCAST, MSG, PM_REMOVE, SC_MONITORPOWER, WM_POWERBROADCAST,
-    WM_SYSCOMMAND, WNDCLASSEXW,
+    HWND_BROADCAST, MSG, PM_REMOVE, SC_MONITORPOWER, WM_POWERBROADCAST, WM_SYSCOMMAND, WNDCLASSEXW,
 };
 
 /// GUID_CONSOLE_DISPLAY_STATE: the display went off (0), on (1) or dimmed (2).

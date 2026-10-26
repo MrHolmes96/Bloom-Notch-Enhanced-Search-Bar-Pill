@@ -10,7 +10,8 @@
 //! within milliseconds.
 //!
 //! This guard asks each of them for an empty answer every two seconds. One
-//! that hasn't answered for about six seconds is stuck: Explorer gets its
+//! that hasn't answered for about six seconds while Explorer does (they wait
+//! on Explorer, so its own slow moments don't count) is stuck: Explorer gets its
 //! own task list back at once (apps then reach Explorer directly, as without
 //! Bloom), the reason goes into crash.log, and Bloom restarts, which hands
 //! the tray back to Explorer too and frees every waiting app. Stuck again
@@ -73,6 +74,15 @@ pub fn start(app: AppHandle) {
                 for (index, (name, window)) in watched.into_iter().enumerate() {
                     if answers(window) {
                         misses[index] = 0;
+                        continue;
+                    }
+                    // Bloom's threads pass messages on to Explorer and wait for
+                    // it: while Explorer itself doesn't answer (signing in, or
+                    // restarting) the wait is Explorer's, not Bloom's.
+                    let explorer = crate::tray_host::explorer_taskbar()
+                        .map(|hwnd| hwnd.0 as isize)
+                        .unwrap_or(0);
+                    if explorer == 0 || !answers(explorer) {
                         continue;
                     }
                     misses[index] += 1;

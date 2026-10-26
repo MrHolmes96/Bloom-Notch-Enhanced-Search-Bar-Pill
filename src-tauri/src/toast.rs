@@ -913,7 +913,10 @@ mod tests {
     #[test]
     fn app_ids_that_are_not_programs_are_not_opened_as_files() {
         assert_eq!(program_of_id("com.squirrel.Discord.Discord"), None);
-        assert_eq!(program_of_id("Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"), None);
+        assert_eq!(
+            program_of_id("Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"),
+            None
+        );
         assert_eq!(program_of_id(r"C:\No\Such\app.exe"), None);
     }
 

@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 use windows::core::{w, PCWSTR};
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegCopyTreeW, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW, RegOpenKeyExW,
-    HKEY, HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_READ, REG_OPTION_NON_VOLATILE,
+    RegCloseKey, RegCopyTreeW, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW, RegOpenKeyExW, HKEY,
+    HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_READ, REG_OPTION_NON_VOLATILE,
 };
 
 /// Bloom's name for its folders; the same as `identifier` in tauri.conf.json.
@@ -240,8 +240,14 @@ mod tests {
         std::fs::write(new.join("settings.json"), "new").unwrap();
         move_folder(&old, &new);
         assert!(!old.exists());
-        assert_eq!(std::fs::read_to_string(new.join("settings.json")).unwrap(), "new");
-        assert_eq!(std::fs::read_to_string(new.join("logs").join("a.log")).unwrap(), "a");
+        assert_eq!(
+            std::fs::read_to_string(new.join("settings.json")).unwrap(),
+            "new"
+        );
+        assert_eq!(
+            std::fs::read_to_string(new.join("logs").join("a.log")).unwrap(),
+            "a"
+        );
         // A web store already there isn't mixed with the old one.
         assert!(!new.join(WEBVIEW_STORE).join("store").exists());
         let _ = std::fs::remove_dir_all(&base);

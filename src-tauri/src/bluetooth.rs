@@ -175,7 +175,9 @@ fn le_kind(category: u16, subcategory: u16) -> &'static str {
 /// names tell them apart.
 fn refine_kind(kind: &'static str, name: &str) -> &'static str {
     let lower = name.to_lowercase();
-    let earbuds = ["buds", "pods", "earbud", "earphone", "in-ear", "wf-", "elite", "liberty"];
+    let earbuds = [
+        "buds", "pods", "earbud", "earphone", "in-ear", "wf-", "elite", "liberty",
+    ];
     if matches!(kind, "audio" | "headset" | "headphones")
         && earbuds.iter().any(|word| lower.contains(word))
     {
@@ -391,7 +393,11 @@ fn list_sync() -> Vec<BtDevice> {
     }
     let mut devices = merged;
     // What the monitor read itself, for devices Windows has no level for.
-    let extra = EXTRA_BATTERY.lock().ok().and_then(|e| e.clone()).unwrap_or_default();
+    let extra = EXTRA_BATTERY
+        .lock()
+        .ok()
+        .and_then(|e| e.clone())
+        .unwrap_or_default();
     for device in devices.iter_mut().filter(|d| d.connected) {
         if let Some(&(level, charging)) = extra.get(&device.name.to_lowercase()) {
             if device.battery.is_none() {
@@ -562,15 +568,14 @@ fn gamepad_batteries() -> Extra {
         if full <= 0 {
             continue;
         }
-        let level = ((left as f64 / full as f64) * 100.0).round().clamp(0.0, 100.0) as u8;
-        let charging = report
-            .Status()
-            .ok()
-            .and_then(|status| match status {
-                BatteryStatus::Charging => Some(true),
-                BatteryStatus::Discharging | BatteryStatus::Idle => Some(false),
-                _ => None,
-            });
+        let level = ((left as f64 / full as f64) * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as u8;
+        let charging = report.Status().ok().and_then(|status| match status {
+            BatteryStatus::Charging => Some(true),
+            BatteryStatus::Discharging | BatteryStatus::Idle => Some(false),
+            _ => None,
+        });
         found.insert(name, (level, charging));
     }
     found
@@ -598,8 +603,15 @@ pub fn start_battery_monitor(app: AppHandle) {
             // Devices already warned about, until they charge back above.
             let mut warned: std::collections::HashSet<String> = Default::default();
             let mut gatt_read_at: HashMap<String, std::time::Instant> = HashMap::new();
+            // Every minute only while a device is connected; otherwise it
+            // waits for Windows to say one connected.
+            let mut any_connected = true;
             loop {
-                let _ = woken.recv_timeout(Duration::from_secs(60));
+                if any_connected {
+                    let _ = woken.recv_timeout(Duration::from_secs(60));
+                } else if woken.recv().is_err() {
+                    return;
+                }
                 // A burst of changes (a device connecting) is one update.
                 std::thread::sleep(Duration::from_millis(400));
                 while woken.try_recv().is_ok() {}
@@ -613,13 +625,25 @@ pub fn start_battery_monitor(app: AppHandle) {
                     continue;
                 }
                 let mut devices = list_sync();
+                any_connected = devices.iter().any(|d| d.connected);
                 // Levels Windows doesn't show: controllers every time (cheap),
                 // a Battery Service every five minutes per device (it may wake
                 // the device).
                 let mut extra = gamepad_batteries();
-                let le_ids = LE_IDS.lock().ok().and_then(|m| m.clone()).unwrap_or_default();
-                let old = EXTRA_BATTERY.lock().ok().and_then(|e| e.clone()).unwrap_or_default();
-                for device in devices.iter().filter(|d| d.connected && d.battery.is_none()) {
+                let le_ids = LE_IDS
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.clone())
+                    .unwrap_or_default();
+                let old = EXTRA_BATTERY
+                    .lock()
+                    .ok()
+                    .and_then(|e| e.clone())
+                    .unwrap_or_default();
+                for device in devices
+                    .iter()
+                    .filter(|d| d.connected && d.battery.is_none())
+                {
                     let key = device.name.to_lowercase();
                     if extra.contains_key(&key) {
                         continue;
