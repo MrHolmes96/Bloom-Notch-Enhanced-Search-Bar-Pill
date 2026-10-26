@@ -37,9 +37,9 @@ import { PAGE_ORDER_KEY, isNotchPageId, parsePageOrder, type NotchPageId } from 
 import { isoWeek } from "./weekNumber";
 import {
 	NOTES_KEY,
-	NOTES_EDITOR_WIDTH,
 	NotesPanel,
 	initialNotesLayout,
+	notesEditorSize,
 	notesPanelHeight,
 	type NotesLayout,
 	parseNotes,
@@ -1368,6 +1368,21 @@ function App() {
 
 	// Bloom mode state: 'music', 'calendar', 'command-center', 'shelf', or 'status'
 	const [bloomMode, setBloomMode] = useState<BloomMode>("status");
+	// The notch's window is only as tall as the notch's pages; an open note
+	// is taller, so the window grows first, and goes back once the notch has
+	// shrunk again.
+	const noteOpen = bloomMode === "notes" && notesLayout.editorOpen;
+	useEffect(() => {
+		if (noteOpen) {
+			invoke("set_notch_tall", { tall: true }).catch(() => {});
+			return;
+		}
+		const timer = window.setTimeout(
+			() => invoke("set_notch_tall", { tall: false }).catch(() => {}),
+			600
+		);
+		return () => window.clearTimeout(timer);
+	}, [noteOpen]);
 
 	// Shelf: files and selected text stashed in the notch via drag-and-drop.
 	// Files are stored as plain paths (references, never copies). Session-scoped
@@ -2894,7 +2909,7 @@ function App() {
 	// Calculate width dynamically based on enabled features
 	const getDynamicWidth = () => {
 		if (isCalendarMode) return 480;
-		if (bloomMode === "notes" && notesLayout.editorOpen) return NOTES_EDITOR_WIDTH;
+		if (bloomMode === "notes" && notesLayout.editorOpen) return notesEditorSize(scale).width;
 		if (bloomMode === "shelf" || bloomMode === "notes" || bloomMode === "blitzit") return 380;
 		if (bloomMode === "command-center" && isOpen) return 350;
 		if (bloomMode === "wifi" || bloomMode === "bluetooth" || bloomMode === "tray") return 350;
@@ -2938,7 +2953,7 @@ function App() {
 			const actions = shelfLocalSend ? (sendMode ? 46 : 28) : 0;
 			return (shelfOverflowing ? 190 : 176) + actions;
 		}
-		if (bloomMode === "notes") return 36 + notesPanelHeight(notes, notesLayout);
+		if (bloomMode === "notes") return 36 + notesPanelHeight(notes, notesLayout, scale);
 		if (bloomMode === "blitzit") return 36 + blitzitHeight;
 		// One row of round buttons is part of the control center's base height;
 		// each extra row adds a button and the gap above it, and an empty row

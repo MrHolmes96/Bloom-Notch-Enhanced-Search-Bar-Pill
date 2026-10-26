@@ -48,9 +48,22 @@ export const NOTES_ROW_HEIGHT = 30;
 const HEADER_HEIGHT = 22;
 /** The list scrolls past this height. */
 const LIST_MAX_HEIGHT = 5 * NOTES_ROW_HEIGHT + 2 * HEADER_HEIGHT;
-/** The panel's height and the notch's width while a note is open. */
-export const NOTES_EDITOR_HEIGHT = 300;
-export const NOTES_EDITOR_WIDTH = 480;
+/**
+ * While a note is open the notch takes this share of the screen, from its top
+ * edge: 68 % of its width and 63 % of its height, on any screen and size.
+ */
+const EDITOR_WIDTH_SHARE = 0.68;
+const EDITOR_HEIGHT_SHARE = 0.63;
+
+/** The notch's size with a note open, in the notch's own units (`scale` is
+ * its size setting, which zooms it). */
+export function notesEditorSize(scale: number) {
+	const zoom = scale > 0 ? scale : 1;
+	return {
+		width: Math.round((window.screen.width * EDITOR_WIDTH_SHARE) / zoom),
+		height: Math.round((window.screen.height * EDITOR_HEIGHT_SHARE) / zoom)
+	};
+}
 
 const SORT_LABELS: Record<NotesSort, string> = {
 	newest: "Newest first",
@@ -95,8 +108,8 @@ function sections(items: NoteItem[], view: NotesView) {
 }
 
 /** Panel height inside the open notch, below its 36 px header. */
-export function notesPanelHeight(items: NoteItem[], layout: NotesLayout) {
-	if (layout.editorOpen) return NOTES_EDITOR_HEIGHT;
+export function notesPanelHeight(items: NoteItem[], layout: NotesLayout, scale = 1) {
+	if (layout.editorOpen) return notesEditorSize(scale).height - 36;
 	const shown = sections(items, layout.view);
 	const rows = shown.reduce((sum, s) => sum + s.items.length, 0);
 	const headers = layout.view === "all" ? shown.length : 0;
