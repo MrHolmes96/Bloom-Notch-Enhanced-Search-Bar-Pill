@@ -11,6 +11,7 @@ pub mod actions;
 pub mod bookmarks;
 pub mod icons;
 pub mod index;
+pub mod start_search;
 pub mod suggest;
 pub mod system;
 

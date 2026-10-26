@@ -14,10 +14,33 @@ import {
 } from "./plugins/system";
 import { searchBookmarks, searchUrl, searchWeb, webSuggestions } from "./plugins/web";
 import { searchWindows } from "./plugins/windows";
+import { searchCommands } from "./plugins/commands";
 import type { ParsedQuery, Replay, Result, SearchContext } from "./types";
 
 /** What a keyword switches the bar to. */
-type Target = { plugin: PluginId; mode?: "content" };
+type Target = {
+	plugin: PluginId;
+	mode?: "content" | "kind";
+	/** Start's file filters: "documents", "folders", "photos", "videos", "music". */
+	kind?: string;
+	/** Start's "web:" filter: the engines offered under every search. */
+	anyEngine?: boolean;
+};
+
+/**
+ * Start search's filters, typed before a search the same way: "apps: word",
+ * "documents: budget", "photos: beach". Each searches only that kind.
+ */
+const START_FILTERS: [string, Target][] = [
+	["apps:", { plugin: "programs" }],
+	["settings:", { plugin: "settings" }],
+	["documents:", { plugin: "explorer", mode: "kind", kind: "documents" }],
+	["folders:", { plugin: "explorer", mode: "kind", kind: "folders" }],
+	["photos:", { plugin: "explorer", mode: "kind", kind: "photos" }],
+	["videos:", { plugin: "explorer", mode: "kind", kind: "videos" }],
+	["music:", { plugin: "explorer", mode: "kind", kind: "music" }],
+	["web:", { plugin: "web", anyEngine: true }]
+];
 
 export function keywordTargets(config: LauncherConfig): Map<string, Target> {
 	const map = new Map<string, Target>();
@@ -34,6 +57,9 @@ export function keywordTargets(config: LauncherConfig): Map<string, Target> {
 	}
 	if (config.plugins.web.enabled) {
 		for (const s of allWebSources(config)) if (s.enabled) add(s.keyword, { plugin: "web" });
+	}
+	for (const [keyword, target] of START_FILTERS) {
+		if (config.plugins[target.plugin].enabled) add(keyword, target);
 	}
 	return map;
 }
@@ -123,6 +149,7 @@ function runGlobal(ctx: SearchContext, search: string, isCurrent: () => boolean)
 	if (isGlobal(config, "bookmarks") && !location && q.length > 1) {
 		later.push(() => searchBookmarks(ctx, q, isCurrent));
 	}
+	if (isGlobal(config, "commands") && !location) now.push(...searchCommands(ctx, q));
 	if (isGlobal(config, "windows") && !location) {
 		later.push(() => searchWindows(ctx, q, isCurrent));
 	}
@@ -145,6 +172,8 @@ function runKeyword(
 		case "explorer":
 			if (target.mode === "content")
 				later.push(() => searchIndex(ctx, search, "content", isCurrent));
+			else if (target.mode === "kind")
+				later.push(() => searchIndex(ctx, search, "name", isCurrent, target.kind));
 			else if (isLocationPath(search)) later.push(() => searchPath(ctx, search));
 			else {
 				now.push(...searchQuickAccess(ctx, search));
@@ -178,10 +207,16 @@ function runKeyword(
 		case "windows":
 			later.push(() => searchWindows(ctx, search, isCurrent, true));
 			break;
-		case "web":
-			now.push(...searchWeb(ctx, keyword, search));
-			later.push(() => webSuggestions(ctx, keyword, search, isCurrent));
+		case "commands":
+			now.push(...searchCommands(ctx, search));
 			break;
+		case "web": {
+			// "web:" uses the engines offered under every search.
+			const engine = target.anyEngine ? null : keyword;
+			now.push(...searchWeb(ctx, engine, search));
+			later.push(() => webSuggestions(ctx, engine, search, isCurrent));
+			break;
+		}
 	}
 	return { now, later };
 }

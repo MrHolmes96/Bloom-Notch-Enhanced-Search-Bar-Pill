@@ -43,35 +43,85 @@ export function searchCalculator(ctx: SearchContext, search: string): Result[] {
 
 const KIND_LABEL = { A: "Settings", C: "Control Panel", T: "Control Panel" } as const;
 
+/** Windows' own index of its settings (what Start and Settings search use). */
+interface SystemSetting {
+	name: string;
+	words: string;
+	command: string;
+}
+let systemSettings: SystemSetting[] = [];
+let systemSettingsLoading: Promise<void> | null = null;
+function loadSystemSettings() {
+	systemSettingsLoading ??= invoke<SystemSetting[]>("launcher_system_settings")
+		.then((list) => {
+			systemSettings = list;
+		})
+		.catch(() => {
+			systemSettingsLoading = null;
+		});
+}
+loadSystemSettings();
+
+function settingResult(
+	ctx: SearchContext,
+	name: string,
+	subtitle: string,
+	command: string,
+	score: number
+): Result {
+	const key = `setting:${command}`;
+	return {
+		key,
+		title: name,
+		subtitle,
+		icon: { kind: "glyph", glyph: "settings" },
+		score: 300 + score * 0.5 + ctx.boost(key),
+		plugin: "settings",
+		run: () => runCommandLine(command),
+		copyText: command,
+		actions: () => [
+			{ key: "open", title: "Open", glyph: "external", run: () => runCommandLine(command) },
+			{
+				key: "copy",
+				title: "Copy command",
+				subtitle: command,
+				glyph: "copy",
+				run: () => copy(command)
+			}
+		],
+		replay: { type: "command-line", command }
+	};
+}
+
 export function searchWindowsSettings(ctx: SearchContext, search: string): Result[] {
 	const q = search.trim();
 	if (!q) return [];
 	const out: Result[] = [];
+	const names = new Set<string>();
 	for (const [name, area, kind, command, extra] of WINDOWS_SETTINGS) {
 		const score = bestMatch(q, [name, extra, area], [1, 0.75, 0.5]);
 		if (score < ctx.min) continue;
-		const key = `setting:${command}`;
-		out.push({
-			key,
-			title: name,
-			subtitle: area ? `${area} · ${KIND_LABEL[kind]}` : KIND_LABEL[kind],
-			icon: { kind: "glyph", glyph: "settings" },
-			score: 300 + score * 0.5 + ctx.boost(key),
-			plugin: "settings",
-			run: () => runCommandLine(command),
-			copyText: command,
-			actions: () => [
-				{ key: "open", title: "Open", glyph: "external", run: () => runCommandLine(command) },
-				{
-					key: "copy",
-					title: "Copy command",
-					subtitle: command,
-					glyph: "copy",
-					run: () => copy(command)
-				}
-			],
-			replay: { type: "command-line", command }
-		});
+		names.add(name.toLowerCase());
+		out.push(
+			settingResult(
+				ctx,
+				name,
+				area ? `${area} · ${KIND_LABEL[kind]}` : KIND_LABEL[kind],
+				command,
+				score
+			)
+		);
+	}
+	// Each setting Windows itself knows, by its search words too ("blue
+	// light" finds Night light), as Start and the Settings app find them.
+	if (!systemSettings.length) loadSystemSettings();
+	for (const setting of systemSettings) {
+		if (names.has(setting.name.toLowerCase())) continue;
+		const score = bestMatch(q, [setting.name, setting.words], [1, 0.75]);
+		if (score < ctx.min) continue;
+		names.add(setting.name.toLowerCase());
+		const where = setting.command.startsWith("ms-settings:") ? "Settings" : "Control Panel";
+		out.push(settingResult(ctx, setting.name, where, setting.command, score));
 	}
 	return out;
 }
@@ -276,6 +326,18 @@ export function searchIndicator(ctx: SearchContext, search: string): Result[] {
 	}
 	if (ctx.config.plugins.explorer.enabled && ctx.config.explorer.contentEnabled) {
 		rows.push({ keyword: ctx.config.explorer.contentKeyword, title: "Search inside files" });
+	}
+	for (const [keyword, title] of [
+		["apps:", "apps (as in Start)"],
+		["documents:", "documents (as in Start)"],
+		["folders:", "folders (as in Start)"],
+		["photos:", "photos (as in Start)"],
+		["videos:", "videos (as in Start)"],
+		["music:", "music (as in Start)"],
+		["settings:", "settings (as in Start)"],
+		["web:", "the web (as in Start)"]
+	]) {
+		rows.push({ keyword, title });
 	}
 	if (ctx.config.plugins.web.enabled) {
 		for (const source of allWebSources(ctx.config)) {

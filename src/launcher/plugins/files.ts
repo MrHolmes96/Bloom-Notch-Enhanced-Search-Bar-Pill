@@ -231,7 +231,9 @@ export async function searchIndex(
 	ctx: SearchContext,
 	search: string,
 	mode: "name" | "content",
-	isCurrent: () => boolean
+	isCurrent: () => boolean,
+	/** Start's file filters: "documents", "folders", "photos", "videos", "music". */
+	kind?: string
 ): Promise<Result[]> {
 	const q = search.trim();
 	if (q.length < 2) return [];
@@ -241,7 +243,8 @@ export async function searchIndex(
 			query: q,
 			mode,
 			max: ctx.config.explorer.maxResults,
-			excluded: ctx.config.explorer.excluded
+			excluded: ctx.config.explorer.excluded,
+			kind: kind ?? null
 		});
 	} catch (e) {
 		const message = String(e);

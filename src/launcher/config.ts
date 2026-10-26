@@ -25,6 +25,7 @@ export type PluginId =
 	| "processes"
 	| "bookmarks"
 	| "windows"
+	| "commands"
 	| "indicator";
 
 export interface PluginInfo {
@@ -112,6 +113,13 @@ export const PLUGINS: PluginInfo[] = [
 		id: "windows",
 		name: "Open Windows",
 		description: "Switch to any open window by its title or app, like Alt+Tab",
+		defaultKeyword: "*",
+		hasKeyword: true
+	},
+	{
+		id: "commands",
+		name: "Run Commands",
+		description: 'What you would type in Run, as Start finds it: "regedit", "dxdiag", "services.msc"',
 		defaultKeyword: "*",
 		hasKeyword: true
 	},
@@ -340,8 +348,7 @@ export const BACKEND_KEYS = {
 	ignoreFullscreen: "bloom-launcher-ignore-fullscreen",
 	position: "bloom-launcher-position",
 	screen: "bloom-launcher-screen",
-	queryHotkeys: "bloom-launcher-query-hotkeys",
-	windowsKey: "bloom-launcher-windows-key"
+	queryHotkeys: "bloom-launcher-query-hotkeys"
 } as const;
 
 export function saveBackendSetting(key: string, value: string) {

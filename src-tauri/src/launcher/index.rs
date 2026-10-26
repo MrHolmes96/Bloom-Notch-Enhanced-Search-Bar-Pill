@@ -58,6 +58,9 @@ enum Mode {
 struct Request {
     query: String,
     mode: Mode,
+    /// Only items of this kind, as Start's filters ("document", "picture",
+    /// "video", "music", "folder").
+    kind: Option<&'static str>,
     max: u32,
     excluded: Vec<String>,
     reply: Sender<Result<Vec<IndexHit>, String>>,
@@ -165,6 +168,11 @@ unsafe fn build_sql(conn: &Connection, request: &Request) -> Result<String, Stri
             if query.is_empty() {
                 return Err("empty query".into());
             }
+            // Windows' own query syntax picks the kind, as Start's filters do.
+            let query = match request.kind {
+                Some(kind) => format!("kind:={kind} {query}"),
+                None => query,
+            };
             helper
                 .SetQueryMaxResults(request.max as i32)
                 .map_err(|e| e.message())?;
@@ -343,10 +351,20 @@ pub async fn launcher_search_index(
     mode: String,
     max: u32,
     excluded: Vec<String>,
+    kind: Option<String>,
 ) -> Result<Vec<IndexHit>, String> {
     let (reply, wait) = channel();
+    let kind = match kind.as_deref() {
+        Some("documents") => Some("document"),
+        Some("photos") => Some("picture"),
+        Some("videos") => Some("video"),
+        Some("music") => Some("music"),
+        Some("folders") => Some("folder"),
+        _ => None,
+    };
     let request = Request {
         query,
+        kind,
         mode: if mode == "content" {
             Mode::Content
         } else {

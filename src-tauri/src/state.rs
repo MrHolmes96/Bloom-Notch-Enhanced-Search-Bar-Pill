@@ -17,6 +17,9 @@ pub static NATIVE_TASKBAR_HIDDEN: AtomicBool = AtomicBool::new(false);
 /// sign-out, or a restart): Explorer's taskbar is hidden the moment it shows,
 /// even before the dock is up.
 pub static TASKBAR_TAKEOVER: AtomicBool = AtomicBool::new(false);
+/// A note is open in the notch: its window is as tall as the screen (it is
+/// otherwise only as tall as the notch's pages).
+pub static NOTCH_TALL: AtomicBool = AtomicBool::new(false);
 /// Windows is signing out or shutting down, or Bloom is restarting: the
 /// taskbar stays hidden for the next Bloom instead of being shown on the way
 /// out.

@@ -519,7 +519,8 @@ pub async fn change_notch_mode(app: AppHandle, mode: String) {
             let m_size = monitor.size();
             let scale = monitor.scale_factor();
             let bloom_scale = crate::utils::get_notch_scale(&app);
-            let target_height = (420.0 * bloom_scale * scale) as u32;
+            let target_height =
+                crate::services::notch_window_height(m_size.height, scale, bloom_scale) as u32;
             let _ = main_win.set_position(tauri::PhysicalPosition::new(m_pos.x, m_pos.y));
             let _ = main_win.set_size(tauri::PhysicalSize::new(m_size.width, target_height));
         }
