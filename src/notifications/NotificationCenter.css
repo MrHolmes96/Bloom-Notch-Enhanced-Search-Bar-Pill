@@ -167,19 +167,79 @@
 	color: var(--bloom-text, #fff);
 }
 
-.center-group-more {
-	align-self: flex-start;
-	padding: 3px 10px;
-	border: none;
-	border-radius: 999px;
-	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.08));
-	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.7));
-	font-family: inherit;
-	font-size: 12px;
-	cursor: pointer;
+/* An app's group, collapsed: its newest card with the others stacked
+   behind it, peeking out below as two slimmer layers. */
+.center-stack {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
 }
 
-.center-group-more:hover {
-	background: var(--bloom-border, rgba(255, 255, 255, 0.15));
-	color: var(--bloom-text, #fff);
+.center-stack.depth-1 {
+	padding-bottom: 7px;
+}
+
+.center-stack.depth-2 {
+	padding-bottom: 13px;
+}
+
+.center-stack > .center-card {
+	position: relative;
+	z-index: 2;
+}
+
+.center-stack-layers {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 14px;
+	padding: 0;
+	border: none;
+	background: none;
+	cursor: pointer;
+	z-index: 1;
+}
+
+/* The cards behind show only below the newest one (the cards are see-
+   through, so nothing is drawn under it). */
+.center-stack-layer {
+	position: absolute;
+	border-radius: 0 0 var(--notify-radius, 16px) var(--notify-radius, 16px);
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.06));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.07));
+	border-top: none;
+	box-sizing: border-box;
+	transition: transform 0.15s ease;
+}
+
+.center-stack-layer.layer-1 {
+	left: 10px;
+	right: 10px;
+	bottom: 6px;
+	height: 7px;
+	opacity: 0.85;
+}
+
+.center-stack-layer.layer-2 {
+	left: 22px;
+	right: 22px;
+	bottom: 0;
+	height: 6px;
+	opacity: 0.55;
+}
+
+.center-stack.depth-1 .center-stack-layer.layer-1 {
+	bottom: 0;
+}
+
+.center-stack-layers:hover .center-stack-layer {
+	transform: translateY(1px);
+}
+
+.center-stack-layers:focus-visible {
+	outline: 2px solid var(--bloom-text, #fff);
+	outline-offset: 2px;
+	border-radius: var(--notify-radius, 16px);
 }

@@ -15,7 +15,9 @@ import "./NotificationCenter.css";
  * Center: Bloom): the same notifications as Windows' sidebar, in Bloom's look,
  * with their buttons and reply boxes, plus every notification Bloom showed as
  * a card until it is clicked or cleared, grouped by app (the app with the
- * newest first; an app's group shows its newest few until opened). It hangs
+ * newest first). An app's group shows only its newest notification, with the
+ * others stacked behind it; opened (its arrow, or the stack), it lists them
+ * all, newest at the top. It hangs
  * from the top of the screen and is only as tall as its notifications; past
  * about six the list scrolls.
  * Opened by the notch's bell button; closes when it loses focus or on Escape.
@@ -35,8 +37,8 @@ interface Item {
 
 const appWindow = getCurrentWebviewWindow();
 
-/** An app's group shows this many until it is opened. */
-const GROUP_PREVIEW = 3;
+/** An app's group shows its newest notification until it is opened. */
+const GROUP_PREVIEW = 1;
 
 interface Group {
 	key: string;
@@ -232,6 +234,8 @@ export default function NotificationCenter() {
 						{groups.map((group) => {
 							const open = opened.has(group.key);
 							const hiddenCount = open ? 0 : Math.max(0, group.items.length - GROUP_PREVIEW);
+							// The cards stacked behind the newest one (at most two drawn).
+							const stacked = Math.min(hiddenCount, 2);
 							const shown = open ? group.items : group.items.slice(0, GROUP_PREVIEW);
 							return (
 								<motion.div
@@ -256,7 +260,8 @@ export default function NotificationCenter() {
 											<button
 												type="button"
 												className="center-group-button"
-												title={open ? "Show fewer" : "Show all"}
+												title={open ? "Collapse" : `Show all ${group.items.length}`}
+												aria-expanded={open}
 												onClick={() => toggleGroup(group.key)}
 											>
 												<ChevronDown
@@ -277,6 +282,9 @@ export default function NotificationCenter() {
 											<X size={13} />
 										</button>
 									</div>
+									<div
+										className={`center-stack${stacked ? ` depth-${stacked}` : ""}`}
+									>
 									<AnimatePresence initial={false}>
 										{shown.map((item) => (
 											<motion.div
@@ -329,15 +337,20 @@ export default function NotificationCenter() {
 											</motion.div>
 										))}
 									</AnimatePresence>
-									{hiddenCount > 0 && (
+									{stacked > 0 && (
 										<button
 											type="button"
-											className="center-group-more"
+											className="center-stack-layers"
+											aria-label={`Show all ${group.items.length} from ${group.app || "this app"}`}
+											title={`${hiddenCount} more`}
 											onClick={() => toggleGroup(group.key)}
 										>
-											{hiddenCount} more from {group.app || "this app"}
+											{Array.from({ length: stacked }, (_, i) => (
+												<span key={i} className={`center-stack-layer layer-${i + 1}`} />
+											))}
 										</button>
 									)}
+									</div>
 								</motion.div>
 							);
 						})}
