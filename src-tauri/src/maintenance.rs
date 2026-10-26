@@ -285,6 +285,67 @@ fn health(app: Option<&AppHandle>) -> String {
     lines.join("\r\n")
 }
 
+/// Windows' own shell windows (notification center, quick settings, Start,
+/// pop-ups), as they are now: process, class, title, whether hidden. Only
+/// what each window is called, never what it shows. Used to find which
+/// window is which on a Windows build that moved them.
+fn shell_windows() -> String {
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetClassNameW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+        IsWindowVisible,
+    };
+    unsafe extern "system" fn visit(hwnd: HWND, lines: LPARAM) -> BOOL {
+        let lines = &mut *(lines.0 as *mut Vec<String>);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        let program = crate::commands::process_image_path(pid)
+            .and_then(|p| p.rsplit('\\').next().map(str::to_lowercase))
+            .unwrap_or_default();
+        const SHELL: [&str; 7] = [
+            "shellexperiencehost.exe",
+            "shellhost.exe",
+            "startmenuexperiencehost.exe",
+            "searchhost.exe",
+            "explorer.exe",
+            "notificationux.exe",
+            "windowsinternal.composableshell.experiences.textinput.inputapp.exe",
+        ];
+        if !SHELL.contains(&program.as_str()) {
+            return true.into();
+        }
+        let mut class = [0u16; 128];
+        let class_len = GetClassNameW(hwnd, &mut class) as usize;
+        let mut title = [0u16; 128];
+        let title_len = GetWindowTextW(hwnd, &mut title) as usize;
+        let mut cloaked = 0u32;
+        let _ = windows::Win32::Graphics::Dwm::DwmGetWindowAttribute(
+            hwnd,
+            windows::Win32::Graphics::Dwm::DWMWA_CLOAKED,
+            &mut cloaked as *mut u32 as *mut _,
+            4,
+        );
+        let mut rect = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut rect);
+        lines.push(format!(
+            "{program} | {} | \"{}\" | visible={} cloaked={} | {}x{}",
+            String::from_utf16_lossy(&class[..class_len.min(128)]),
+            String::from_utf16_lossy(&title[..title_len.min(128)]),
+            IsWindowVisible(hwnd).as_bool(),
+            cloaked != 0,
+            rect.right - rect.left,
+            rect.bottom - rect.top
+        ));
+        true.into()
+    }
+    let mut lines: Vec<String> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(visit), LPARAM(&mut lines as *mut _ as isize));
+    }
+    lines.join("\r\n")
+}
+
 /// Bloom's logs and a health report, zipped on the desktop. Returns its path.
 pub fn export_logs(app: Option<&AppHandle>) -> Result<PathBuf, String> {
     use std::io::Write;
@@ -308,6 +369,9 @@ pub fn export_logs(app: Option<&AppHandle>) -> Result<PathBuf, String> {
         .map_err(|e| e.to_string())?;
     zip.write_all(health(app).as_bytes())
         .map_err(|e| e.to_string())?;
+    if zip.start_file("shell-windows.txt", options).is_ok() {
+        let _ = zip.write_all(shell_windows().as_bytes());
+    }
     // The logs only: never settings.json (sign-in tokens), and nothing that
     // holds what notifications said.
     for name in [
