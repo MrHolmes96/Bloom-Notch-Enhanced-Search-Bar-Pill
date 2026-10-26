@@ -829,9 +829,16 @@ const Dock = memo(function Dock() {
 			if (e.detail === 0 && closingHwndRef.current !== hwnd) void handleClosePreview(e, hwnd);
 		}
 	});
-	const focusPreview = (hwnd: number) => {
+	// A click on a window's preview brings that window to the front, as the
+	// taskbar's thumbnails do: as it was (a minimised one restored to its
+	// place), never resized, never minimised, and no other window touched.
+	const focusPreview = (e: React.MouseEvent, hwnd: number) => {
+		// The previews sit inside the app's dock icon: without this the click
+		// also reached the icon, which then minimised the window just brought
+		// forward, or switched on to the app's next window.
+		e.stopPropagation();
 		if (closingHwndRef.current === hwnd) return;
-		void invoke("focus_window", { hwnd });
+		void invoke("switch_to_window", { hwnd });
 	};
 
 	const handleClosePreview = async (e: React.SyntheticEvent, hwnd: number) => {
@@ -1626,6 +1633,7 @@ const Dock = memo(function Dock() {
 																exit={{ opacity: 0, scale: 0.95 }}
 																transition={{ duration: 0.15 }}
 																onAnimationComplete={() => reportDockRect.current()}
+																onClick={(e) => e.stopPropagation()}
 																onMouseEnter={() => {
 																	isPreviewHoveredRef.current = true;
 																}}
@@ -1640,7 +1648,7 @@ const Dock = memo(function Dock() {
 																		<div
 																			key={prev.hwnd}
 																			className="preview-item"
-																			onClick={() => focusPreview(prev.hwnd)}
+																			onClick={(e) => focusPreview(e, prev.hwnd)}
 																		>
 																			{prev.image ? (
 																				<img src={prev.image} alt={`Preview ${idx}`} data-hwnd={prev.hwnd} />
@@ -1798,6 +1806,7 @@ const Dock = memo(function Dock() {
 														exit={{ opacity: 0, scale: 0.95 }}
 														transition={{ duration: 0.15 }}
 														onAnimationComplete={() => reportDockRect.current()}
+														onClick={(e) => e.stopPropagation()}
 														onMouseEnter={() => {
 															isPreviewHoveredRef.current = true;
 														}}
@@ -1812,7 +1821,7 @@ const Dock = memo(function Dock() {
 																<div
 																	key={prev.hwnd}
 																	className="preview-item"
-																	onClick={() => focusPreview(prev.hwnd)}
+																	onClick={(e) => focusPreview(e, prev.hwnd)}
 																>
 																	{prev.image ? (
 																		<img src={prev.image} alt={`Preview ${idx}`} data-hwnd={prev.hwnd} />
