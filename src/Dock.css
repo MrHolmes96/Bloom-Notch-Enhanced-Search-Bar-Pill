@@ -271,6 +271,17 @@ body {
 		transparent
 	);
 	pointer-events: none;
+	/* Drawn above the icons beside it: a pointed-at icon lifts (a transform),
+	   which painted it and its soft shadow over the divider next to it, so the
+	   divider went darker while an app, the middle icons or the Recycle Bin
+	   beside it was pointed at. Now it keeps its set colour and opacity. */
+	position: relative;
+	z-index: 1;
+}
+
+/* While icons are dragged they pass over the dividers, so they go on top. */
+.dock-container.dragging .dock-app-divider {
+	z-index: auto;
 }
 
 .dock-icon-wrapper {
