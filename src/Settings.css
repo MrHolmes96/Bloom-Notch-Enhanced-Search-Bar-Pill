@@ -1443,14 +1443,6 @@ input:checked + .slider:before {
 	width: 170px;
 }
 
-.gh-col-custom {
-	width: 110px;
-}
-
-.gh-col-record {
-	width: 120px;
-}
-
 .gh-col-hotkey {
 	width: 152px;
 	margin-left: 6px;
@@ -1470,11 +1462,6 @@ input:checked + .slider:before {
 .gh-hotkey .extra-folder-remove,
 .gh-hotkey-space {
 	width: 26px;
-	flex: none;
-}
-
-.gh-record {
-	width: 120px;
 	flex: none;
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Gauge, Keyboard, PanelTop, X } from "lucide-react";
@@ -9,11 +9,9 @@ import type { GHelperBinding, GHelperState } from "../components/GHelperPanel";
 
 /**
  * Settings > Integrations > G-Helper: its page in the notch, and G-Helper's
- * keys (M1 to FN+V) as on its own Key Bindings page:
- * - the action G-Helper runs for the laptop's key (saved into G-Helper);
- * - for "Custom", the keys G-Helper presses, recorded by pressing them and
- *   written in G-Helper's own format ("0x11 0x10 0x31");
- * - a hotkey of your own, for any keyboard, that does the same as that key.
+ * keys (M1 to FN+V) as on its own Key Bindings page, each with what it does
+ * (saved into G-Helper) and a hotkey of your own, for any keyboard, that
+ * does the same.
  */
 
 /** Your hotkeys, one per G-Helper key: { hotkey, action: "key:fnv" }. */
@@ -145,19 +143,6 @@ const SIDE_MODIFIERS: Record<number, string> = {
 	0x5c: "Win"
 };
 
-/** A pressed key (not a modifier): its code and name. */
-function keyFor(code: string): [number, string] | null {
-	if (/^Key[A-Z]$/.test(code)) return [code.charCodeAt(3), code.slice(3)];
-	if (/^Digit[0-9]$/.test(code)) return [code.charCodeAt(5), code.slice(5)];
-	const f = /^F([1-9]|1[0-9]|2[0-4])$/.exec(code);
-	if (f) return [0x6f + Number(f[1]), code];
-	const num = /^Numpad([0-9])$/.exec(code);
-	if (num) return [0x60 + Number(num[1]), `Num ${num[1]}`];
-	return NAMED_KEYS[code] ?? null;
-}
-
-const hex = (code: number) => `0x${code.toString(16).toUpperCase().padStart(2, "0")}`;
-
 function codeName(code: number): string {
 	const modifier = MODIFIERS.find(([, c]) => c === code)?.[2] ?? SIDE_MODIFIERS[code];
 	if (modifier) return modifier;
@@ -167,7 +152,7 @@ function codeName(code: number): string {
 		return String.fromCharCode(code);
 	if (code >= 0x70 && code <= 0x87) return `F${code - 0x6f}`;
 	if (code >= 0x60 && code <= 0x69) return `Num ${code - 0x60}`;
-	return hex(code);
+	return `0x${code.toString(16).toUpperCase().padStart(2, "0")}`;
 }
 
 /** "0x11 0x10 0x31" as "Ctrl+Shift+1", when it is a list of key codes. */
@@ -176,75 +161,6 @@ function describeCodes(text: string): string | null {
 	if (parts.length === 0 || parts.length > 4) return null;
 	if (!parts.every((part) => /^(0x)?[0-9a-f]{1,2}$/i.test(part))) return null;
 	return parts.map((part) => codeName(parseInt(part.replace(/^0x/i, ""), 16))).join("+");
-}
-
-/**
- * Click, then press the keys. They are written as G-Helper's Custom action
- * takes them: Windows key codes separated by spaces, at most four keys.
- */
-function KeysRecorder({ onKeys }: { onKeys: (codes: string) => void }) {
-	const [recording, setRecording] = useState(false);
-	const [note, setNote] = useState<string | null>(null);
-	const ref = useRef<HTMLButtonElement>(null);
-
-	useEffect(() => {
-		if (!recording) return;
-		// Bloom's own shortcuts and the search bar's wait meanwhile.
-		void invoke("launcher_set_game_mode", { enabled: true });
-		void invoke("set_hotkey_recording", { recording: true });
-		return () => {
-			void invoke("launcher_set_game_mode", { enabled: false });
-			void invoke("set_hotkey_recording", { recording: false });
-		};
-	}, [recording]);
-
-	const take = (e: React.KeyboardEvent) => {
-		const key = keyFor(e.code);
-		if (!key) return;
-		const codes = MODIFIERS.filter(([flag]) => e[flag]).map(([, code]) => code);
-		codes.push(key[0]);
-		if (codes.length > 4) {
-			setNote("G-Helper takes at most four keys");
-			return;
-		}
-		onKeys(codes.map(hex).join(" "));
-		setNote(null);
-		setRecording(false);
-		ref.current?.blur();
-	};
-
-	return (
-		<button
-			ref={ref}
-			type="button"
-			className={`sb-hotkey gh-record${recording ? " recording" : ""}`}
-			title="Click, then press the keys G-Helper should press"
-			onClick={() => {
-				setNote(null);
-				setRecording(true);
-			}}
-			onBlur={() => setRecording(false)}
-			onKeyDown={(e) => {
-				if (!recording) return;
-				e.preventDefault();
-				e.stopPropagation();
-				if (e.code === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
-					setRecording(false);
-					return;
-				}
-				take(e);
-			}}
-			onKeyUp={(e) => {
-				// Print Screen only ever arrives as its key going up.
-				if (recording && e.code === "PrintScreen") {
-					e.preventDefault();
-					take(e);
-				}
-			}}
-		>
-			{recording ? (note ?? "Press the keys…") : "Record keys"}
-		</button>
-	);
 }
 
 /** A Custom command an earlier Bloom set up (its own touchscreen switch). */
@@ -287,24 +203,14 @@ function BindingRow({
 					onChange={(e) => onChange({ ...binding, action: e.target.value })}
 				>
 					<option value="">{defaultLabel}</option>
-					{KEY_ACTIONS.filter(([id]) => id !== without).map(([id, label]) => (
+					{KEY_ACTIONS.filter(
+						([id]) => id !== without && (id !== "custom" || binding.action === "custom")
+					).map(([id, label]) => (
 						<option key={id} value={id}>
 							{label}
 						</option>
 					))}
 				</select>
-				<input
-					className="sb-input"
-					placeholder="action"
-					title="For Custom: the keys to press (Windows key codes) or a program to run, as in G-Helper"
-					value={binding.custom}
-					spellCheck={false}
-					onChange={(e) => onChange({ ...binding, custom: e.target.value })}
-				/>
-				{/* Recording sets the key to Custom with the keys pressed. */}
-				<KeysRecorder
-					onKeys={(codes) => onChange({ ...binding, action: "custom", custom: codes })}
-				/>
 				<span className="gh-hotkey" title="Your hotkey: does the same as this key, from any keyboard">
 					{insideOnly ? (
 						<button type="button" className="sb-hotkey" disabled>
@@ -461,9 +367,7 @@ export function GHelperSettings() {
 					<div className="setting-group-label gh-columns-label">
 						<span>Key Bindings</span>
 						<span className="gh-columns">
-							<span className="gh-col-action">Laptop key does</span>
-							<span className="gh-col-custom">Custom keys</span>
-							<span className="gh-col-record" />
+							<span className="gh-col-action">Does</span>
 							<span className="gh-col-hotkey">Your hotkey, any keyboard</span>
 						</span>
 					</div>
@@ -484,9 +388,9 @@ export function GHelperSettings() {
 					</div>
 					<div className="sb-note gh-save-row">
 						<span>
-							Each row is one of the laptop's keys. Left: what it does, as in G-Helper (or
-							Record keys for Custom). Save writes that into G-Helper. Right: your hotkey for
-							any keyboard, which does the same as that key; it works at once, no Save needed.
+							Your hotkey does what that row is set to, from any keyboard, and works at once.
+							Changing what a row does is saved into G-Helper with Save (the laptop's own key
+							does the same then).
 						</span>
 						<button
 							type="button"

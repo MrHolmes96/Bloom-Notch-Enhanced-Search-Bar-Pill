@@ -194,6 +194,13 @@ unsafe fn register(ids: &[String]) -> Result<(), String> {
             .CreateFolder(&BSTR::from(TASK_FOLDER), &none)
             .map_err(|e| step("Bloom folder", e))?,
     };
+    // Registered as administrator, a task belongs to the administrators:
+    // without this, Bloom (not running as administrator) couldn't start it.
+    // Administrators and Windows keep full control; this account may read
+    // and run it, nothing more.
+    let access = VARIANT::from(BSTR::from(format!(
+        "D:(A;;FA;;;BA)(A;;FA;;;SY)(A;;GRGX;;;{sid})"
+    )));
     for (name, verb, what) in [
         (TASK_OFF, "/disable-device", "off"),
         (TASK_ON, "/enable-device", "on"),
@@ -238,7 +245,7 @@ unsafe fn register(ids: &[String]) -> Result<(), String> {
                 &none,
                 &none,
                 TASK_LOGON_INTERACTIVE_TOKEN,
-                &none,
+                &access,
             )
             .map_err(|e| step(&format!("register \"{name}\""), e))?;
     }
@@ -333,23 +340,29 @@ fn switch(app: &AppHandle) -> Result<(), String> {
     let mut ids: Vec<String> = devices.iter().map(|d| d.id.clone()).collect();
     ids.sort();
     let turn_off = devices.iter().any(|d| d.enabled);
-    let ids_text = ids.join("|");
+    // The version of the setup is part of what is remembered, so tasks made
+    // by an earlier Bloom are made again (once) when that changes.
+    let ids_text = format!("v2|{}", ids.join("|"));
     if crate::utils::get_setting_str(app, IDS_KEY).as_deref() != Some(ids_text.as_str()) {
         set_up(&ids)?;
         let _ = crate::commands::save_setting(app.clone(), IDS_KEY.into(), Value::String(ids_text));
     }
     let task = if turn_off { TASK_OFF } else { TASK_ON };
     if let Err(e) = run_task(task) {
-        log(&format!("{task} couldn't run: {e}"));
-        // Made again next time.
-        let _ = crate::commands::save_setting(
-            app.clone(),
-            IDS_KEY.into(),
-            Value::String(String::new()),
-        );
-        return Err(
-            "The touchscreen task couldn't run. Press the shortcut again to set it up".into(),
-        );
+        // Made again (one more Windows prompt) and tried once more.
+        log(&format!(
+            "{task} couldn't run: {e}; setting the tasks up again"
+        ));
+        set_up(&ids)?;
+        if let Err(e) = run_task(task) {
+            log(&format!("{task} still couldn't run: {e}"));
+            let _ = crate::commands::save_setting(
+                app.clone(),
+                IDS_KEY.into(),
+                Value::String(String::new()),
+            );
+            return Err("The touchscreen task couldn't run (see ghelper.log)".into());
+        }
     }
     log(&format!("ran {task}"));
     let handle = app.clone();
