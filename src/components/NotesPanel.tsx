@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ArrowDownUp,
 	Check,
@@ -9,10 +9,13 @@ import {
 } from "lucide-react";
 import { saveStoredSetting } from "../settings/useStoredSetting";
 import { noteHasMore, noteTitle } from "./noteFormat";
+import { PanelBoundary } from "./PanelBoundary";
 import "./NotesPanel.css";
 
-// The editor (and its toolbar) loads only when a note is opened.
-const NoteEditor = lazy(() => import("./NoteEditor"));
+// The editor (and its toolbar) is its own download, fetched when the notes
+// page opens, so it is ready before a note is.
+const loadNoteEditor = () => import("./NoteEditor");
+const NoteEditor = lazy(loadNoteEditor);
 
 /**
  * Quick notes and to-dos in the notch, for things that don't belong in a
@@ -150,7 +153,13 @@ interface NotesPanelProps {
 	onLayoutChange: (layout: NotesLayout) => void;
 }
 
-export function NotesPanel({ items, onChange, onPinChange, onLayoutChange }: NotesPanelProps) {
+// Drawn again only when the notes change, not on every redraw of the notch.
+export const NotesPanel = memo(function NotesPanel({
+	items,
+	onChange,
+	onPinChange,
+	onLayoutChange
+}: NotesPanelProps) {
 	const [draft, setDraft] = useState("");
 	const [todo, setTodo] = useState(() => localStorage.getItem("bloom-notch-notes-kind") !== "note");
 	const [editing, setEditing] = useState<string | null>(null);
@@ -166,6 +175,10 @@ export function NotesPanel({ items, onChange, onPinChange, onLayoutChange }: Not
 	// The latest list, for the editor's saves (it keeps typing between them).
 	const itemsRef = useRef(items);
 	itemsRef.current = items;
+
+	useEffect(() => {
+		void loadNoteEditor();
+	}, []);
 
 	useEffect(() => {
 		onLayoutChange({ view, editorOpen: openNote !== null });
@@ -228,6 +241,7 @@ export function NotesPanel({ items, onChange, onPinChange, onLayoutChange }: Not
 	const note = openNote ? items.find((n) => n.id === openNote) : undefined;
 	if (note) {
 		return (
+			<PanelBoundary key={note.id} page="Notes">
 			<Suspense fallback={<div className="notes-panel notes-editor" />}>
 			<NoteEditor
 				key={note.id}
@@ -255,6 +269,7 @@ export function NotesPanel({ items, onChange, onPinChange, onLayoutChange }: Not
 				}}
 			/>
 			</Suspense>
+			</PanelBoundary>
 		);
 	}
 
@@ -432,4 +447,4 @@ export function NotesPanel({ items, onChange, onPinChange, onLayoutChange }: Not
 			)}
 		</div>
 	);
-}
+});

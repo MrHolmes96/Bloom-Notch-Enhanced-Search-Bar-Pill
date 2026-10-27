@@ -1287,6 +1287,19 @@ pub async fn save_note_file(path: String, contents: String) -> Result<(), String
     .map_err(|e| e.to_string())?
 }
 
+/// A notch page failed while drawing (it shows "Try again" instead): what
+/// went wrong goes into crash.log, so Export Diagnostics has it.
+#[tauri::command]
+pub fn note_page_error(page: String, message: String) {
+    let message: String = message
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(1500)
+        .collect();
+    let page: String = page.chars().filter(|c| !c.is_control()).take(40).collect();
+    crate::utils::note_crash(&format!("page '{page}' failed: {message}"));
+}
+
 /// Switches to a window (the search bar's Open Windows): always brings it
 /// forward, never minimizes it as a second click on its dock icon does.
 #[tauri::command]

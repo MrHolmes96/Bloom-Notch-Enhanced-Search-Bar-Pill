@@ -4812,6 +4812,7 @@ fn recover_from_webview_failure(handle: &AppHandle) {
         return;
     }
     let started = WEBVIEWS_WATCHED_AT.get().map(Instant::elapsed);
+    crate::utils::note_crash("A web view's process exited; Bloom restarts");
     let handle = handle.clone();
     // Leave the WebView2 callback before touching windows.
     tauri::async_runtime::spawn(async move {

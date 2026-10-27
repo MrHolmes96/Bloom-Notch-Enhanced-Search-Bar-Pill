@@ -88,6 +88,11 @@ function ToolButton({
 	);
 }
 
+/** The editor is there to read: not let go of, and on the page. */
+function alive(e: Editor | null | undefined): e is Editor {
+	return !!e && !!e.schema && !e.isDestroyed;
+}
+
 function textStyle(editor: Editor) {
 	for (const level of [1, 2, 3] as const) {
 		if (editor.isActive("heading", { level })) return `h${level}`;
@@ -112,7 +117,11 @@ export default function NoteEditor({
 	const [saveMenu, setSaveMenu] = useState(false);
 	const [status, setStatus] = useState<string | null>(null);
 
-	const editor = useEditor({
+	// What the editor is made from is fixed for its life: the notch re-renders
+	// many times a second (the music visualizer, the clock), and options that
+	// look new on a render make the editor apply them again each time.
+	const openLinkRef = useRef<() => void>(() => {});
+	const [options] = useState(() => ({
 		extensions: [
 			StarterKit.configure({ link: { openOnClick: false, autolink: true } }),
 			TaskList,
@@ -122,22 +131,26 @@ export default function NoteEditor({
 		],
 		// Notes written before the toolbar are plain text, a paragraph a line.
 		content: note.md ? note.text : (plainTextDoc(note.text) as never),
-		contentType: note.md ? "markdown" : "json",
-		autofocus: "end",
+		contentType: (note.md ? "markdown" : "json") as "markdown" | "json",
+		autofocus: "end" as const,
 		editorProps: {
 			attributes: { class: "note-doc", spellcheck: "false" },
-			handleKeyDown: (_view, event) => {
+			handleKeyDown: (_view: unknown, event: KeyboardEvent) => {
 				if (event.key === "Escape") {
 					closeRef.current();
 					return true;
 				}
 				if (event.key.toLowerCase() === "k" && (event.ctrlKey || event.metaKey)) {
-					openLink();
+					openLinkRef.current();
 					return true;
 				}
 				return false;
 			}
-		},
+		}
+	}));
+
+	const editor = useEditor({
+		...options,
 		onUpdate: () => {
 			if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
 			saveTimer.current = window.setTimeout(saveNow, 500);
@@ -146,40 +159,54 @@ export default function NoteEditor({
 
 	const state = useEditorState({
 		editor,
-		selector: ({ editor: e }) =>
-			e
-				? {
-						style: textStyle(e),
-						bold: e.isActive("bold"),
-						italic: e.isActive("italic"),
-						underline: e.isActive("underline"),
-						strike: e.isActive("strike"),
-						bullet: e.isActive("bulletList"),
-						ordered: e.isActive("orderedList"),
-						task: e.isActive("taskList"),
-						link: e.isActive("link"),
-						code: e.isActive("code"),
-						quote: e.isActive("blockquote"),
-						canUndo: e.can().undo(),
-						canRedo: e.can().redo(),
-						characters: e.getText().length
-					}
-				: null
+		selector: ({ editor: e }) => {
+			// An editor that has been let go of (the note closing, or React
+			// starting the page over) has no schema left to read: nothing to show.
+			if (!e || !e.schema) return null;
+			try {
+				return {
+					style: textStyle(e),
+					bold: e.isActive("bold"),
+					italic: e.isActive("italic"),
+					underline: e.isActive("underline"),
+					strike: e.isActive("strike"),
+					bullet: e.isActive("bulletList"),
+					ordered: e.isActive("orderedList"),
+					task: e.isActive("taskList"),
+					link: e.isActive("link"),
+					code: e.isActive("code"),
+					quote: e.isActive("blockquote"),
+					canUndo: e.can().undo(),
+					canRedo: e.can().redo(),
+					characters: e.state.doc.textContent.length
+				};
+			} catch {
+				return null;
+			}
+		}
 	});
 
-	const markdown = () => (editor ? editor.getMarkdown() : note.text);
+	// The editor's own callbacks are the ones it was made with, so they reach
+	// the editor and the save through these, never an earlier render's.
+	const editorRef = useRef<Editor | null>(null);
+	editorRef.current = editor;
+	const onSaveRef = useRef(onSave);
+	onSaveRef.current = onSave;
+
+	const markdown = () => (alive(editor) ? editor.getMarkdown() : note.text);
 
 	function saveNow() {
 		if (saveTimer.current !== null) {
 			window.clearTimeout(saveTimer.current);
 			saveTimer.current = null;
 		}
-		if (editor && !editor.isDestroyed) onSave(markdown());
+		const current = editorRef.current;
+		if (alive(current)) onSaveRef.current(current.getMarkdown());
 	}
 
 	const close = () => {
 		saveNow();
-		if (!editor || editor.isDestroyed) {
+		if (!alive(editor)) {
 			onClose(note.text);
 			return;
 		}
@@ -187,6 +214,7 @@ export default function NoteEditor({
 		onClose(editor.getText().trim() ? markdown() : "");
 	};
 	closeRef.current = close;
+	openLinkRef.current = openLink;
 
 	// Leaving the page (or the notch closing) saves it.
 	useEffect(() => {
@@ -197,13 +225,13 @@ export default function NoteEditor({
 	}, [editor]);
 
 	function openLink() {
-		if (!editor) return;
+		if (!alive(editor)) return;
 		setLinkText((editor.getAttributes("link").href as string | undefined) ?? "");
 		setLinkOpen(true);
 	}
 
 	const applyLink = () => {
-		if (!editor) return;
+		if (!alive(editor)) return;
 		const href = linkText.trim();
 		const chain = editor.chain().focus().extendMarkRange("link");
 		if (!href) chain.unsetLink().run();
@@ -216,7 +244,7 @@ export default function NoteEditor({
 
 	const saveAs = async (kind: "md" | "txt") => {
 		setSaveMenu(false);
-		if (!editor) return;
+		if (!alive(editor)) return;
 		const title =
 			noteTitle(markdown(), true)
 				.replace(/[\\/:*?"<>|]+/g, " ")
@@ -247,12 +275,12 @@ export default function NoteEditor({
 		} finally {
 			savingFile.current = false;
 			if (!panelRef.current?.contains(document.activeElement)) onPinChange(false);
-			editor.commands.focus();
+			if (alive(editor)) editor.commands.focus();
 		}
 	};
 
 	const run = (action: (e: Editor) => void) => () => {
-		if (editor) action(editor);
+		if (alive(editor)) action(editor);
 	};
 
 	return (
@@ -444,7 +472,7 @@ export default function NoteEditor({
 							if (e.key === "Enter") applyLink();
 							if (e.key === "Escape") {
 								setLinkOpen(false);
-								editor?.commands.focus();
+								if (alive(editor)) editor.commands.focus();
 							}
 						}}
 					/>

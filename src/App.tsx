@@ -45,6 +45,7 @@ import {
 	parseNotes,
 	type NoteItem
 } from "./components/NotesPanel";
+import { PanelBoundary } from "./components/PanelBoundary";
 import {
 	Captions as CaptionsGlyph,
 	Cast as CastGlyph,
@@ -1024,12 +1025,14 @@ function App() {
 		() => localStorage.getItem("bloom-notch-blitzit") !== "false"
 	);
 	const [blitzitHeight, setBlitzitHeight] = useState(() => blitzitPanelHeight(false, 0, true));
-	const saveNotes = (next: NoteItem[]) => {
+	// The same function on every render, so the notes page isn't redrawn with
+	// the rest of the notch.
+	const saveNotes = useCallback((next: NoteItem[]) => {
 		setNotes(next);
 		const value = JSON.stringify(next);
 		localStorage.setItem(NOTES_KEY, value);
 		invoke("save_setting", { key: NOTES_KEY, value }).catch(console.error);
-	};
+	}, []);
 	// The control center's round buttons, chosen in Settings > Notch.
 	const [ccButtons, setCcButtons] = useState<CCButtonId[]>(() =>
 		parseCCButtons(localStorage.getItem(CC_KEY))
@@ -1291,7 +1294,13 @@ function App() {
 			"bloom-shelf-localsend": setShelfLocalSend,
 			"bloom-notch-shelf-in-scroll": setShelfInScroll,
 			[CC_KEY]: (v: unknown) => setCcButtons(parseCCButtons(v)),
-			[NOTES_KEY]: (v: unknown) => setNotes(parseNotes(v)),
+			// Bloom's own saves come back here too: the same notes keep the list
+			// they are, so nothing is redrawn for them.
+			[NOTES_KEY]: (v: unknown) =>
+				setNotes((prev) => {
+					const next = parseNotes(v);
+					return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
+				}),
 			"bloom-notch-notes-in-scroll": setNotesInScroll,
 			"bloom-notch-blitzit": (v: unknown) => setBlitzitInScroll(v !== false && v !== "false"),
 			"bloom-music-compact-notch": setSettingsMusicCompactNotch,
@@ -4270,12 +4279,14 @@ function App() {
 											exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.1 } }}
 											transition={{ type: "spring", stiffness: 400, damping: 30 }}
 										>
-											<NotesPanel
-												items={notes}
-												onChange={saveNotes}
-												onPinChange={setNotchPinned}
-												onLayoutChange={setNotesLayout}
-											/>
+											<PanelBoundary page="Notes">
+												<NotesPanel
+													items={notes}
+													onChange={saveNotes}
+													onPinChange={setNotchPinned}
+													onLayoutChange={setNotesLayout}
+												/>
+											</PanelBoundary>
 										</motion.div>
 									)}
 								</AnimatePresence>
