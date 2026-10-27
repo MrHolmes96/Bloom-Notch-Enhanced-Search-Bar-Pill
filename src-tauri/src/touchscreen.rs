@@ -269,6 +269,10 @@ pub fn toggle(app: &AppHandle) -> Result<(), String> {
         let _ = crate::commands::save_setting(app.clone(), IDS_KEY.into(), Value::String(ids_text));
     }
     let task = if turn_off { TASK_OFF } else { TASK_ON };
+    crate::ghelper::log(&format!(
+        "touchscreen: running {task} for {}",
+        ids.join(", ")
+    ));
     if !run_task(task) {
         // Removed by hand: made again next time.
         let _ = crate::commands::save_setting(
@@ -280,14 +284,27 @@ pub fn toggle(app: &AppHandle) -> Result<(), String> {
     }
     let handle = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(1500));
-        let now_on = touch_screens().iter().any(|d| d.enabled);
-        let text = if now_on {
-            "Touchscreen on"
+        // pnputil takes a moment; the result is checked, not assumed.
+        let mut now_on = !turn_off;
+        for _ in 0..10 {
+            std::thread::sleep(Duration::from_millis(500));
+            now_on = touch_screens().iter().any(|d| d.enabled);
+            if now_on != turn_off {
+                break;
+            }
+        }
+        let (title, body) = if now_on == turn_off {
+            crate::ghelper::log("touchscreen: the task ran but the touchscreen didn't change");
+            (
+                "Touchscreen didn't change",
+                "Windows' device tool didn't switch it",
+            )
+        } else if now_on {
+            ("Touchscreen on", "")
         } else {
-            "Touchscreen off"
+            ("Touchscreen off", "")
         };
-        crate::notifications::show_bloom_notice(&handle, text, "");
+        crate::notifications::show_bloom_notice(&handle, title, body);
         let _ = handle.emit("ghelper-changed", ());
     });
     Ok(())

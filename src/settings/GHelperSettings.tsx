@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Gauge, Keyboard, PanelTop, Plus, X } from "lucide-react";
+import { Gauge, Keyboard, PanelTop, X } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { HotkeyRecorder } from "./SearchBarTab";
 import { useStoredFlag, useStoredString } from "./useStoredSetting";
 import type { GHelperBinding, GHelperState } from "../components/GHelperPanel";
 
 /**
- * Settings > Integrations > G-Helper: its page in the notch, what G-Helper's
- * keys (M1 to FN+V) do, as on G-Helper's own Key Bindings page, and Bloom
- * shortcuts from any keyboard for G-Helper's controls.
+ * Settings > Integrations > G-Helper: its page in the notch, and G-Helper's
+ * keys (M1 to FN+V) as on its own Key Bindings page, each with a shortcut of
+ * your own that does the same from any keyboard.
  */
 
 // G-Helper's actions for its keys, with its own names (Extra.cs).
@@ -71,66 +71,34 @@ function parseShortcuts(raw: string): Shortcut[] {
 	}
 }
 
-/** What a Bloom shortcut can do, grouped as in the notch. */
-function shortcutActions(state: GHelperState | null): { group: string; items: [string, string][] }[] {
-	const modes = state?.modes ?? [
-		{ id: 2, name: "Silent", base: 2 },
-		{ id: 0, name: "Balanced", base: 0 },
-		{ id: 1, name: "Turbo", base: 1 }
-	];
-	return [
-		{
-			group: "Mode",
-			items: [
-				...modes.map((m): [string, string] => [`mode:${m.id}`, `Mode: ${m.name}`]),
-				["mode:cycle", "Mode: next"]
-			]
-		},
-		{
-			group: "GPU Mode",
-			items: [
-				["gpu:eco", "GPU: Eco"],
-				["gpu:standard", "GPU: Standard"],
-				["gpu:optimized", "GPU: Optimized"]
-			]
-		},
-		{
-			group: "Screen",
-			items: [
-				["screen:auto", "Screen: Auto"],
-				["screen:min", `Screen: ${state?.refresh_min ?? 60}Hz`],
-				["screen:max", `Screen: ${state && state.refresh_max > 0 ? state.refresh_max : "highest "}Hz`],
-				["screen:toggle", "Screen: switch refresh rate"],
-				["miniled", "Screen: Multi Zone on/off"]
-			]
-		},
-		{
-			group: "Battery",
-			items: [60, 70, 80, 90, 100].map((n): [string, string] => [`charge:${n}`, `Charge limit ${n}%`])
-		},
-		{
-			group: "Other",
-			items: [
-				["touchscreen", "Toggle Touchscreen"],
-				["micmute", "Mute Mic"],
-				["open", "Open G-Helper window"]
-			]
-		}
-	];
-}
+/** G-Helper does these inside itself only (laptop key or its window). */
+const ONLY_IN_GHELPER = ["aura", "visual"];
 
 function BindingRow({
 	binding,
 	onChange,
+	shortcut,
+	shortcutTaken,
+	onShortcut,
 	divider
 }: {
 	binding: GHelperBinding;
 	onChange: (next: GHelperBinding) => void;
+	shortcut: string;
+	shortcutTaken: boolean;
+	onShortcut: (hotkey: string) => void;
 	divider: boolean;
 }) {
 	const [defaultLabel, without] = KEY_DEFAULTS[binding.key] ?? ["--------------", null];
+	const effective = binding.action || without || "";
+	const insideOnly = ONLY_IN_GHELPER.includes(effective);
+	const desc = insideOnly
+		? "G-Helper does this one only from the laptop's own key or its window, so a shortcut can't"
+		: shortcutTaken
+			? "Another app already uses this shortcut. Pick another (or close that app)"
+			: undefined;
 	return (
-		<SettingRow icon={Keyboard} label={binding.label} divider={divider}>
+		<SettingRow icon={Keyboard} label={binding.label} desc={desc} divider={divider}>
 			<div className="sb-inline gh-binding">
 				<select
 					className="settings-select"
@@ -152,6 +120,27 @@ function BindingRow({
 					spellCheck={false}
 					onChange={(e) => onChange({ ...binding, custom: e.target.value })}
 				/>
+				<span className="gh-shortcut" title="Your shortcut: does the same from any keyboard">
+					{insideOnly ? (
+						<button type="button" className="sb-hotkey" disabled>
+							Not possible
+						</button>
+					) : (
+						<HotkeyRecorder value={shortcut} onChange={onShortcut} />
+					)}
+					{shortcut && !insideOnly ? (
+						<button
+							type="button"
+							className="extra-folder-remove"
+							title="Remove the shortcut"
+							onClick={() => onShortcut("")}
+						>
+							<X size={13} />
+						</button>
+					) : (
+						<span className="gh-shortcut-space" />
+					)}
+				</span>
 			</div>
 		</SettingRow>
 	);
@@ -166,7 +155,6 @@ export function GHelperSettings() {
 	const [shortcutsRaw, setShortcutsRaw] = useStoredString(HOTKEYS_KEY, "[]");
 	const shortcuts = useMemo(() => parseShortcuts(shortcutsRaw), [shortcutsRaw]);
 	const [registered, setRegistered] = useState<boolean[]>([]);
-	const [adding, setAdding] = useState<Shortcut | null>(null);
 
 	const refresh = useCallback(async () => {
 		try {
@@ -219,10 +207,25 @@ export function GHelperSettings() {
 		}
 	};
 
-	const actions = shortcutActions(state);
-	const actionLabel = (id: string) =>
-		actions.flatMap((g) => g.items).find(([value]) => value === id)?.[1] ?? id;
-	const saveShortcuts = (next: Shortcut[]) => setShortcutsRaw(JSON.stringify(next));
+	// Each key's own shortcut, stored as { hotkey, action: "key:<key>" }.
+	const keyShortcuts = shortcuts.filter((s) => s.action.startsWith("key:"));
+	const shortcutFor = (key: string) =>
+		keyShortcuts.find((s) => s.action === `key:${key}`)?.hotkey ?? "";
+	const shortcutTaken = (key: string) => {
+		const index = shortcuts.findIndex((s) => s.action === `key:${key}`);
+		return index >= 0 && registered[index] === false;
+	};
+	// Shortcuts from the first version (a list of their own) are let go of:
+	// a shortcut now belongs to one of G-Helper's keys.
+	useEffect(() => {
+		if (shortcuts.length !== keyShortcuts.length)
+			setShortcutsRaw(JSON.stringify(keyShortcuts));
+	}, [shortcutsRaw]);
+	const setShortcut = (key: string, hotkey: string) => {
+		const others = keyShortcuts.filter((s) => s.action !== `key:${key}`);
+		const next = hotkey ? [...others, { hotkey, action: `key:${key}` }] : others;
+		setShortcutsRaw(JSON.stringify(next));
+	};
 
 	const statusText = !state
 		? "Looking for G-Helper…"
@@ -276,13 +279,18 @@ export function GHelperSettings() {
 								onChange={(next) =>
 									setDraft(bindings.map((b) => (b.key === next.key ? next : b)))
 								}
+								shortcut={shortcutFor(binding.key)}
+								shortcutTaken={shortcutTaken(binding.key)}
+								onShortcut={(hotkey) => setShortcut(binding.key, hotkey)}
 							/>
 						))}
 					</div>
 					<div className="sb-note gh-save-row">
 						<span>
-							The laptop's own keys, as on G-Helper's Key Bindings page. Saving restarts
-							G-Helper once (2–3 seconds) so it takes them.
+							Left: what each laptop key does, as on G-Helper's Key Bindings page (Save
+							restarts G-Helper once, in the background). Right: your own shortcut for that
+							key. Click it and press any keys on any keyboard; it then does exactly what the
+							key does, and follows it when you change the key in G-Helper.
 						</span>
 						<button
 							type="button"
@@ -301,105 +309,6 @@ export function GHelperSettings() {
 				</>
 			)}
 
-			<div className="setting-group-label">Shortcuts</div>
-			<div className="setting-group">
-				{shortcuts.length === 0 && !adding && (
-					<SettingRow
-						icon={Keyboard}
-						label="No shortcuts yet"
-						desc="Add one for any G-Helper control, from any keyboard"
-						divider={false}
-					/>
-				)}
-				{shortcuts.map((shortcut, i) => (
-					<SettingRow
-						key={`${shortcut.hotkey}-${i}`}
-						icon={Keyboard}
-						label={actionLabel(shortcut.action)}
-						desc={
-							registered[i] === false
-								? "Another app already uses this shortcut. Pick another (or close that app)"
-								: undefined
-						}
-						divider={i < shortcuts.length - 1 || !!adding}
-					>
-						<div className="sb-inline">
-							<HotkeyRecorder
-								value={shortcut.hotkey}
-								onChange={(hotkey) =>
-									saveShortcuts(shortcuts.map((s, j) => (j === i ? { ...s, hotkey } : s)))
-								}
-							/>
-							<button
-								type="button"
-								className="extra-folder-remove"
-								title="Remove the shortcut"
-								onClick={() => saveShortcuts(shortcuts.filter((_, j) => j !== i))}
-							>
-								<X size={13} />
-							</button>
-						</div>
-					</SettingRow>
-				))}
-				{adding && (
-					<SettingRow icon={Plus} label="New Shortcut" divider={false}>
-						<div className="sb-inline gh-binding">
-							<select
-								className="settings-select"
-								value={adding.action}
-								onChange={(e) => setAdding({ ...adding, action: e.target.value })}
-							>
-								{actions.map(({ group, items }) => (
-									<optgroup key={group} label={group}>
-										{items.map(([value, label]) => (
-											<option key={value} value={value}>
-												{label}
-											</option>
-										))}
-									</optgroup>
-								))}
-							</select>
-							<HotkeyRecorder
-								value={adding.hotkey}
-								onChange={(hotkey) => setAdding({ ...adding, hotkey })}
-							/>
-						</div>
-					</SettingRow>
-				)}
-			</div>
-			<div className="sb-note gh-save-row">
-				<span>
-					Click the shortcut box, then press the keys: a combination, or a single key from F13 to
-					F24 (which a Logitech key can send through OpenLogi). Toggle Touchscreen asks Windows
-					for permission once the first time.
-				</span>
-				{adding ? (
-					<>
-						<button type="button" className="settings-button" onClick={() => setAdding(null)}>
-							Cancel
-						</button>
-						<button
-							type="button"
-							className="settings-button"
-							disabled={!adding.hotkey}
-							onClick={() => {
-								saveShortcuts([...shortcuts, adding]);
-								setAdding(null);
-							}}
-						>
-							Add
-						</button>
-					</>
-				) : (
-					<button
-						type="button"
-						className="settings-button"
-						onClick={() => setAdding({ hotkey: "", action: "touchscreen" })}
-					>
-						Add Shortcut
-					</button>
-				)}
-			</div>
 			{problem && <div className="sb-note">{problem}</div>}
 		</>
 	);

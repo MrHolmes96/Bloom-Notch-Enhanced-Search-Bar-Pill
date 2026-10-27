@@ -1421,7 +1421,20 @@ input:checked + .slider:before {
 }
 
 .gh-binding .sb-input {
-	width: 120px;
+	width: 110px;
+}
+
+.gh-shortcut {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: 6px;
+}
+
+.gh-shortcut .extra-folder-remove,
+.gh-shortcut-space {
+	width: 26px;
+	flex: none;
 }
 
 .gh-save-row {

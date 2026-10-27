@@ -53,8 +53,9 @@ const APP_HOTKEYS: [(&str, AppHotkey); 2] = [
 ];
 /// Their ids follow the search bar's (main and up to 32 query hotkeys).
 const APP_HOTKEY_BASE: i32 = HOTKEY_ID + 64;
-/// Shortcuts for G-Helper's controls (Settings > Integrations > G-Helper):
-/// "bloom-hotkey-ghelper", a list of { hotkey, action }.
+/// Your own shortcuts for G-Helper's keys (Settings > Integrations >
+/// G-Helper > Key Bindings): "bloom-hotkey-ghelper", a list of
+/// { hotkey, action: "key:<m1…fnv>" }. Each does what that key does.
 const GHELPER_HOTKEYS_KEY: &str = "bloom-hotkey-ghelper";
 const GHELPER_HOTKEY_BASE: i32 = HOTKEY_ID + 96;
 const GHELPER_HOTKEY_MAX: usize = 32;
@@ -70,9 +71,14 @@ struct GHelperHotkey {
 }
 
 fn register_ghelper_hotkeys(app: &AppHandle, registered: &mut Vec<i32>) {
+    // Each one belongs to one of G-Helper's keys ("key:fnv"); entries from
+    // the first version, a list of their own, are left out.
     let list: Vec<GHelperHotkey> = setting(app, GHELPER_HOTKEYS_KEY)
-        .and_then(|json| serde_json::from_str(&json).ok())
-        .unwrap_or_default();
+        .and_then(|json| serde_json::from_str::<Vec<GHelperHotkey>>(&json).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| entry.action.starts_with("key:"))
+        .collect();
     let mut actions = Vec::new();
     let mut status = Vec::new();
     for (i, entry) in list.iter().enumerate().take(GHELPER_HOTKEY_MAX) {
