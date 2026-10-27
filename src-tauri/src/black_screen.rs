@@ -9,7 +9,8 @@
 //! by the sleep timer; that request doesn't cover the lid or the power
 //! button, so closing the lid still puts the PC to sleep as set in Windows.
 //! Any key or pointer move turns the screen on again, and the request ends
-//! with it.
+//! with it. The sound devices chosen in Windows are put back then, if the
+//! screen going dark made Windows move the sound elsewhere.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -104,6 +105,8 @@ unsafe fn run() {
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     WENT_OFF.store(false, Ordering::Relaxed);
     CAME_ON.store(false, Ordering::Relaxed);
+    // The sound devices in use, put back after (see audio_default.rs).
+    let sound_devices = crate::audio_default::snapshot();
     let Ok(module) = GetModuleHandleW(None) else {
         return;
     };
@@ -174,6 +177,11 @@ unsafe fn run() {
         let _ = UnregisterPowerSettingNotification(notify);
     }
     let _ = DestroyWindow(window);
+    if CAME_ON.load(Ordering::Relaxed) {
+        if let Some(saved) = sound_devices {
+            crate::audio_default::restore_soon(saved);
+        }
+    }
 }
 
 /// The control center's Screen Off button.
