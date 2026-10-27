@@ -1258,7 +1258,15 @@ fn run_key(app: &AppHandle, key: &str) -> Result<(), String> {
                 .spawn()
                 .map_err(|e| e.to_string())?;
         }
-        "custom" => run_custom(&text(&config, &format!("{key}_custom")).unwrap_or_default())?,
+        "custom" => {
+            let command = text(&config, &format!("{key}_custom")).unwrap_or_default();
+            // Bloom's own touchscreen switch: done here, without a detour.
+            if crate::touchscreen::is_command(&command) {
+                crate::touchscreen::toggle(app)?;
+            } else {
+                run_custom(&command)?;
+            }
+        }
         "performance" => {
             needs_ghelper("Mode")?;
             cycle_mode(app)?;
@@ -1404,6 +1412,13 @@ pub async fn ghelper_set_bindings(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The command G-Helper runs for a key set to Bloom's fast touchscreen
+/// switch (its "Custom" action).
+#[tauri::command]
+pub fn ghelper_touchscreen_command() -> Option<String> {
+    crate::touchscreen::command()
 }
 
 /// Starts G-Helper (the notch's "Start G-Helper").

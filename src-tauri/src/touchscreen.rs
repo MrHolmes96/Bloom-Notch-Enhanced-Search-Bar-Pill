@@ -12,6 +12,7 @@
 
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -254,7 +255,23 @@ fn run_task(name: &str) -> bool {
 }
 
 /// Turns the touchscreen off when it is on, else on.
+/// A switch is under way (a second press meanwhile is let go of, so two
+/// presses never undo each other).
+static BUSY: AtomicBool = AtomicBool::new(false);
+
+/// Turns the touchscreen off when it is on, else on.
 pub fn toggle(app: &AppHandle) -> Result<(), String> {
+    if BUSY.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    let started = switch(app);
+    if started.is_err() {
+        BUSY.store(false, Ordering::SeqCst);
+    }
+    started
+}
+
+fn switch(app: &AppHandle) -> Result<(), String> {
     let devices = touch_screens();
     if devices.is_empty() {
         return Err("No touchscreen was found".into());
@@ -306,13 +323,81 @@ pub fn toggle(app: &AppHandle) -> Result<(), String> {
         };
         crate::notifications::show_bloom_notice(&handle, title, body);
         let _ = handle.emit("ghelper-changed", ());
+        BUSY.store(false, Ordering::SeqCst);
     });
     Ok(())
+}
+
+/// The name of the signal `bloom.exe --touchscreen` sets (G-Helper's
+/// "Custom" action for a key, see `command`).
+const SIGNAL: &str = "BloomToggleTouchscreen";
+
+/// What G-Helper runs for a key set to Bloom's touchscreen switch.
+pub fn command() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    Some(format!("\"{}\" --touchscreen", exe.display()))
+}
+
+/// Whether a G-Helper "Custom" command is Bloom's touchscreen switch.
+pub fn is_command(text: &str) -> bool {
+    let text = text.trim();
+    text.to_ascii_lowercase().contains("bloom") && text.ends_with("--touchscreen")
+}
+
+/// `bloom.exe --touchscreen`: tells the running Bloom to switch, and leaves.
+pub fn signal_running_bloom() -> bool {
+    use windows::Win32::System::Threading::{OpenEventW, SetEvent, EVENT_MODIFY_STATE};
+    let name: Vec<u16> = SIGNAL.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let Ok(event) = OpenEventW(EVENT_MODIFY_STATE, false, PCWSTR(name.as_ptr())) else {
+            return false;
+        };
+        let set = SetEvent(event).is_ok();
+        let _ = windows::Win32::Foundation::CloseHandle(event);
+        set
+    }
+}
+
+/// Waits for that signal while Bloom runs.
+pub fn start_listener(app: AppHandle) {
+    use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
+    let name: Vec<u16> = SIGNAL.encode_utf16().chain(std::iter::once(0)).collect();
+    let Ok(event) = (unsafe { CreateEventW(None, false, false, PCWSTR(name.as_ptr())) }) else {
+        return;
+    };
+    let event = event.0 as isize;
+    let _ = std::thread::Builder::new()
+        .name("bloom-touchscreen-signal".into())
+        .spawn(move || loop {
+            let waited = unsafe {
+                WaitForSingleObject(
+                    windows::Win32::Foundation::HANDLE(event as *mut _),
+                    INFINITE,
+                )
+            };
+            if waited.0 != 0 {
+                break;
+            }
+            crate::ghelper::log("touchscreen: asked by G-Helper's key");
+            if let Err(e) = toggle(&app) {
+                crate::ghelper::log(&format!("touchscreen: {e}"));
+                crate::notifications::show_bloom_notice(&app, "Touchscreen", &e);
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn knows_its_own_command() {
+        assert!(is_command(
+            "\"C:\\Users\\k\\AppData\\Local\\Bloom\\bloom.exe\" --touchscreen"
+        ));
+        assert!(!is_command("notepad"));
+        assert!(!is_command("\"C:\\Tools\\other.exe\" --touchscreen"));
+    }
 
     #[test]
     fn task_runs_only_pnputil_for_the_given_devices() {

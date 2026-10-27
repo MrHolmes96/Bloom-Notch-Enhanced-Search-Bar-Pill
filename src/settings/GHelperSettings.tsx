@@ -74,9 +74,13 @@ function parseShortcuts(raw: string): Shortcut[] {
 /** G-Helper does these inside itself only (laptop key or its window). */
 const ONLY_IN_GHELPER = ["aura", "visual"];
 
+/** The dropdown's own entry for Bloom's fast touchscreen switch. */
+const BLOOM_TOUCHSCREEN = "bloom-touchscreen";
+
 function BindingRow({
 	binding,
 	onChange,
+	bloomCommand,
 	shortcut,
 	shortcutTaken,
 	onShortcut,
@@ -84,12 +88,16 @@ function BindingRow({
 }: {
 	binding: GHelperBinding;
 	onChange: (next: GHelperBinding) => void;
+	/** What G-Helper runs for Bloom's touchscreen switch (null: unknown). */
+	bloomCommand: string | null;
 	shortcut: string;
 	shortcutTaken: boolean;
 	onShortcut: (hotkey: string) => void;
 	divider: boolean;
 }) {
 	const [defaultLabel, without] = KEY_DEFAULTS[binding.key] ?? ["--------------", null];
+	const usesBloom =
+		binding.action === "custom" && !!bloomCommand && binding.custom.trim() === bloomCommand;
 	const effective = binding.action || without || "";
 	const insideOnly = ONLY_IN_GHELPER.includes(effective);
 	const desc = insideOnly
@@ -102,8 +110,19 @@ function BindingRow({
 			<div className="sb-inline gh-binding">
 				<select
 					className="settings-select"
-					value={binding.action}
-					onChange={(e) => onChange({ ...binding, action: e.target.value })}
+					value={usesBloom ? BLOOM_TOUCHSCREEN : binding.action}
+					onChange={(e) => {
+						const value = e.target.value;
+						if (value === BLOOM_TOUCHSCREEN && bloomCommand)
+							onChange({ ...binding, action: "custom", custom: bloomCommand });
+						else
+							onChange({
+								...binding,
+								action: value,
+								// Leaving Bloom's switch leaves its command behind too.
+								custom: usesBloom ? "" : binding.custom
+							});
+					}}
 				>
 					<option value="">{defaultLabel}</option>
 					{KEY_ACTIONS.filter(([id]) => id !== without).map(([id, label]) => (
@@ -111,12 +130,16 @@ function BindingRow({
 							{label}
 						</option>
 					))}
+					{bloomCommand && (
+						<option value={BLOOM_TOUCHSCREEN}>Toggle Touchscreen (fast, through Bloom)</option>
+					)}
 				</select>
 				<input
 					className="sb-input"
 					placeholder="action"
 					title="For Custom: the keys to press (hex codes) or a program to run, as in G-Helper"
-					value={binding.custom}
+					value={usesBloom ? "Bloom" : binding.custom}
+					disabled={usesBloom}
 					spellCheck={false}
 					onChange={(e) => onChange({ ...binding, custom: e.target.value })}
 				/>
@@ -155,6 +178,13 @@ export function GHelperSettings() {
 	const [shortcutsRaw, setShortcutsRaw] = useStoredString(HOTKEYS_KEY, "[]");
 	const shortcuts = useMemo(() => parseShortcuts(shortcutsRaw), [shortcutsRaw]);
 	const [registered, setRegistered] = useState<boolean[]>([]);
+	const [bloomCommand, setBloomCommand] = useState<string | null>(null);
+
+	useEffect(() => {
+		void invoke<string | null>("ghelper_touchscreen_command")
+			.then(setBloomCommand)
+			.catch(() => {});
+	}, []);
 
 	const refresh = useCallback(async () => {
 		try {
@@ -279,6 +309,7 @@ export function GHelperSettings() {
 								onChange={(next) =>
 									setDraft(bindings.map((b) => (b.key === next.key ? next : b)))
 								}
+								bloomCommand={bloomCommand}
 								shortcut={shortcutFor(binding.key)}
 								shortcutTaken={shortcutTaken(binding.key)}
 								onShortcut={(hotkey) => setShortcut(binding.key, hotkey)}

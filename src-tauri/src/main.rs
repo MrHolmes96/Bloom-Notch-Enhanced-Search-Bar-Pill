@@ -247,6 +247,7 @@ fn main() {
             ghelper::ghelper_action,
             ghelper::ghelper_set_bindings,
             ghelper::ghelper_start,
+            ghelper::ghelper_touchscreen_command,
             launcher::ghelper_hotkey_status,
             black_screen::screen_off_now,
             launcher::app_hotkey_status,
@@ -522,6 +523,7 @@ fn main() {
             services::setup_keyboard_hook(app.handle().clone());
             launcher::start_hotkey_listener(app.handle().clone());
             ghelper::start_watcher(app.handle().clone());
+            touchscreen::start_listener(app.handle().clone());
             notifications::start(app.handle().clone());
             tray_host::start(app.handle().clone());
             hang_guard::start(app.handle().clone());
