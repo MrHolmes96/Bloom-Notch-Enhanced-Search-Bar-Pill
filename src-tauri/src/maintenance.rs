@@ -422,6 +422,11 @@ pub fn run_command(arg: &std::ffi::OsStr, rest: &[std::ffi::OsString]) -> bool {
             Ok(path) => message(&format!("Saved {}", path.display())),
             Err(e) => message(&format!("Couldn't save the diagnostics: {e}")),
         },
+        // Run as administrator once, to set up the touchscreen tasks.
+        arg if arg == crate::touchscreen::REGISTER_ARG => {
+            let done = crate::touchscreen::register_tasks(rest);
+            std::process::exit(if done { 0 } else { 1 });
+        }
         "--update-watchdog" => {
             if let Some(marker) = rest.first() {
                 crate::utils::run_update_watchdog(PathBuf::from(marker));

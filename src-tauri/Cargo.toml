@@ -83,6 +83,8 @@ windows = { version = "0.61", features = [
 	"Win32_Devices_FunctionDiscovery",
 	"Win32_Devices_Display",
 	"Win32_Devices_DeviceAndDriverInstallation",
+	"Win32_System_TaskScheduler",
+	"Win32_Graphics_GdiPlus",
 	"Devices_Radios",
 	"Devices_Bluetooth",
 	"Devices_Bluetooth_GenericAttributeProfile",

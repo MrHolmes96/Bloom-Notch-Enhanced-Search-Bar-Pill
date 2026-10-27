@@ -1420,8 +1420,57 @@ input:checked + .slider:before {
 	gap: 6px;
 }
 
+.gh-binding .settings-select {
+	width: 170px;
+}
+
+.gh-columns-label {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+}
+
+.gh-columns {
+	display: flex;
+	gap: 6px;
+	margin-right: -3px;
+	text-transform: none;
+	letter-spacing: 0;
+	font-weight: 500;
+}
+
+.gh-col-action {
+	width: 170px;
+}
+
+.gh-col-custom {
+	width: 110px;
+}
+
+.gh-col-record {
+	width: 120px;
+}
+
+.gh-col-hotkey {
+	width: 152px;
+	margin-left: 6px;
+}
+
 .gh-binding .sb-input {
 	width: 110px;
+}
+
+.gh-hotkey {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: 6px;
+}
+
+.gh-hotkey .extra-folder-remove,
+.gh-hotkey-space {
+	width: 26px;
+	flex: none;
 }
 
 .gh-record {

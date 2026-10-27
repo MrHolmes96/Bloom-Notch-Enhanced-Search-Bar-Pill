@@ -11,6 +11,7 @@ mod data_folders;
 mod dock_extras;
 mod foreground;
 mod ghelper;
+mod ghelper_toast;
 mod hang_guard;
 mod integrations;
 mod jumplist;
@@ -32,6 +33,7 @@ mod startup;
 mod state;
 mod taskbar_progress;
 mod toast;
+mod touchscreen;
 mod tray;
 mod tray_host;
 mod tray_manager;
@@ -246,6 +248,7 @@ fn main() {
             ghelper::ghelper_action,
             ghelper::ghelper_set_bindings,
             ghelper::ghelper_start,
+            launcher::ghelper_hotkey_status,
             black_screen::screen_off_now,
             launcher::app_hotkey_status,
             launcher::set_hotkey_recording,

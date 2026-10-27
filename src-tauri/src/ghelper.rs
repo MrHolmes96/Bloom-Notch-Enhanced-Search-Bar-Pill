@@ -56,6 +56,8 @@ const TEMP_GPU: u32 = 0x0012_0097;
 const FAN_CPU: u32 = 0x0011_0013;
 const FAN_GPU: u32 = 0x0011_0014;
 const FAN_MID: u32 = 0x0011_0031;
+/// Hands a hotkey code to the firmware, as the laptop's own key would.
+const UNIVERSAL_CONTROL: u32 = 0x0010_0021;
 
 // Virtual keys.
 const VK_SHIFT: u16 = 0x10;
@@ -1172,6 +1174,203 @@ fn toggle_mic() -> Result<(), String> {
     Ok(())
 }
 
+// ---------------------------------------------------------------- keys from any keyboard
+
+/// G-Helper's pop-ups are on (its "disable_osd" isn't set).
+pub fn osd_enabled() -> bool {
+    !read_config().is_some_and(|c| is_on(&c, "disable_osd"))
+}
+
+/// The touchpad's state as Windows keeps it (what G-Helper reads).
+fn touchpad_on() -> bool {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+    let mut value = 0u32;
+    let mut size = 4u32;
+    unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\PrecisionTouchPad\\Status"),
+            w!("Enabled"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut value as *mut u32 as *mut _),
+            Some(&mut size),
+        )
+        .is_ok()
+            && value == 1
+    }
+}
+
+/// G-Helper's name for one of its actions.
+fn action_name(action: &str) -> &str {
+    match action {
+        "aura" => "Toggle Aura",
+        "visual" => "Visual Mode",
+        "fnlock" => "Toggle Fn-Lock",
+        "backlight_up" => "Backlight Up",
+        "backlight_down" => "Backlight Down",
+        other => other,
+    }
+}
+
+/// What one of G-Helper's keys does when nothing is chosen for it (as in
+/// G-Helper's InputDispatcher).
+fn default_key_action(key: &str) -> &'static str {
+    match key {
+        "m1" => "volume_down",
+        "m2" => "volume_up",
+        "m3" => "micmute",
+        "m4" => "ghelper",
+        "fnf4" => "aura",
+        "fnc" => "fnlock",
+        "fnv" => "visual",
+        _ => "",
+    }
+}
+
+/// G-Helper's "Custom" action: up to four keys as hex codes ("0x5B 0x44"),
+/// pressed together, or else a command, run as G-Helper runs it.
+fn custom_keys(command: &str) -> Option<Vec<u16>> {
+    let parts: Vec<&str> = command.split_whitespace().collect();
+    let keys: Option<Vec<u16>> = parts
+        .iter()
+        .map(|p| {
+            let digits = p
+                .strip_prefix("0x")
+                .or_else(|| p.strip_prefix("0X"))
+                .unwrap_or(p);
+            (!digits.is_empty() && digits.len() <= 2)
+                .then(|| u16::from_str_radix(digits, 16).ok())
+                .flatten()
+        })
+        .collect();
+    keys.filter(|k| (1..=4).contains(&k.len()))
+}
+
+fn run_custom(command: &str) -> Result<(), String> {
+    let codes = custom_keys(command);
+    match codes {
+        Some(keys) => {
+            press(&keys[..keys.len() - 1], keys[keys.len() - 1]);
+            Ok(())
+        }
+        _ if command.trim().is_empty() => Err("Custom has nothing set in its action box".into()),
+        _ => std::process::Command::new(system32("cmd.exe"))
+            .raw_arg(format!("/C {command}"))
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+    }
+}
+
+/// Does what one of G-Helper's keys (M1 to FN+V) is set to do in G-Helper,
+/// for a shortcut on any keyboard. It is read from G-Helper's settings each
+/// time, so a change made in G-Helper is followed at once.
+fn run_key(app: &AppHandle, key: &str) -> Result<(), String> {
+    let config = read_config().ok_or("G-Helper's settings file wasn't found")?;
+    let chosen = text(&config, key).unwrap_or_default();
+    let action = if chosen.is_empty() {
+        default_key_action(key).to_string()
+    } else {
+        chosen
+    };
+    let running = find_process().is_some();
+    let needs_ghelper = |what: &str| {
+        if running {
+            Ok(())
+        } else {
+            Err(format!("{what} goes through G-Helper, which isn't running"))
+        }
+    };
+    match action.as_str() {
+        "volume_down" => press(&[], 0xAE),
+        "volume_up" => press(&[], 0xAF),
+        "mute" => press(&[], 0xAD),
+        "play" => press(&[], 0xB3),
+        "screenshot" => press(&[], 0x2C),
+        "brightness_down" | "brightness_up" => {
+            // The same call G-Helper makes for its brightness keys.
+            let code = if action == "brightness_up" {
+                0x20
+            } else {
+                0x10
+            };
+            with_acpi(|acpi| acpi.set(UNIVERSAL_CONTROL, code))
+                .ok_or("The ASUS hardware interface isn't available")?;
+        }
+        "screen" => crate::black_screen::screen_off(),
+        "lock" => unsafe {
+            windows::Win32::System::Shutdown::LockWorkStation().map_err(|e| e.to_string())?;
+        },
+        "miniled" => {
+            toggle_miniled(app)?;
+            // G-Helper's pop-up for it: the new setting's name.
+            if osd_enabled() {
+                let (name, icon) = match miniled_state() {
+                    Some(0) => ("One Zone", crate::ghelper_toast::Icon::BrightnessDown),
+                    Some(2) => (
+                        "Multi Zone Strong",
+                        crate::ghelper_toast::Icon::BrightnessUp,
+                    ),
+                    _ => ("Multi Zone", crate::ghelper_toast::Icon::BrightnessUp),
+                };
+                crate::ghelper_toast::show(name, Some(icon));
+            }
+        }
+        "touchscreen" => crate::touchscreen::toggle(app)?,
+        "touchpad" => {
+            // Windows' own touchpad on/off shortcut, then G-Helper's pop-up
+            // with the touchpad's state as Windows keeps it.
+            press(&[VK_LWIN, VK_CONTROL], 0x87);
+            std::thread::sleep(Duration::from_millis(200));
+            if osd_enabled() {
+                let on = touchpad_on();
+                crate::ghelper_toast::show(
+                    if on { "On" } else { "Off" },
+                    Some(crate::ghelper_toast::Icon::Touchpad),
+                );
+            }
+        }
+        "calculator" => {
+            std::process::Command::new(system32("calc.exe"))
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+        "custom" => run_custom(&text(&config, &format!("{key}_custom")).unwrap_or_default())?,
+        "performance" => {
+            needs_ghelper("Mode")?;
+            cycle_mode(app)?;
+        }
+        "micmute" => {
+            needs_ghelper("Mute Mic")?;
+            toggle_mic()?;
+        }
+        "ghelper" => open_ghelper()?,
+        "overlay" => {
+            needs_ghelper("Overlay")?;
+            let key = int(&config, "keybind_overlay").unwrap_or(0x4F);
+            if key > 0 && key < 0xFF {
+                press(&alt_modifiers(&config), key as u16);
+            }
+        }
+        // These G-Helper only does inside itself, with no way in for another
+        // program: they stay on the laptop's own keys.
+        "aura" | "visual" | "fnlock" | "backlight_up" | "backlight_down" => {
+            return Err(format!(
+                "\"{}\" is done by G-Helper only, from the laptop's own key",
+                action_name(&action)
+            ))
+        }
+        other => {
+            return Err(format!(
+                "G-Helper's action \"{other}\" isn't known to Bloom"
+            ))
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn log(line: &str) {
     use std::io::Write;
     let Some(path) = crate::utils::data_file("ghelper.log") else {
@@ -1194,11 +1393,12 @@ pub(crate) fn log(line: &str) {
     }
 }
 
-/// Runs one action from the notch, and notes how it went
+/// Runs one action from the notch or a shortcut, and notes how it went
 /// in ghelper.log (in Export Diagnostics).
 pub fn run_action(app: &AppHandle, action: &str) -> Result<(), String> {
     let (what, value) = action.split_once(':').unwrap_or((action, ""));
     let result = match what {
+        "key" => run_key(app, value),
         "mode" if value == "cycle" => cycle_mode(app),
         "mode" => set_mode(app, value.parse().map_err(|_| "Unknown mode")?),
         "gpu" => set_gpu(app, value),
@@ -1344,6 +1544,15 @@ mod tests {
         assert_eq!(mode_key(&c, 2), Some(VK_F16));
         assert_eq!(mode_key(&c, 7), None);
         assert_eq!(main_modifiers(&config("{}")), vec![VK_CONTROL, VK_SHIFT]);
+    }
+
+    #[test]
+    fn reads_custom_keys_as_g_helper_does() {
+        assert_eq!(custom_keys("0x5B 0x44"), Some(vec![0x5B, 0x44]));
+        assert_eq!(custom_keys("A0 2c"), Some(vec![0xA0, 0x2C]));
+        assert_eq!(custom_keys("C:\\Tools\\app.exe"), None);
+        assert_eq!(custom_keys("1 2 3 4 5"), None);
+        assert_eq!(default_key_action("fnv"), "visual");
     }
 
     #[test]

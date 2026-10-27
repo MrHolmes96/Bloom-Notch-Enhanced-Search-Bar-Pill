@@ -1226,6 +1226,20 @@ pub(crate) fn open_menus(point: POINT, excluded: &[u32]) -> Vec<isize> {
 /// changes whether it takes clicks, which happens as the pointer moves from
 /// the icon into the menu.
 static OPEN_MENUS: Mutex<Vec<(u64, Vec<isize>)>> = Mutex::new(Vec::new());
+
+/// A tray icon's menu opened from the notch is open now. While it is, the
+/// notch stays where it is, however far down the menu reaches (a menu over
+/// the top of the screen must not count as a window covering the notch).
+pub fn menu_open() -> bool {
+    OPEN_MENUS.lock().is_ok_and(|menus| !menus.is_empty())
+}
+
+/// Whether a window is one of those menus.
+pub fn is_open_menu(hwnd: isize) -> bool {
+    OPEN_MENUS
+        .lock()
+        .is_ok_and(|menus| menus.iter().any(|(_, list)| list.contains(&hwnd)))
+}
 static WATCH_SERIAL: AtomicU64 = AtomicU64::new(1);
 
 fn raise_menu(hwnd: isize) {

@@ -1543,7 +1543,12 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     );
                     let class_str = std::str::from_utf8(&class_name[..len as usize]).unwrap_or("");
 
-                    let is_bloom = process_id == my_process_id || class_str.contains("Bloom");
+                    // A menu (a tray icon's, opened from the notch, or any
+                    // other) is not a window the notch should step aside for.
+                    let is_bloom = process_id == my_process_id
+                        || class_str.contains("Bloom")
+                        || class_str == "#32768"
+                        || crate::tray_host::is_open_menu(hwnd.0 as isize);
                     let is_visible = IsWindowVisible(hwnd).as_bool();
                     let is_iconic = IsIconic(hwnd).as_bool();
 
@@ -1646,6 +1651,11 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     strip_checked = Instant::now();
                 }
                 should_notch_overlap |= strip_covered;
+                // While a tray icon's menu from the notch is open, the notch
+                // stays put until the menu closes, like the taskbar's tray.
+                if crate::tray_host::menu_open() {
+                    should_notch_overlap = false;
+                }
 
                 // Only report dock overlap when the dock window is actually visible.
                 // On autostart, the overlap thread starts before init_dock shows the window,

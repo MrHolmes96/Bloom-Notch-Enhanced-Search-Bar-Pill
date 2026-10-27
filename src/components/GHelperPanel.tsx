@@ -376,11 +376,10 @@ export function GHelperPanel({
 							GPU Mode: {gpuLabel}
 						</span>
 						<span className="gh-head-info">
-							{s.gpu_text ??
-								(s.cpu_text
-									? // G-Helper shows no GPU temperature while the GPU sleeps.
-										`GPU${s.gpu_fan != null ? `  Fan: ${s.gpu_fan}RPM` : ""}`
-									: sensorText("GPU", s.gpu_temp, s.gpu_fan))}
+							{/* G-Helper's own line; while it has none (its GPU reading
+							    sleeps with the GPU), the hardware's own GPU sensor, which is
+							    where G-Helper itself falls back to. */}
+							{s.gpu_text ?? sensorText("GPU", s.gpu_temp, s.gpu_fan)}
 						</span>
 					</div>
 					<div className="gh-row">

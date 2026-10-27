@@ -1,17 +1,45 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Gauge, Keyboard, PanelTop } from "lucide-react";
+import { Gauge, Keyboard, PanelTop, X } from "lucide-react";
 import { SettingRow } from "./SettingRow";
-import { useStoredFlag } from "./useStoredSetting";
+import { HotkeyRecorder } from "./SearchBarTab";
+import { useStoredFlag, useStoredString } from "./useStoredSetting";
 import type { GHelperBinding, GHelperState } from "../components/GHelperPanel";
 
 /**
  * Settings > Integrations > G-Helper: its page in the notch, and G-Helper's
- * keys (M1 to FN+V) as on its own Key Bindings page. For "Custom", the keys
- * to press are recorded by pressing them, and written in G-Helper's own
- * format (Windows key codes, "0x11 0x10 0x31"), so G-Helper presses them.
+ * keys (M1 to FN+V) as on its own Key Bindings page:
+ * - the action G-Helper runs for the laptop's key (saved into G-Helper);
+ * - for "Custom", the keys G-Helper presses, recorded by pressing them and
+ *   written in G-Helper's own format ("0x11 0x10 0x31");
+ * - a hotkey of your own, for any keyboard, that does the same as that key.
  */
+
+/** Your hotkeys, one per G-Helper key: { hotkey, action: "key:fnv" }. */
+const HOTKEYS_KEY = "bloom-hotkey-ghelper";
+
+interface Shortcut {
+	hotkey: string;
+	action: string;
+}
+
+function parseShortcuts(raw: string): Shortcut[] {
+	try {
+		const parsed: unknown = JSON.parse(raw || "[]");
+		return Array.isArray(parsed)
+			? parsed.filter(
+					(s): s is Shortcut =>
+						!!s && typeof s.hotkey === "string" && s.action?.startsWith?.("key:")
+				)
+			: [];
+	} catch {
+		return [];
+	}
+}
+
+/** G-Helper does these inside itself only: another keyboard can't reach them. */
+const ONLY_IN_GHELPER = ["aura", "visual", "fnlock", "backlight_up", "backlight_down"];
 
 // G-Helper's actions for its keys, with its own names (Extra.cs).
 const KEY_ACTIONS: [string, string][] = [
@@ -226,22 +254,32 @@ const isOldBloomCommand = (text: string) =>
 function BindingRow({
 	binding,
 	onChange,
+	hotkey,
+	hotkeyTaken,
+	onHotkey,
 	divider
 }: {
 	binding: GHelperBinding;
 	onChange: (next: GHelperBinding) => void;
+	hotkey: string;
+	hotkeyTaken: boolean;
+	onHotkey: (hotkey: string) => void;
 	divider: boolean;
 }) {
 	const [defaultLabel, without] = KEY_DEFAULTS[binding.key] ?? ["--------------", null];
 	const custom = binding.action === "custom";
 	const described = custom ? describeCodes(binding.custom) : null;
+	const effective = binding.action || without || "";
+	const insideOnly = ONLY_IN_GHELPER.includes(effective);
+	const desc = insideOnly
+		? "G-Helper does this one only from the laptop's own key, so a hotkey can't"
+		: hotkeyTaken
+			? "Another app already uses this hotkey. Pick another (or close that app)"
+			: described
+				? `Presses ${described}`
+				: undefined;
 	return (
-		<SettingRow
-			icon={Keyboard}
-			label={binding.label}
-			desc={described ? `Presses ${described}` : undefined}
-			divider={divider}
-		>
+		<SettingRow icon={Keyboard} label={binding.label} desc={desc} divider={divider}>
 			<div className="sb-inline gh-binding">
 				<select
 					className="settings-select"
@@ -267,6 +305,27 @@ function BindingRow({
 				<KeysRecorder
 					onKeys={(codes) => onChange({ ...binding, action: "custom", custom: codes })}
 				/>
+				<span className="gh-hotkey" title="Your hotkey: does the same as this key, from any keyboard">
+					{insideOnly ? (
+						<button type="button" className="sb-hotkey" disabled>
+							Not possible
+						</button>
+					) : (
+						<HotkeyRecorder value={hotkey} onChange={onHotkey} />
+					)}
+					{hotkey && !insideOnly ? (
+						<button
+							type="button"
+							className="extra-folder-remove"
+							title="Remove the hotkey"
+							onClick={() => onHotkey("")}
+						>
+							<X size={13} />
+						</button>
+					) : (
+						<span className="gh-hotkey-space" />
+					)}
+				</span>
 			</div>
 		</SettingRow>
 	);
@@ -278,6 +337,31 @@ export function GHelperSettings() {
 	const [draft, setDraft] = useState<GHelperBinding[] | null>(null);
 	const [saving, setSaving] = useState(false);
 	const [problem, setProblem] = useState<string | null>(null);
+	const [hotkeysRaw, setHotkeysRaw] = useStoredString(HOTKEYS_KEY, "[]");
+	const hotkeys = useMemo(() => parseShortcuts(hotkeysRaw), [hotkeysRaw]);
+	const [registered, setRegistered] = useState<boolean[]>([]);
+
+	useEffect(() => {
+		const check = () =>
+			void invoke<boolean[]>("ghelper_hotkey_status")
+				.then(setRegistered)
+				.catch(() => {});
+		check();
+		const changed = listen("app-hotkeys-changed", check);
+		return () => {
+			void changed.then((f) => f());
+		};
+	}, []);
+
+	const hotkeyFor = (key: string) => hotkeys.find((h) => h.action === `key:${key}`)?.hotkey ?? "";
+	const hotkeyTaken = (key: string) => {
+		const index = hotkeys.findIndex((h) => h.action === `key:${key}`);
+		return index >= 0 && registered[index] === false;
+	};
+	const setHotkey = (key: string, hotkey: string) => {
+		const others = hotkeys.filter((h) => h.action !== `key:${key}`);
+		setHotkeysRaw(JSON.stringify(hotkey ? [...others, { hotkey, action: `key:${key}` }] : others));
+	};
 
 	const refresh = useCallback(async () => {
 		try {
@@ -374,7 +458,15 @@ export function GHelperSettings() {
 
 			{state?.installed && (
 				<>
-					<div className="setting-group-label">Key Bindings</div>
+					<div className="setting-group-label gh-columns-label">
+						<span>Key Bindings</span>
+						<span className="gh-columns">
+							<span className="gh-col-action">Laptop key does</span>
+							<span className="gh-col-custom">Custom keys</span>
+							<span className="gh-col-record" />
+							<span className="gh-col-hotkey">Your hotkey, any keyboard</span>
+						</span>
+					</div>
 					<div className="setting-group">
 						{bindings.map((binding, i) => (
 							<BindingRow
@@ -384,14 +476,17 @@ export function GHelperSettings() {
 								onChange={(next) =>
 									setDraft(bindings.map((b) => (b.key === next.key ? next : b)))
 								}
+								hotkey={hotkeyFor(binding.key)}
+								hotkeyTaken={hotkeyTaken(binding.key)}
+								onHotkey={(hotkey) => setHotkey(binding.key, hotkey)}
 							/>
 						))}
 					</div>
 					<div className="sb-note gh-save-row">
 						<span>
-							G-Helper's own Key Bindings. Pick an action, or click Record keys on a row and
-							press any keys: that key is set to Custom and G-Helper presses them for it.
-							Save writes it all into G-Helper (it restarts once in the background).
+							Each row is one of the laptop's keys. Left: what it does, as in G-Helper (or
+							Record keys for Custom). Save writes that into G-Helper. Right: your hotkey for
+							any keyboard, which does the same as that key; it works at once, no Save needed.
 						</span>
 						<button
 							type="button"
