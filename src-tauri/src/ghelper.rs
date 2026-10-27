@@ -500,7 +500,33 @@ fn press(modifiers: &[u16], key: u16) {
             },
         },
     };
-    let mut inputs: Vec<INPUT> = modifiers.iter().map(|&m| event(m, false)).collect();
+    // The user's own shortcut may still be held (Bloom acts on its key
+    // going down): those keys are let go of first, so the app gets exactly
+    // this combination and not, say, Alt with it. A key no one uses goes
+    // first, so letting go of Alt or Win doesn't open a menu or Start.
+    let held: Vec<u16> = [
+        VK_LSHIFT_CODE,
+        VK_RSHIFT_CODE,
+        VK_LCONTROL_CODE,
+        VK_RCONTROL_CODE,
+        VK_LMENU_CODE,
+        VK_RMENU_CODE,
+        VK_LWIN,
+        VK_RWIN_CODE,
+    ]
+    .into_iter()
+    .filter(|&vk| unsafe {
+        windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk as i32) as u16 & 0x8000
+            != 0
+    })
+    .collect();
+    let mut inputs: Vec<INPUT> = Vec::new();
+    if !held.is_empty() {
+        inputs.push(event(VK_UNASSIGNED, false));
+        inputs.push(event(VK_UNASSIGNED, true));
+        inputs.extend(held.iter().map(|&m| event(m, true)));
+    }
+    inputs.extend(modifiers.iter().map(|&m| event(m, false)));
     inputs.push(event(key, false));
     inputs.push(event(key, true));
     inputs.extend(modifiers.iter().rev().map(|&m| event(m, true)));
@@ -533,6 +559,16 @@ fn modifier_keys(config: &Map<String, Value>, key: &str, default: &[u16]) -> Vec
     }
     keys
 }
+
+const VK_LSHIFT_CODE: u16 = 0xA0;
+const VK_RSHIFT_CODE: u16 = 0xA1;
+const VK_LCONTROL_CODE: u16 = 0xA2;
+const VK_RCONTROL_CODE: u16 = 0xA3;
+const VK_LMENU_CODE: u16 = 0xA4;
+const VK_RMENU_CODE: u16 = 0xA5;
+const VK_RWIN_CODE: u16 = 0x5C;
+/// A key code Windows leaves unassigned.
+const VK_UNASSIGNED: u16 = 0xE8;
 
 fn alt_modifiers(config: &Map<String, Value>) -> Vec<u16> {
     modifier_keys(
@@ -929,7 +965,7 @@ pub fn read_state(with_sensors: bool) -> State {
         installed: true,
         running,
         modes: modes(&config),
-        mode: int(&config, "performance_mode").unwrap_or(MODE_BALANCED),
+        mode: current_mode(&config),
         gpu_mode,
         gpu_auto: is_on(&config, "gpu_auto"),
         has_ultimate,
@@ -954,13 +990,47 @@ pub fn read_state(with_sensors: bool) -> State {
 
 // ---------------------------------------------------------------- actions
 
+/// The mode Bloom last asked G-Helper for, and when. G-Helper writes its
+/// settings file 2 s after a change, so until then this is the mode in use:
+/// the notch shows it at once, and a second press goes on from it.
+static LAST_MODE: Mutex<Option<(i64, Instant)>> = Mutex::new(None);
+
+fn remember_mode(mode: i64) {
+    if let Ok(mut last) = LAST_MODE.lock() {
+        *last = Some((mode, Instant::now()));
+    }
+}
+
+/// The mode in use: the one Bloom just asked for while G-Helper's settings
+/// file hasn't caught up (5 s at most), else the file's.
+fn current_mode(config: &Map<String, Value>) -> i64 {
+    let saved = int(config, "performance_mode").unwrap_or(MODE_BALANCED);
+    let Ok(mut last) = LAST_MODE.lock() else {
+        return saved;
+    };
+    match *last {
+        Some((mode, at)) if mode != saved && at.elapsed() < Duration::from_secs(5) => mode,
+        _ => {
+            *last = None;
+            saved
+        }
+    }
+}
+
 fn set_mode(app: &AppHandle, mode: i64) -> Result<(), String> {
     let config = read_config().ok_or("G-Helper's settings file wasn't found")?;
     if find_process().is_some() && !shortcuts_off(&config) {
         if let Some(key) = mode_key(&config, mode) {
             press(&alt_modifiers(&config), key);
+            remember_mode(mode);
+            emit_changed(app);
+            // Done once G-Helper's file shows it, or once another mode was
+            // asked for meanwhile (that one takes over).
             if wait_for(Duration::from_secs(5), |c| {
                 int(c, "performance_mode") == Some(mode)
+                    || LAST_MODE
+                        .lock()
+                        .is_ok_and(|last| last.map(|(m, _)| m) != Some(mode))
             }) {
                 emit_changed(app);
                 return Ok(());
@@ -975,18 +1045,33 @@ fn set_mode(app: &AppHandle, mode: i64) -> Result<(), String> {
     })
 }
 
+/// The next mode, in G-Helper's order. G-Helper's own cycle shortcut waits
+/// a second (its "mode_delay") before it applies the mode, so the next mode
+/// is asked for by its own shortcut instead, which G-Helper applies at once
+/// with the same pop-up. The cycle shortcut is only used for a mode that has
+/// no shortcut of its own.
 fn cycle_mode(app: &AppHandle) -> Result<(), String> {
     let config = read_config().ok_or("G-Helper's settings file wasn't found")?;
-    let key = int(&config, "keybind_profile").unwrap_or(VK_F5 as i64);
-    if find_process().is_some() && key > 0 && key < 0xFF {
-        press(&main_modifiers(&config), key as u16);
-        emit_changed(app);
-        return Ok(());
-    }
     let list = modes(&config);
-    let now = int(&config, "performance_mode").unwrap_or(MODE_BALANCED);
+    let now = current_mode(&config);
     let at = list.iter().position(|m| m.id == now).unwrap_or(0);
-    set_mode(app, list[(at + 1) % list.len()].id)
+    let next = list[(at + 1) % list.len()].id;
+    if find_process().is_some() && !shortcuts_off(&config) {
+        if let Some(key) = mode_key(&config, next) {
+            press(&alt_modifiers(&config), key);
+            remember_mode(next);
+            emit_changed(app);
+            return Ok(());
+        }
+        let key = int(&config, "keybind_profile").unwrap_or(VK_F5 as i64);
+        if key > 0 && key < 0xFF {
+            press(&main_modifiers(&config), key as u16);
+            remember_mode(next);
+            emit_changed(app);
+            return Ok(());
+        }
+    }
+    set_mode(app, next)
 }
 
 /// Ultimate (or back from it): the MUX switch, then a restart, as in G-Helper.
@@ -1247,6 +1332,13 @@ fn custom_keys(command: &str) -> Option<Vec<u16>> {
     keys.filter(|k| (1..=4).contains(&k.len()))
 }
 
+/// The Custom command an earlier Bloom set up for the touchscreen
+/// ("…\bloom.exe" --touchscreen).
+fn is_old_touchscreen_command(command: &str) -> bool {
+    let command = command.trim().to_ascii_lowercase();
+    command.ends_with("--touchscreen") && command.contains("bloom") && command.contains(".exe")
+}
+
 fn run_custom(command: &str) -> Result<(), String> {
     let codes = custom_keys(command);
     match codes {
@@ -1337,7 +1429,15 @@ fn run_key(app: &AppHandle, key: &str) -> Result<(), String> {
                 .spawn()
                 .map_err(|e| e.to_string())?;
         }
-        "custom" => run_custom(&text(&config, &format!("{key}_custom")).unwrap_or_default())?,
+        "custom" => {
+            let command = text(&config, &format!("{key}_custom")).unwrap_or_default();
+            if is_old_touchscreen_command(&command) {
+                // An earlier Bloom pointed this key at its own switch.
+                crate::touchscreen::toggle(app)?
+            } else {
+                run_custom(&command)?
+            }
+        }
         "performance" => {
             needs_ghelper("Mode")?;
             cycle_mode(app)?;

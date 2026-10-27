@@ -392,6 +392,7 @@ pub fn export_logs(app: Option<&AppHandle>) -> Result<PathBuf, String> {
         "taskbar-progress.log",
         "notification-clicks.log",
         "ghelper.log",
+        "tray-app-hidden.txt",
         "tray-icons.txt",
         "restarts.txt",
         "windows-build.txt",

@@ -147,7 +147,7 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-blitzit-tools` | JSON `{ create, lists, tasks, complete }` of tool names | `"{}"` | Which of Blitzit's actions Bloom uses, when chosen by hand in Settings > Integrations > Blitzit. Missing ones are found automatically from each action's name, description and inputs. |
 | `bloom-ghelper-enabled` | `"true"` / `"false"` | `"true"` | Settings > Integrations > G-Helper: G-Helper's page in the notch (mode, GPU mode, screen, charge limit). Shown only on a PC where G-Helper is installed. |
 | `bloom-ghelper-exe` | path | none | Where G-Helper was last seen running from, to start it again when it isn't running. Kept by Bloom. |
-| `bloom-touchscreen-ids` | device IDs | none | The touchscreen Bloom's "Bloom\\Touchscreen Off/On" scheduled tasks were made for (Toggle Touchscreen from a hotkey). Made again, with one Windows prompt, when it changes. Kept by Bloom. |
+| `bloom-touchscreen-ids` | device IDs | none | The touchscreen Bloom's "Bloom Touchscreen Off/On" scheduled tasks were made for (Toggle Touchscreen from a hotkey). Made again, with one Windows prompt, when it changes. Kept by Bloom. |
 | `bloom-blitzit-list` | JSON `{ id, name }` | none | The Blitzit list new tasks go in, last chosen in the notch. |
 | `bloom-blitzit-column` | text | `""` | The column new tasks go in (Today, This week, …) when Blitzit offers a choice; Today when not set. |
 

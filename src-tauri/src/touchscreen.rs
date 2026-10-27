@@ -188,12 +188,16 @@ unsafe fn register(ids: &[String]) -> Result<(), String> {
     let root = service
         .GetFolder(&BSTR::from("\\"))
         .map_err(|e| step("root folder", e))?;
-    let folder = match root.GetFolder(&BSTR::from(TASK_FOLDER)) {
-        Ok(folder) => folder,
-        Err(_) => root
-            .CreateFolder(&BSTR::from(TASK_FOLDER), &none)
-            .map_err(|e| step("Bloom folder", e))?,
-    };
+    // The tasks go straight under Task Scheduler's root, as "Bloom
+    // Touchscreen Off/On" (a folder of Bloom's own would need its own access
+    // rules). A "Bloom" folder an earlier Bloom left is removed when empty.
+    for path in [format!("\\{TASK_FOLDER}"), TASK_FOLDER.to_string()] {
+        if let Ok(old) = root.GetFolder(&BSTR::from(path.as_str())) {
+            let _ = old.DeleteTask(&BSTR::from(TASK_OFF), 0);
+            let _ = old.DeleteTask(&BSTR::from(TASK_ON), 0);
+        }
+        let _ = root.DeleteFolder(&BSTR::from(path.as_str()), 0);
+    }
     // Registered as administrator, a task belongs to the administrators:
     // without this, Bloom (not running as administrator) couldn't start it.
     // Administrators and Windows keep full control; this account may read
@@ -237,17 +241,16 @@ unsafe fn register(ids: &[String]) -> Result<(), String> {
             .SetPath(&BSTR::from(path))
             .and_then(|_| action.SetArguments(&BSTR::from(arguments)))
             .map_err(|e| step("command", e))?;
-        folder
-            .RegisterTaskDefinition(
-                &BSTR::from(name),
-                &task,
-                TASK_CREATE_OR_UPDATE.0,
-                &none,
-                &none,
-                TASK_LOGON_INTERACTIVE_TOKEN,
-                &access,
-            )
-            .map_err(|e| step(&format!("register \"{name}\""), e))?;
+        root.RegisterTaskDefinition(
+            &BSTR::from(task_name(name)),
+            &task,
+            TASK_CREATE_OR_UPDATE.0,
+            &none,
+            &none,
+            TASK_LOGON_INTERACTIVE_TOKEN,
+            &access,
+        )
+        .map_err(|e| step(&format!("register \"{name}\""), e))?;
     }
     Ok(())
 }
@@ -302,9 +305,14 @@ fn set_up(ids: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// A task's name in Task Scheduler ("Bloom Touchscreen Off").
+fn task_name(name: &str) -> String {
+    format!("{TASK_FOLDER} {name}")
+}
+
 fn run_task(name: &str) -> Result<(), String> {
     let out = std::process::Command::new(system32("schtasks.exe"))
-        .args(["/Run", "/TN", &format!("\\{TASK_FOLDER}\\{name}")])
+        .args(["/Run", "/TN", &format!("\\{}", task_name(name))])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| e.to_string())?;
@@ -342,7 +350,7 @@ fn switch(app: &AppHandle) -> Result<(), String> {
     let turn_off = devices.iter().any(|d| d.enabled);
     // The version of the setup is part of what is remembered, so tasks made
     // by an earlier Bloom are made again (once) when that changes.
-    let ids_text = format!("v2|{}", ids.join("|"));
+    let ids_text = format!("v3|{}", ids.join("|"));
     if crate::utils::get_setting_str(app, IDS_KEY).as_deref() != Some(ids_text.as_str()) {
         set_up(&ids)?;
         let _ = crate::commands::save_setting(app.clone(), IDS_KEY.into(), Value::String(ids_text));

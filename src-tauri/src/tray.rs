@@ -720,6 +720,8 @@ struct ExplorerIcon {
     path: String,
     tooltip: String,
     guid: String,
+    /// The app's id for it (when it has no GUID).
+    uid: u32,
     promoted: bool,
 }
 
@@ -944,10 +946,60 @@ unsafe fn find_explorer_only() -> Vec<ExplorerIcon> {
             path: icon.path,
             tooltip: icon.tooltip,
             guid,
+            uid: icon.identifier.uID,
             promoted: icon.promoted,
         });
     }
     found
+}
+
+/// Icons an app keeps hidden from Windows' tray (NVIDIA's "Manage Display
+/// mode", say), as last seen by Bloom's tray host, kept in
+/// `tray-app-hidden.txt` so it holds after a restart. After Bloom starts, an
+/// app doesn't always add its icons to Bloom's tray again, and Explorer's
+/// side doesn't say whether one is hidden: without this the icon would come
+/// back from Explorer's tray as a second tile. An icon the app shows again
+/// is taken off the list the moment Bloom's tray host sees it.
+static APP_HIDDEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+/// One icon, the same way from both sides: its GUID, else program and id.
+fn app_hidden_key(guid: &str, path: &str, uid: u32) -> String {
+    if guid.is_empty() {
+        format!("{}|{uid}", path.to_lowercase())
+    } else {
+        guid.to_lowercase()
+    }
+}
+
+/// Runs `f` on the remembered list (read from disk the first time), and
+/// saves it when `f` says it changed.
+fn with_app_hidden<T>(
+    f: impl FnOnce(&mut std::collections::HashSet<String>) -> (T, bool),
+) -> Option<T> {
+    let file = crate::utils::data_file("tray-app-hidden.txt");
+    let mut guard = APP_HIDDEN.lock().ok()?;
+    let set = guard.get_or_insert_with(|| {
+        file.as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .map(|text| {
+                text.lines()
+                    .map(|line| line.trim().to_string())
+                    .filter(|line| !line.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    let (result, changed) = f(set);
+    if changed {
+        if let Some(path) = file {
+            let mut lines: Vec<&String> = set.iter().collect();
+            lines.sort();
+            let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+            let _ = std::fs::write(path, text);
+        }
+    }
+    Some(result)
 }
 
 /// The notch's tray from Bloom's tray host, as Windows' tray has it: every
@@ -985,6 +1037,8 @@ fn host_state() -> TrayState {
         .map(|m| m.entries.as_slice())
         .unwrap_or_default();
     let mut candidates: Vec<Candidate> = Vec::new();
+    // Whether the app hides each icon Bloom's tray host has.
+    let mut seen_hidden: Vec<(String, bool)> = Vec::new();
     for icon in hosted {
         let guid = icon.guid.as_deref().map(normalize_guid).unwrap_or_default();
         // Windows' own entry for this icon: by GUID, else by program and id.
@@ -1023,6 +1077,7 @@ fn host_state() -> TrayState {
             }
             continue;
         }
+        seen_hidden.push((app_hidden_key(&guid, &path, icon.uid), icon.hidden));
         candidates.push(Candidate {
             id: icon.id,
             path,
@@ -1038,7 +1093,23 @@ fn host_state() -> TrayState {
             source: "Bloom's tray",
         });
     }
-    for icon in extra {
+    let app_hides = with_app_hidden(|set| {
+        let mut changed = false;
+        for (key, hidden) in &seen_hidden {
+            changed |= if *hidden {
+                set.insert(key.clone())
+            } else {
+                set.remove(key)
+            };
+        }
+        let hides: Vec<bool> = extra
+            .iter()
+            .map(|icon| set.contains(&app_hidden_key(&icon.guid, &icon.path, icon.uid)))
+            .collect();
+        (hides, changed)
+    })
+    .unwrap_or_default();
+    for (index, icon) in extra.into_iter().enumerate() {
         let entry = registry.iter().position(|entry| entry.key == icon.key);
         candidates.push(Candidate {
             id: icon.key,
@@ -1050,7 +1121,8 @@ fn host_state() -> TrayState {
             image: None,
             // Explorer shows it, picture and all; Bloom just can't read it.
             picture: true,
-            hidden: false,
+            // Hidden by its app when Bloom's tray host last had it.
+            hidden: app_hides.get(index).copied().unwrap_or(false),
             window: 0,
             uid: 0,
             source: "Explorer's tray",
