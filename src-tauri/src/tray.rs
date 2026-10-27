@@ -1231,6 +1231,37 @@ fn host_state() -> TrayState {
             first.insert(look, keep);
         }
     }
+    // An icon Bloom only knows from Explorer's side, with no tooltip there,
+    // from a company that already has a named icon shown (NVIDIA's
+    // "NVIDIA Container" next to the NVIDIA app's "NVIDIA Settings"): a
+    // second tile for the same company's app, so it is left out and the
+    // named one stays.
+    {
+        let company = |icon: &Candidate| {
+            unsafe { version_string(&icon.path, "CompanyName") }
+                .map(|c| c.trim().to_lowercase())
+                .filter(|c| !c.is_empty())
+        };
+        let named: Vec<String> = candidates
+            .iter()
+            .zip(&outcome)
+            .filter(|(icon, outcome)| {
+                !outcome.starts_with("left out") && !icon.tooltip.trim().is_empty()
+            })
+            .filter_map(|(icon, _)| company(icon))
+            .collect();
+        for (icon, outcome) in candidates.iter().zip(outcome.iter_mut()) {
+            if outcome.starts_with("left out")
+                || icon.source != "Explorer's tray"
+                || !icon.tooltip.trim().is_empty()
+            {
+                continue;
+            }
+            if company(icon).is_some_and(|c| named.contains(&c)) {
+                *outcome = "left out: the same company's named icon is already shown";
+            }
+        }
+    }
     let kept: Vec<&Candidate> = candidates
         .iter()
         .zip(&outcome)
