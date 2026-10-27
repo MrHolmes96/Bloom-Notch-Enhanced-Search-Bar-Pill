@@ -399,9 +399,15 @@ fn close_ghelper(pid: u32) -> Result<(), String> {
                 let _ = CloseHandle(process);
                 waited.0 == 0
             }
+            // Its process couldn't be opened to wait on: look for it.
             None => {
-                std::thread::sleep(Duration::from_secs(3));
-                find_process().is_none()
+                let waiting = Instant::now();
+                let mut gone = false;
+                while !gone && waiting.elapsed() < Duration::from_secs(10) {
+                    std::thread::sleep(Duration::from_millis(300));
+                    gone = find_process().is_none();
+                }
+                gone
             }
         };
         // A new G-Helper must not find the signal still on.
@@ -1003,27 +1009,21 @@ fn set_gpu(app: &AppHandle, target: &str) -> Result<(), String> {
             } else {
                 (VK_F15, GPU_STANDARD)
             };
-            if find_process().is_some() && !shortcuts_off(&config) {
-                press(&alt_modifiers(&config), key);
-                if wait_for(Duration::from_secs(6), |c| {
-                    int(c, "gpu_mode") == Some(mode) && !is_on(c, "gpu_auto")
-                }) {
-                    emit_changed(app);
-                    return Ok(());
-                }
+            if find_process().is_none() {
+                return Err("G-Helper isn't running".into());
             }
-            // G-Helper's shortcuts are off: the hardware directly, and
-            // Optimized off in its settings.
-            apply_through_config(app, |c| {
-                c.insert("gpu_auto".into(), 0.into());
-                c.insert("gpu_mode".into(), mode.into());
-            })?;
-            with_acpi(|acpi| {
-                let (eco_id, _) = acpi.gpu_endpoints();
-                acpi.set(eco_id, if mode == GPU_ECO { 1 } else { 0 });
-            });
-            emit_changed(app);
-            Ok(())
+            if !shortcuts_off(&config) {
+                // G-Helper does the switch, with its own checks (it asks
+                // first when an app is using the GPU), so there is no
+                // second way here if it takes its time.
+                press(&alt_modifiers(&config), key);
+                wait_for(Duration::from_secs(8), |c| {
+                    int(c, "gpu_mode") == Some(mode) && !is_on(c, "gpu_auto")
+                });
+                emit_changed(app);
+                return Ok(());
+            }
+            Err("G-Helper's own shortcuts are turned off, and Eco and Standard go through them. Turn them on in G-Helper (its \"skip_hotkeys\" setting)".into())
         }
         _ => Err(format!("Unknown GPU mode: {target}")),
     }
