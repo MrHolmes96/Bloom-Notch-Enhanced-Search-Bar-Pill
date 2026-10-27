@@ -1436,6 +1436,38 @@ pub fn identity(id: &str) -> Option<(isize, u32, Option<GUID>)> {
     Some((icon.hwnd, icon.uid, guid))
 }
 
+/// Tells an icon's app the pointer is over it, as Explorer's tray does on
+/// hover (apps such as G-Helper refresh their tooltip then). Nothing opens.
+pub fn hover(id: &str) -> bool {
+    let (hwnd, callback, uid, version) = {
+        let Ok(icons) = ICONS.lock() else {
+            return false;
+        };
+        let Some(icon) = icons.iter().find(|icon| icon.id == id) else {
+            return false;
+        };
+        (icon.hwnd, icon.callback, icon.uid, icon.version)
+    };
+    if callback == 0 {
+        return false;
+    }
+    let window = HWND(hwnd as *mut _);
+    let mut cursor = POINT::default();
+    unsafe {
+        let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut cursor);
+    }
+    let anchor = ((cursor.y as u32 & 0xFFFF) << 16) | (cursor.x as u32 & 0xFFFF);
+    let (wparam, lparam) = if version > 3 {
+        (
+            anchor as usize,
+            (((uid & 0xFFFF) << 16) | (WM_MOUSEMOVE & 0xFFFF)) as isize,
+        )
+    } else {
+        (uid as usize, WM_MOUSEMOVE as isize)
+    };
+    unsafe { SendNotifyMessageW(window, callback, WPARAM(wparam), LPARAM(lparam)).is_ok() }
+}
+
 /// Clicks an icon the way Explorer's tray does, with the pointer where the
 /// user clicked, so the app opens its menu or window there.
 pub fn click(id: &str, button: Button) -> Result<(), String> {

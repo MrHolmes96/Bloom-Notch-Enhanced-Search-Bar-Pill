@@ -263,11 +263,10 @@ function BindingRow({
 					spellCheck={false}
 					onChange={(e) => onChange({ ...binding, custom: e.target.value })}
 				/>
-				{custom ? (
-					<KeysRecorder onKeys={(codes) => onChange({ ...binding, custom: codes })} />
-				) : (
-					<span className="gh-record-space" />
-				)}
+				{/* Recording sets the key to Custom with the keys pressed. */}
+				<KeysRecorder
+					onKeys={(codes) => onChange({ ...binding, action: "custom", custom: codes })}
+				/>
 			</div>
 		</SettingRow>
 	);
@@ -390,9 +389,9 @@ export function GHelperSettings() {
 					</div>
 					<div className="sb-note gh-save-row">
 						<span>
-							G-Helper's own Key Bindings. For Custom, click Record keys and press the keys:
-							G-Helper then presses them when you press that key. Save writes them into
-							G-Helper (it restarts once in the background to take them).
+							G-Helper's own Key Bindings. Pick an action, or click Record keys on a row and
+							press any keys: that key is set to Custom and G-Helper presses them for it.
+							Save writes it all into G-Helper (it restarts once in the background).
 						</span>
 						<button
 							type="button"

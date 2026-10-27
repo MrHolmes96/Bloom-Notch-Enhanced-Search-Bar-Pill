@@ -1424,8 +1424,7 @@ input:checked + .slider:before {
 	width: 110px;
 }
 
-.gh-record,
-.gh-record-space {
+.gh-record {
 	width: 120px;
 	flex: none;
 }

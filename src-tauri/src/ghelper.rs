@@ -104,6 +104,11 @@ pub struct Binding {
 
 #[derive(Serialize, Clone, Default)]
 pub struct Sensors {
+    /// G-Helper's own CPU line ("CPU: 71°C Fan: 1900RPM"), from its tray
+    /// icon: the very values its window shows.
+    cpu_text: Option<String>,
+    /// G-Helper's own GPU line, the same way (none while the GPU is off).
+    gpu_text: Option<String>,
     cpu_temp: Option<i32>,
     gpu_temp: Option<i32>,
     cpu_fan: Option<i32>,
@@ -662,7 +667,38 @@ fn with_acpi<T>(f: impl FnOnce(&Acpi) -> T) -> Option<T> {
     guard.as_ref().map(f)
 }
 
+/// G-Helper's CPU and GPU lines, as it last wrote them in its tray icon's
+/// tooltip. Bloom then tells the icon the pointer is over it, which is when
+/// G-Helper reads its sensors again, so the next look is fresh.
+fn ghelper_lines() -> Option<(Option<String>, Option<String>)> {
+    let icon = crate::tray_host::snapshot_ids().into_iter().find(|icon| {
+        Path::new(&icon.path)
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("GHelper.exe"))
+    })?;
+    crate::tray_host::hover(&icon.id);
+    let line = |prefix: &str| {
+        icon.tooltip
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with(prefix) && l.contains(':'))
+            .map(|l| l.replace(" Fan", "  Fan"))
+    };
+    let cpu = line("CPU");
+    let gpu = line("GPU");
+    (cpu.is_some() || gpu.is_some()).then_some((cpu, gpu))
+}
+
 fn sensors() -> Sensors {
+    let mut read = acpi_sensors();
+    if let Some((cpu, gpu)) = ghelper_lines() {
+        read.cpu_text = cpu;
+        read.gpu_text = gpu;
+    }
+    read
+}
+
+fn acpi_sensors() -> Sensors {
     with_acpi(|acpi| {
         let temp = |id| Some(acpi.get(id)).filter(|t| (1..=120).contains(t));
         // G-Helper's GetFan: hundreds of RPM in the low 16 bits.
@@ -672,6 +708,8 @@ fn sensors() -> Sensors {
             (!(fan > 120 || (fan == 0 && raw < 0))).then_some(fan * 100)
         };
         Sensors {
+            cpu_text: None,
+            gpu_text: None,
             cpu_temp: temp(TEMP_CPU),
             gpu_temp: temp(TEMP_GPU),
             cpu_fan: fan(FAN_CPU),

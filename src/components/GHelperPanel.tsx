@@ -56,6 +56,9 @@ export interface GHelperState {
 	bindings: GHelperBinding[];
 	shortcuts_off: boolean;
 	sensors: {
+		/** G-Helper's own lines, as its window shows them. */
+		cpu_text: string | null;
+		gpu_text: string | null;
 		cpu_temp: number | null;
 		gpu_temp: number | null;
 		cpu_fan: number | null;
@@ -288,7 +291,9 @@ export function GHelperPanel({
 						<Gauge size={13} />
 						Mode: {current?.name ?? "—"}
 					</span>
-					<span className="gh-head-info">{sensorText("CPU", s.cpu_temp, s.cpu_fan)}</span>
+					<span className="gh-head-info">
+						{s.cpu_text ?? sensorText("CPU", s.cpu_temp, s.cpu_fan)}
+					</span>
 				</div>
 				<div className="gh-row">
 					<ModeButton
@@ -370,7 +375,13 @@ export function GHelperPanel({
 							<Gpu size={13} />
 							GPU Mode: {gpuLabel}
 						</span>
-						<span className="gh-head-info">{sensorText("GPU", s.gpu_temp, s.gpu_fan)}</span>
+						<span className="gh-head-info">
+							{s.gpu_text ??
+								(s.cpu_text
+									? // G-Helper shows no GPU temperature while the GPU sleeps.
+										`GPU${s.gpu_fan != null ? `  Fan: ${s.gpu_fan}RPM` : ""}`
+									: sensorText("GPU", s.gpu_temp, s.gpu_fan))}
+						</span>
 					</div>
 					<div className="gh-row">
 						<ModeButton
