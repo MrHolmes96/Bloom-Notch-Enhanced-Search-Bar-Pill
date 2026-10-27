@@ -10,6 +10,7 @@ mod commands;
 mod data_folders;
 mod dock_extras;
 mod foreground;
+mod ghelper;
 mod hang_guard;
 mod integrations;
 mod jumplist;
@@ -31,6 +32,7 @@ mod startup;
 mod state;
 mod taskbar_progress;
 mod toast;
+mod touchscreen;
 mod tray;
 mod tray_host;
 mod tray_manager;
@@ -241,6 +243,11 @@ fn main() {
             switch_to_window,
             save_note_file,
             note_page_error,
+            ghelper::ghelper_state,
+            ghelper::ghelper_action,
+            ghelper::ghelper_set_bindings,
+            ghelper::ghelper_start,
+            launcher::ghelper_hotkey_status,
             black_screen::screen_off_now,
             launcher::app_hotkey_status,
             launcher::set_hotkey_recording,
@@ -514,6 +521,7 @@ fn main() {
             let _ = COMMAND_SENDER.set(tx.clone());
             services::setup_keyboard_hook(app.handle().clone());
             launcher::start_hotkey_listener(app.handle().clone());
+            ghelper::start_watcher(app.handle().clone());
             notifications::start(app.handle().clone());
             tray_host::start(app.handle().clone());
             hang_guard::start(app.handle().clone());

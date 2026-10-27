@@ -33,6 +33,7 @@ import { WifiPanel } from "./components/WifiPanel";
 import { BluetoothPanel } from "./components/BluetoothPanel";
 import { TrayPanel, trayPanelHeight } from "./components/TrayPanel";
 import { BlitzitPanel, blitzitPanelHeight } from "./components/BlitzitPanel";
+import { GHelperPanel, ghelperPanelHeight } from "./components/GHelperPanel";
 import { PAGE_ORDER_KEY, isNotchPageId, parsePageOrder, type NotchPageId } from "./notchPages";
 import { isoWeek } from "./weekNumber";
 import {
@@ -125,12 +126,21 @@ const NOTCH_PANELS: readonly NotchPanel[] = ["calendar", "command-center"];
  * pages (tray, Wi-Fi, Bluetooth). Any page scrolling reaches can be the fixed
  * default, and their order is chosen in Settings > Notch > Pages.
  */
-type NotchPage = NotchPanel | "shelf" | "notes" | "blitzit" | "tray" | "wifi" | "bluetooth";
+type NotchPage =
+	| NotchPanel
+	| "shelf"
+	| "notes"
+	| "blitzit"
+	| "ghelper"
+	| "tray"
+	| "wifi"
+	| "bluetooth";
 const NOTCH_PAGES: readonly NotchPage[] = [
 	...NOTCH_PANELS,
 	"shelf",
 	"notes",
 	"blitzit",
+	"ghelper",
 	"tray",
 	"wifi",
 	"bluetooth"
@@ -513,6 +523,7 @@ type BloomMode =
 	| "shelf"
 	| "notes"
 	| "blitzit"
+	| "ghelper"
 	| "tray"
 	| "wifi"
 	| "bluetooth";
@@ -1025,6 +1036,13 @@ function App() {
 		() => localStorage.getItem("bloom-notch-blitzit") !== "false"
 	);
 	const [blitzitHeight, setBlitzitHeight] = useState(() => blitzitPanelHeight(false, 0, true));
+	// G-Helper's page (Settings > Integrations > G-Helper): only on a PC with
+	// G-Helper, while the integration is on.
+	const [ghelperEnabled, setGhelperEnabled] = useState(
+		() => localStorage.getItem("bloom-ghelper-enabled") !== "false"
+	);
+	const [ghelperInstalled, setGhelperInstalled] = useState(false);
+	const [ghelperHeight, setGhelperHeight] = useState(() => ghelperPanelHeight(null, false));
 	// The same function on every render, so the notes page isn't redrawn with
 	// the rest of the notch.
 	const saveNotes = useCallback((next: NoteItem[]) => {
@@ -1120,6 +1138,7 @@ function App() {
 				setNotes(parseNotes(getVal(NOTES_KEY)));
 				setNotesInScroll(getVal("bloom-notch-notes-in-scroll", "true") !== "false");
 				setBlitzitInScroll(getVal("bloom-notch-blitzit", "true") !== "false");
+				setGhelperEnabled(getVal("bloom-ghelper-enabled", "true") !== "false");
 				setSettingsMusicCompactNotch(getVal("bloom-music-compact-notch", "true") !== "false");
 				setMusicRest(readMusicRest(getVal("bloom-music-rest")));
 				setWidgetsOnHoverOnly(getVal("bloom-notch-widgets-on-hover", "true") !== "false");
@@ -1303,6 +1322,7 @@ function App() {
 				}),
 			"bloom-notch-notes-in-scroll": setNotesInScroll,
 			"bloom-notch-blitzit": (v: unknown) => setBlitzitInScroll(v !== false && v !== "false"),
+			"bloom-ghelper-enabled": (v: unknown) => setGhelperEnabled(v !== false && v !== "false"),
 			"bloom-music-compact-notch": setSettingsMusicCompactNotch,
 			"bloom-music-rest": (v: unknown) => setMusicRest(readMusicRest(v)),
 			"bloom-bt-bubble": (v: unknown) => {
@@ -1689,6 +1709,7 @@ function App() {
 			prev === "shelf" ||
 			prev === "notes" ||
 			prev === "blitzit" ||
+			prev === "ghelper" ||
 			prev === "tray" ||
 			prev === "wifi" ||
 			prev === "bluetooth"
@@ -2260,6 +2281,7 @@ function App() {
 		if (page === "shelf") return shelfInScroll;
 		if (page === "notes") return notesInScroll;
 		if (page === "blitzit") return blitzitInScroll;
+		if (page === "ghelper") return ghelperEnabled && ghelperInstalled;
 		return true;
 	};
 
@@ -2469,6 +2491,20 @@ function App() {
 			unlisten.then((f) => f());
 		};
 	}, [bluetoothEnabled]);
+
+	// Whether G-Helper is on this PC, for its page in the scroll menu.
+	useEffect(() => {
+		if (windowLabel !== "main" || !ghelperEnabled) return;
+		const check = () =>
+			void invoke<{ installed: boolean }>("ghelper_state", { sensors: false })
+				.then((state) => setGhelperInstalled(state.installed))
+				.catch(() => {});
+		check();
+		const unlisten = listen("ghelper-changed", check);
+		return () => {
+			unlisten.then((f) => f());
+		};
+	}, [windowLabel, ghelperEnabled]);
 
 	// The backend reports connection changes and finished scans as they
 	// happen, so the pill follows without waiting for the next poll.
@@ -2919,6 +2955,7 @@ function App() {
 	const getDynamicWidth = () => {
 		if (isCalendarMode) return 480;
 		if (bloomMode === "notes" && notesLayout.editorOpen) return notesEditorSize(scale).width;
+		if (bloomMode === "ghelper") return 400;
 		if (bloomMode === "shelf" || bloomMode === "notes" || bloomMode === "blitzit") return 380;
 		if (bloomMode === "command-center" && isOpen) return 350;
 		if (bloomMode === "wifi" || bloomMode === "bluetooth" || bloomMode === "tray") return 350;
@@ -2964,6 +3001,7 @@ function App() {
 		}
 		if (bloomMode === "notes") return 36 + notesPanelHeight(notes, notesLayout, scale);
 		if (bloomMode === "blitzit") return 36 + blitzitHeight;
+		if (bloomMode === "ghelper") return 36 + ghelperHeight;
 		// One row of round buttons is part of the control center's base height;
 		// each extra row adds a button and the gap above it, and an empty row
 		// gives its room back.
@@ -4265,6 +4303,28 @@ function App() {
 													void invoke("open_settings_tab", { tab: "integration-blitzit" })
 												}
 											/>
+										</motion.div>
+									)}
+								</AnimatePresence>
+
+								{/* G-Helper: modes, GPU, screen, charge limit */}
+								<AnimatePresence>
+									{bloomMode === "ghelper" && (
+										<motion.div
+											key="ghelper-view"
+											initial={{ opacity: 0 }}
+											animate={{ opacity: 1 }}
+											exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.1 } }}
+											transition={{ type: "spring", stiffness: 400, damping: 30 }}
+										>
+											<PanelBoundary page="G-Helper">
+												<GHelperPanel
+													onHeightChange={setGhelperHeight}
+													onOpenSettings={() =>
+														void invoke("open_settings_tab", { tab: "integrations/ghelper" })
+													}
+												/>
+											</PanelBoundary>
 										</motion.div>
 									)}
 								</AnimatePresence>

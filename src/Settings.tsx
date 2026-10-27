@@ -55,6 +55,7 @@ import {
 	NotificationsTab,
 	IntegrationsTab,
 	BlitzitSettings,
+	GHelperSettings,
 	AboutTab,
 	WindowsTab
 } from "./settings/index";
@@ -180,7 +181,8 @@ const CATEGORIES: {
 		icon: Blocks,
 		sections: [
 			{ id: "apps", label: "Apps", icon: Blocks },
-			{ id: "blitzit", label: "Blitzit", icon: Zap }
+			{ id: "blitzit", label: "Blitzit", icon: Zap },
+			{ id: "ghelper", label: "G-Helper", icon: Gauge }
 		]
 	},
 	{ id: "about", label: "About", icon: Info, sections: [] }
@@ -467,6 +469,7 @@ function SettingsApp() {
 					{category === "search-bar" && <SearchBarTab section={section as SearchBarSection} />}
 					{category === "integrations" && section === "apps" && <IntegrationsTab openTab={go} />}
 					{category === "integrations" && section === "blitzit" && <BlitzitSettings />}
+					{category === "integrations" && section === "ghelper" && <GHelperSettings />}
 					{category === "about" && (
 						<AboutTab
 							appVersion={settings.appVersion}

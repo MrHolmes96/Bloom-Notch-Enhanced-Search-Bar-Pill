@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Reorder, useDragControls } from "framer-motion";
-import { Calendar, GripVertical, Inbox, LayoutGrid, ListTodo, PanelTop, Zap } from "lucide-react";
+import { Calendar, Gauge, GripVertical, Inbox, LayoutGrid, ListTodo, PanelTop, Zap } from "lucide-react";
 import { SettingRow } from "./SettingRow";
 import { useStoredFlag, useStoredString } from "./useStoredSetting";
 import {
@@ -16,7 +16,8 @@ const PAGE_ICONS: Record<NotchPageId, typeof Calendar> = {
 	"command-center": LayoutGrid,
 	shelf: Inbox,
 	notes: ListTodo,
-	blitzit: Zap
+	blitzit: Zap,
+	ghelper: Gauge
 };
 
 const PAGE_DESCRIPTIONS: Record<NotchPageId, string> = {
@@ -24,7 +25,8 @@ const PAGE_DESCRIPTIONS: Record<NotchPageId, string> = {
 	"command-center": "Media, quick controls and tray; always on",
 	shelf: "Dropped files and text, shown even when empty",
 	notes: "Quick notes and to-dos",
-	blitzit: "Blitzit's tasks (Integrations > Blitzit)"
+	blitzit: "Blitzit's tasks (Integrations > Blitzit)",
+	ghelper: "G-Helper's modes, GPU, screen and charge limit, on PCs with G-Helper"
 };
 
 /** "Where you left it" in the opening-page list. */
@@ -92,7 +94,8 @@ export function NotchPagesSettings() {
 		"command-center": [true, null],
 		shelf: useStoredFlag("bloom-notch-shelf-in-scroll", true),
 		notes: useStoredFlag("bloom-notch-notes-in-scroll", true),
-		blitzit: useStoredFlag("bloom-notch-blitzit", true)
+		blitzit: useStoredFlag("bloom-notch-blitzit", true),
+		ghelper: useStoredFlag("bloom-ghelper-enabled", true)
 	};
 	const [remember, setRemember] = useStoredFlag(
 		"bloom-notch-remember-panel",

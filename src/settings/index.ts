@@ -10,5 +10,6 @@ export { SearchBarTab, type SearchBarSection } from "./SearchBarTab";
 export { NotificationsTab, type NotificationsSection } from "./NotificationsTab";
 export { IntegrationsTab } from "./IntegrationsTab";
 export { BlitzitSettings } from "./BlitzitSettings";
+export { GHelperSettings } from "./GHelperSettings";
 export { AboutTab } from "./AboutTab";
 export type { WidgetConfig, SettingsTab, SettingRowProps } from "./types";

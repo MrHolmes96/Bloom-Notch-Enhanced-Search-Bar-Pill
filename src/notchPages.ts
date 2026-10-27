@@ -5,7 +5,7 @@
  * controls page is always on, as the notch's fallback.
  */
 
-export type NotchPageId = "calendar" | "command-center" | "shelf" | "notes" | "blitzit";
+export type NotchPageId = "calendar" | "command-center" | "shelf" | "notes" | "blitzit" | "ghelper";
 
 export const PAGE_ORDER_KEY = "bloom-notch-page-order";
 
@@ -14,7 +14,8 @@ export const DEFAULT_PAGE_ORDER: readonly NotchPageId[] = [
 	"command-center",
 	"shelf",
 	"notes",
-	"blitzit"
+	"blitzit",
+	"ghelper"
 ];
 
 export const PAGE_LABELS: Record<NotchPageId, string> = {
@@ -22,7 +23,8 @@ export const PAGE_LABELS: Record<NotchPageId, string> = {
 	"command-center": "Controls",
 	shelf: "Shelf",
 	notes: "Notes & To-dos",
-	blitzit: "Blitzit"
+	blitzit: "Blitzit",
+	ghelper: "G-Helper"
 };
 
 /** The setting that switches each page on or off (none: always on). */
@@ -31,7 +33,8 @@ export const PAGE_FLAG_KEYS: Record<NotchPageId, string | null> = {
 	"command-center": null,
 	shelf: "bloom-notch-shelf-in-scroll",
 	notes: "bloom-notch-notes-in-scroll",
-	blitzit: "bloom-notch-blitzit"
+	blitzit: "bloom-notch-blitzit",
+	ghelper: "bloom-ghelper-enabled"
 };
 
 export const isNotchPageId = (value: unknown): value is NotchPageId =>

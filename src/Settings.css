@@ -1414,3 +1414,22 @@ input:checked + .slider:before {
 	text-overflow: ellipsis;
 	min-width: 0;
 }
+
+/* Settings > Integrations > G-Helper */
+.gh-binding {
+	gap: 6px;
+}
+
+.gh-binding .sb-input {
+	width: 120px;
+}
+
+.gh-save-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.gh-save-row > span {
+	flex: 1;
+}

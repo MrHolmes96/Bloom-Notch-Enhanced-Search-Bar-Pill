@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronRight, Zap } from "lucide-react";
+import { ChevronRight, Gauge, Zap } from "lucide-react";
 import type { BlitzitStatus } from "../components/BlitzitPanel";
 
 /**
@@ -38,6 +38,20 @@ export function IntegrationsTab({ openTab }: { openTab: (tab: string) => void })
 							{blitzit?.connected
 								? "Connected: add tasks, tick them off and start Blitz mode from the notch"
 								: "Add tasks and start Blitz mode from the notch"}
+						</span>
+					</div>
+					<ChevronRight size={14} strokeWidth={1.5} />
+				</div>
+				<div className="setting-divider" />
+				<div className="setting-item action" onClick={() => openTab("integrations/ghelper")}>
+					<div className="setting-icon-bg">
+						<Gauge size={14} strokeWidth={1.5} />
+					</div>
+					<div className="setting-info">
+						<span className="setting-label">G-Helper</span>
+						<span className="setting-desc">
+							Modes, GPU mode, screen and charge limit in the notch, G-Helper's key bindings,
+							and shortcuts for all of them (ASUS laptops with G-Helper)
 						</span>
 					</div>
 					<ChevronRight size={14} strokeWidth={1.5} />

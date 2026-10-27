@@ -85,8 +85,8 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-notch-notes-view` | `"all"` / `"notes"` / `"todos"` | `"all"` | What the notch's Notes page lists: both sections (Notes and To-Do), or one of them. |
 | `bloom-notch-notes-sort` | `"newest"` / `"oldest"` / `"az"` / `"za"` | `"newest"` | The order of the Notes page's lists (open to-dos always come before done ones). |
 | `bloom-notch-remember-panel` | `"true"` / `"false"` | `"true"` | Click opens the last-used panel when on; when off, click opens `bloom-notch-default-panel`. |
-| `bloom-notch-default-panel` | `"calendar"` / `"command-center"` / `"shelf"` / `"notes"` / `"blitzit"` | `"calendar"` | Page opened on click when panel memory is off (Settings > Notch > Pages > Opens On). If that page is off, Controls opens instead. |
-| `bloom-notch-page-order` | JSON array of page ids | `["calendar","command-center","shelf","notes","blitzit"]` | The order scrolling, swiping and the arrows go through the notch's pages (Settings > Notch > Pages). Pages missing from it go at the end; each page is switched on or off by its own setting. |
+| `bloom-notch-default-panel` | `"calendar"` / `"command-center"` / `"shelf"` / `"notes"` / `"blitzit"` / `"ghelper"` | `"calendar"` | Page opened on click when panel memory is off (Settings > Notch > Pages > Opens On). If that page is off, Controls opens instead. |
+| `bloom-notch-page-order` | JSON array of page ids | `["calendar","command-center","shelf","notes","blitzit","ghelper"]` | The order scrolling, swiping and the arrows go through the notch's pages (Settings > Notch > Pages). Pages missing from it go at the end; each page is switched on or off by its own setting. |
 | `bloom-notch-last-panel`    | `"calendar"` / `"command-center"` | (unset)  | Last panel the notch was left on, saved by Bloom while panel memory is on. |
 | `bloom-notch-click-to-open` | `"true"` / `"false"` | (legacy) | Old setting read only when `bloom-notch-remember-panel` is absent; `"false"` now selects fixed-panel behavior. |
 
@@ -145,6 +145,9 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-notch-blitzit` | `"true"` / `"false"` | `"true"` | Scrolling or swiping on the notch also reaches Blitzit's page (add tasks, today's tasks, Blitz now). |
 | `bloom-blitzit-server` | URL | `"https://core.blitzit.app/v3/mcp"` | Blitzit's connection for other apps (its MCP server). `https://integration-prd.blitzit.app/mcp` for Blitzit before version 3. The sign-in itself is not a setting: it is stored encrypted for this Windows user in `integrations\blitzit.bin` in Bloom's config folder. |
 | `bloom-blitzit-tools` | JSON `{ create, lists, tasks, complete }` of tool names | `"{}"` | Which of Blitzit's actions Bloom uses, when chosen by hand in Settings > Integrations > Blitzit. Missing ones are found automatically from each action's name, description and inputs. |
+| `bloom-ghelper-enabled` | `"true"` / `"false"` | `"true"` | Settings > Integrations > G-Helper: G-Helper's page in the notch (mode, GPU mode, screen, charge limit). Shown only on a PC where G-Helper is installed. |
+| `bloom-ghelper-exe` | path | none | Where G-Helper was last seen running from, to start it again when it isn't running. Kept by Bloom. |
+| `bloom-touchscreen-ids` | device IDs | none | The touchscreen Bloom's "Touchscreen Off/On" scheduled tasks were made for (Toggle Touchscreen shortcut). They are made again, with one Windows prompt, when it changes. Kept by Bloom. |
 | `bloom-blitzit-list` | JSON `{ id, name }` | none | The Blitzit list new tasks go in, last chosen in the notch. |
 | `bloom-blitzit-column` | text | `""` | The column new tasks go in (Today, This week, …) when Blitzit offers a choice; Today when not set. |
 
@@ -157,6 +160,7 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-launcher-ignore-fullscreen` | `"true"` / `"false"`                   | `"false"`     | Ignore the shortcut while a full-screen app or game is in front.                                                  |
 | `bloom-hotkey-screen-off` | shortcut text (`"Ctrl+Alt+B"`) or `""` | `""` | Settings > General > Shortcuts > Screen Off: turns the screen off (media keeps playing). Works everywhere, also with the search bar off. |
 | `bloom-hotkey-notification-center` | shortcut text or `""` | `""` | Settings > General > Shortcuts > Notification Center: opens (and closes) the notification center the bell opens. |
+| `bloom-hotkey-ghelper` | JSON array of `{ hotkey, action }` | `"[]"` | Settings > Integrations > G-Helper > Shortcuts. Actions: `mode:<id>`, `mode:cycle`, `gpu:eco` / `gpu:standard` / `gpu:optimized`, `screen:auto` / `screen:min` / `screen:max` / `screen:toggle`, `miniled`, `charge:<40-100>`, `touchscreen`, `micmute`, `open`. |
 | `bloom-launcher-position`          | `"notch"` / `"upper"` / `"center"`     | `"notch"`     | Where the search bar opens: under the notch, a quarter down the screen, or near the middle.                       |
 | `bloom-launcher-screen`            | `"cursor"` / `"focus"` / `"primary"`   | `"cursor"`    | Which monitor it opens on: the one with the mouse, the one with the active window, or the main monitor.           |
 | `bloom-launcher-query-hotkeys`     | JSON array of `{ "hotkey", "query" }`  | `"[]"`        | Extra shortcuts that open the search bar with a search already typed in.                                          |
