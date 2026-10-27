@@ -1424,16 +1424,9 @@ input:checked + .slider:before {
 	width: 110px;
 }
 
-.gh-shortcut {
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	margin-left: 6px;
-}
-
-.gh-shortcut .extra-folder-remove,
-.gh-shortcut-space {
-	width: 26px;
+.gh-record,
+.gh-record-space {
+	width: 120px;
 	flex: none;
 }
 

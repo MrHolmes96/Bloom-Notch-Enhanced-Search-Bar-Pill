@@ -53,57 +53,6 @@ const APP_HOTKEYS: [(&str, AppHotkey); 2] = [
 ];
 /// Their ids follow the search bar's (main and up to 32 query hotkeys).
 const APP_HOTKEY_BASE: i32 = HOTKEY_ID + 64;
-/// Your own shortcuts for G-Helper's keys (Settings > Integrations >
-/// G-Helper > Key Bindings): "bloom-hotkey-ghelper", a list of
-/// { hotkey, action: "key:<m1…fnv>" }. Each does what that key does.
-const GHELPER_HOTKEYS_KEY: &str = "bloom-hotkey-ghelper";
-const GHELPER_HOTKEY_BASE: i32 = HOTKEY_ID + 96;
-const GHELPER_HOTKEY_MAX: usize = 32;
-/// The action of each G-Helper shortcut, by id offset.
-static GHELPER_ACTIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// Whether each G-Helper shortcut could be registered.
-static GHELPER_STATUS: Mutex<Vec<bool>> = Mutex::new(Vec::new());
-
-#[derive(Deserialize)]
-struct GHelperHotkey {
-    hotkey: String,
-    action: String,
-}
-
-fn register_ghelper_hotkeys(app: &AppHandle, registered: &mut Vec<i32>) {
-    // Each one belongs to one of G-Helper's keys ("key:fnv"); entries from
-    // the first version, a list of their own, are left out.
-    let list: Vec<GHelperHotkey> = setting(app, GHELPER_HOTKEYS_KEY)
-        .and_then(|json| serde_json::from_str::<Vec<GHelperHotkey>>(&json).ok())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|entry| entry.action.starts_with("key:"))
-        .collect();
-    let mut actions = Vec::new();
-    let mut status = Vec::new();
-    for (i, entry) in list.iter().enumerate().take(GHELPER_HOTKEY_MAX) {
-        actions.push(entry.action.clone());
-        let id = GHELPER_HOTKEY_BASE + i as i32;
-        let ok = parse_hotkey(&entry.hotkey)
-            .is_some_and(|(m, k)| unsafe { RegisterHotKey(None, id, m, k).is_ok() });
-        if ok {
-            registered.push(id);
-        }
-        status.push(ok);
-    }
-    if let Ok(mut saved) = GHELPER_ACTIONS.lock() {
-        *saved = actions;
-    }
-    if let Ok(mut saved) = GHELPER_STATUS.lock() {
-        *saved = status;
-    }
-}
-
-/// Whether each G-Helper shortcut is registered (false: another app has it).
-#[tauri::command]
-pub fn ghelper_hotkey_status() -> Vec<bool> {
-    GHELPER_STATUS.lock().map(|s| s.clone()).unwrap_or_default()
-}
 
 #[derive(Clone, Copy)]
 enum AppHotkey {
@@ -252,7 +201,6 @@ struct QueryHotkey {
 fn register_all(app: &AppHandle) -> Vec<i32> {
     let mut registered = Vec::new();
     register_app_hotkeys(app, &mut registered);
-    register_ghelper_hotkeys(app, &mut registered);
     if !setting_on(app, "bloom-launcher-enabled", true) {
         if let Ok(mut status) = HOTKEY_STATUS.lock() {
             *status = None;
@@ -308,23 +256,6 @@ pub fn start_hotkey_listener(app: AppHandle) {
                 {
                     if !RECORDING.load(Ordering::Relaxed) {
                         run_app_hotkey(&app, *what);
-                    }
-                    continue;
-                }
-                if (GHELPER_HOTKEY_BASE..GHELPER_HOTKEY_BASE + GHELPER_HOTKEY_MAX as i32)
-                    .contains(&id)
-                {
-                    let action = GHELPER_ACTIONS
-                        .lock()
-                        .ok()
-                        .and_then(|a| a.get((id - GHELPER_HOTKEY_BASE) as usize).cloned());
-                    if let (Some(action), false) = (action, RECORDING.load(Ordering::Relaxed)) {
-                        let app = app.clone();
-                        std::thread::spawn(move || {
-                            if let Err(e) = crate::ghelper::run_action(&app, &action) {
-                                crate::notifications::show_bloom_notice(&app, "G-Helper", &e);
-                            }
-                        });
                     }
                     continue;
                 }

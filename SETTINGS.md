@@ -147,7 +147,6 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-blitzit-tools` | JSON `{ create, lists, tasks, complete }` of tool names | `"{}"` | Which of Blitzit's actions Bloom uses, when chosen by hand in Settings > Integrations > Blitzit. Missing ones are found automatically from each action's name, description and inputs. |
 | `bloom-ghelper-enabled` | `"true"` / `"false"` | `"true"` | Settings > Integrations > G-Helper: G-Helper's page in the notch (mode, GPU mode, screen, charge limit). Shown only on a PC where G-Helper is installed. |
 | `bloom-ghelper-exe` | path | none | Where G-Helper was last seen running from, to start it again when it isn't running. Kept by Bloom. |
-| `bloom-touchscreen-ids` | device IDs | none | The touchscreen Bloom's "Touchscreen Off/On" scheduled tasks were made for (Toggle Touchscreen shortcut). They are made again, with one Windows prompt, when it changes. Kept by Bloom. |
 | `bloom-blitzit-list` | JSON `{ id, name }` | none | The Blitzit list new tasks go in, last chosen in the notch. |
 | `bloom-blitzit-column` | text | `""` | The column new tasks go in (Today, This week, …) when Blitzit offers a choice; Today when not set. |
 
@@ -160,7 +159,6 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-launcher-ignore-fullscreen` | `"true"` / `"false"`                   | `"false"`     | Ignore the shortcut while a full-screen app or game is in front.                                                  |
 | `bloom-hotkey-screen-off` | shortcut text (`"Ctrl+Alt+B"`) or `""` | `""` | Settings > General > Shortcuts > Screen Off: turns the screen off (media keeps playing). Works everywhere, also with the search bar off. |
 | `bloom-hotkey-notification-center` | shortcut text or `""` | `""` | Settings > General > Shortcuts > Notification Center: opens (and closes) the notification center the bell opens. |
-| `bloom-hotkey-ghelper` | JSON array of `{ hotkey, action }` | `"[]"` | Settings > Integrations > G-Helper > Key Bindings: your own shortcut for each of G-Helper's keys (`action` is `key:m1` … `key:fnv`). It does what that key is set to do in G-Helper, read each time it is pressed. |
 | `bloom-launcher-position`          | `"notch"` / `"upper"` / `"center"`     | `"notch"`     | Where the search bar opens: under the notch, a quarter down the screen, or near the middle.                       |
 | `bloom-launcher-screen`            | `"cursor"` / `"focus"` / `"primary"`   | `"cursor"`    | Which monitor it opens on: the one with the mouse, the one with the active window, or the main monitor.           |
 | `bloom-launcher-query-hotkeys`     | JSON array of `{ "hotkey", "query" }`  | `"[]"`        | Extra shortcuts that open the search bar with a search already typed in.                                          |

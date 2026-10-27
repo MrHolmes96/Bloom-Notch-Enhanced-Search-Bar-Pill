@@ -422,12 +422,6 @@ pub fn run_command(arg: &std::ffi::OsStr, rest: &[std::ffi::OsString]) -> bool {
             Ok(path) => message(&format!("Saved {}", path.display())),
             Err(e) => message(&format!("Couldn't save the diagnostics: {e}")),
         },
-        // A key in G-Helper set to Bloom's touchscreen switch.
-        "--touchscreen" => {
-            if !crate::touchscreen::signal_running_bloom() {
-                message("Bloom isn't running, so it can't switch the touchscreen.");
-            }
-        }
         "--update-watchdog" => {
             if let Some(marker) = rest.first() {
                 crate::utils::run_update_watchdog(PathBuf::from(marker));
