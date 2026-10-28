@@ -41,6 +41,10 @@ pub enum Icon {
     Touchpad,
     BrightnessUp,
     BrightnessDown,
+    /// A mode, on battery.
+    Battery,
+    /// A mode, plugged in.
+    Charger,
 }
 
 impl Icon {
@@ -49,6 +53,8 @@ impl Icon {
             Icon::Touchpad => include_bytes!("../assets/ghelper/icons8-touchpad-96.png"),
             Icon::BrightnessUp => include_bytes!("../assets/ghelper/brightness-up.png"),
             Icon::BrightnessDown => include_bytes!("../assets/ghelper/brightness-down.png"),
+            Icon::Battery => include_bytes!("../assets/ghelper/icons8-charged-battery-96.png"),
+            Icon::Charger => include_bytes!("../assets/ghelper/icons8-charging-battery-96.png"),
         }
     }
 }
@@ -336,4 +342,49 @@ unsafe fn png_image(bytes: &[u8]) -> Option<*mut GpBitmap> {
     let mut image: *mut GpBitmap = std::ptr::null_mut();
     (GdipCreateBitmapFromStream(&stream, &mut image) == Status(0) && !image.is_null())
         .then_some(image)
+}
+
+/// True while G-Helper's own pop-up is on screen: a shown window of G-Helper
+/// (`pid`) 100 px high, centred, in the lower part of the screen.
+pub fn ghelper_toast_visible(pid: u32) -> bool {
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::RECT;
+    struct Search {
+        pid: u32,
+        screen_w: i32,
+        screen_h: i32,
+        found: bool,
+    }
+    unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let search = &mut *(lparam.0 as *mut Search);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid != search.pid || !IsWindowVisible(hwnd).as_bool() {
+            return BOOL(1);
+        }
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return BOOL(1);
+        }
+        let height = rect.bottom - rect.top;
+        let middle = (rect.left + rect.right) / 2;
+        if (95..=105).contains(&height)
+            && (middle - search.screen_w / 2).abs() <= 4
+            && rect.top > search.screen_h / 2
+        {
+            search.found = true;
+            return BOOL(0);
+        }
+        BOOL(1)
+    }
+    unsafe {
+        let mut search = Search {
+            pid,
+            screen_w: GetSystemMetrics(SM_CXSCREEN),
+            screen_h: GetSystemMetrics(SM_CYSCREEN),
+            found: false,
+        };
+        let _ = EnumWindows(Some(each), LPARAM(&mut search as *mut Search as isize));
+        search.found
+    }
 }

@@ -143,6 +143,10 @@ pub struct State {
     sensors: Sensors,
     /// Bloom is closing and starting G-Helper to apply a change.
     applying: bool,
+    /// The icon G-Helper shows in the tray now: "eco", "standard",
+    /// "ultimate", or with its black-and-white setting "light-eco",
+    /// "dark-eco", "light-standard", "dark-standard".
+    tray_icon: String,
 }
 
 static APPLYING: AtomicBool = AtomicBool::new(false);
@@ -985,7 +989,45 @@ pub fn read_state(with_sensors: bool) -> State {
             Sensors::default()
         },
         applying: APPLYING.load(Ordering::SeqCst),
+        tray_icon: tray_icon(&config),
     }
+}
+
+/// The icon G-Helper puts in the tray, picked as G-Helper picks it
+/// (Settings.VisualiseIcon): by its GPU mode, black and white with its
+/// "bw_icon" setting (white on a dark Windows theme, black on a light one).
+fn tray_icon(config: &Map<String, Value>) -> String {
+    let gpu = int(config, "gpu_mode").unwrap_or(GPU_STANDARD);
+    if is_on(config, "bw_icon") {
+        let shade = if windows_is_dark() { "light" } else { "dark" };
+        let kind = if gpu == GPU_ECO { "eco" } else { "standard" };
+        return format!("{shade}-{kind}");
+    }
+    match gpu {
+        GPU_ECO => "eco",
+        GPU_ULTIMATE => "ultimate",
+        _ => "standard",
+    }
+    .to_string()
+}
+
+/// Windows' own theme (taskbar and tray) is dark.
+fn windows_is_dark() -> bool {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+    let mut value = 1u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            w!("SystemUsesLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut value as *mut u32 as *mut _),
+            Some(&mut size),
+        )
+    };
+    read != windows::Win32::Foundation::ERROR_SUCCESS || value == 0
 }
 
 // ---------------------------------------------------------------- actions
@@ -1050,6 +1092,34 @@ fn set_mode(app: &AppHandle, mode: i64) -> Result<(), String> {
 /// is asked for by its own shortcut instead, which G-Helper applies at once
 /// with the same pop-up. The cycle shortcut is only used for a mode that has
 /// no shortcut of its own.
+/// G-Helper's mode pop-up ("Balanced", with the battery or charger icon),
+/// shown by Bloom when G-Helper's own didn't come up a moment after Bloom's
+/// shortcut changed the mode, so it is there every time and never twice.
+fn mode_toast(name: String) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        if !osd_enabled() {
+            return;
+        }
+        if find_process().is_some_and(|(pid, _)| crate::ghelper_toast::ghelper_toast_visible(pid)) {
+            return;
+        }
+        let plugged_in = unsafe {
+            let mut status = windows::Win32::System::Power::SYSTEM_POWER_STATUS::default();
+            windows::Win32::System::Power::GetSystemPowerStatus(&mut status).is_ok()
+                && status.ACLineStatus == 1
+        };
+        crate::ghelper_toast::show(
+            &name,
+            Some(if plugged_in {
+                crate::ghelper_toast::Icon::Charger
+            } else {
+                crate::ghelper_toast::Icon::Battery
+            }),
+        );
+    });
+}
+
 /// Set once G-Helper didn't take a mode's own shortcut: from then on (until
 /// Bloom restarts) its cycle shortcut is used, which it always takes.
 static MODE_KEYS_IGNORED: AtomicBool = AtomicBool::new(false);
@@ -1060,6 +1130,7 @@ fn cycle_mode(app: &AppHandle) -> Result<(), String> {
     let now = current_mode(&config);
     let at = list.iter().position(|m| m.id == now).unwrap_or(0);
     let next = list[(at + 1) % list.len()].id;
+    let next_name = list[(at + 1) % list.len()].name.clone();
     if find_process().is_none() {
         return set_mode(app, next);
     }
@@ -1073,6 +1144,7 @@ fn cycle_mode(app: &AppHandle) -> Result<(), String> {
         ));
         remember_mode(next);
         emit_changed(app);
+        mode_toast(next_name.clone());
         // G-Helper notes the new mode in its settings file within 2 s. When
         // it doesn't (the shortcut didn't reach it), its cycle shortcut is
         // sent instead, unless another mode was asked for meanwhile.
@@ -1092,6 +1164,7 @@ fn cycle_mode(app: &AppHandle) -> Result<(), String> {
             if let Some(config) = read_config() {
                 if send_cycle(&config) {
                     emit_changed(&handle);
+                    mode_toast(next_name);
                 }
             }
         });
@@ -1103,6 +1176,7 @@ fn cycle_mode(app: &AppHandle) -> Result<(), String> {
         ));
         remember_mode(next);
         emit_changed(app);
+        mode_toast(next_name);
         return Ok(());
     }
     set_mode(app, next)

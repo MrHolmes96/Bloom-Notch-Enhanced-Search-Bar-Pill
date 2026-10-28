@@ -26,10 +26,12 @@
 	flex: none;
 }
 
+/* G-Helper's tray icon, as in the tray, at the notch's size. */
 .gh-mark {
-	color: #3aaeef;
+	width: 16px;
+	height: 16px;
 	flex: none;
-	transition: color 0.2s ease;
+	user-select: none;
 }
 
 .gh-title {

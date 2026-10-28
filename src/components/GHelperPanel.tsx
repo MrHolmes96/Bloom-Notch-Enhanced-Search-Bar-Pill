@@ -18,7 +18,25 @@ import {
 	Settings2,
 	Sparkles
 } from "lucide-react";
-import { GHelperIcon } from "../icons/GHelperIcon";
+import trayEco from "../assets/ghelper/tray-eco.png";
+import trayStandard from "../assets/ghelper/tray-standard.png";
+import trayUltimate from "../assets/ghelper/tray-ultimate.png";
+import trayLightEco from "../assets/ghelper/tray-light-eco.png";
+import trayDarkEco from "../assets/ghelper/tray-dark-eco.png";
+import trayLightStandard from "../assets/ghelper/tray-light-standard.png";
+import trayDarkStandard from "../assets/ghelper/tray-dark-standard.png";
+
+/** G-Helper's own tray icons (from G-Helper), by the name Bloom gets for the
+ *  one G-Helper shows now (`tray_icon`). */
+const TRAY_ICONS: Record<string, string> = {
+	eco: trayEco,
+	standard: trayStandard,
+	ultimate: trayUltimate,
+	"light-eco": trayLightEco,
+	"dark-eco": trayDarkEco,
+	"light-standard": trayLightStandard,
+	"dark-standard": trayDarkStandard
+};
 import "./GHelperPanel.css";
 
 /**
@@ -46,6 +64,8 @@ export interface GHelperState {
 	modes: GHelperMode[];
 	mode: number;
 	gpu_mode: number;
+	/** The icon G-Helper shows in the tray now (see TRAY_ICONS). */
+	tray_icon?: string;
 	gpu_auto: boolean;
 	has_ultimate: boolean;
 	screen_auto: boolean;
@@ -202,15 +222,14 @@ export function GHelperPanel({
 		window.setTimeout(() => setMessage((m) => (m === text ? null : m)), 6000);
 	};
 
-	// G-Helper's mark, in the colour of the mode in use (as G-Helper colours it).
-	const markMode = state?.modes.find(
-		(m) => m.id === (pending?.startsWith("mode:") ? Number(pending.slice(5)) : state.mode)
-	);
-	const markColor = markMode ? modeColor(markMode.base) : GH_COLORS.standard;
-
 	const top = (
 		<div className="gh-top">
-			<GHelperIcon className="gh-mark" size={15} strokeWidth={2} style={{ color: markColor }} />
+			<img
+				className="gh-mark"
+				src={TRAY_ICONS[state?.tray_icon ?? "standard"] ?? TRAY_ICONS.standard}
+				alt=""
+				draggable={false}
+			/>
 			<span className="gh-title">G-Helper</span>
 			{(pending || state?.applying) && <Loader2 className="gh-spin" size={14} />}
 			<button
