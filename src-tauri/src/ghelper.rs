@@ -1050,34 +1050,74 @@ fn set_mode(app: &AppHandle, mode: i64) -> Result<(), String> {
 /// is asked for by its own shortcut instead, which G-Helper applies at once
 /// with the same pop-up. The cycle shortcut is only used for a mode that has
 /// no shortcut of its own.
+/// Set once G-Helper didn't take a mode's own shortcut: from then on (until
+/// Bloom restarts) its cycle shortcut is used, which it always takes.
+static MODE_KEYS_IGNORED: AtomicBool = AtomicBool::new(false);
+
 fn cycle_mode(app: &AppHandle) -> Result<(), String> {
     let config = read_config().ok_or("G-Helper's settings file wasn't found")?;
     let list = modes(&config);
     let now = current_mode(&config);
     let at = list.iter().position(|m| m.id == now).unwrap_or(0);
     let next = list[(at + 1) % list.len()].id;
-    if find_process().is_some() && !shortcuts_off(&config) {
-        if let Some(key) = mode_key(&config, next) {
-            press(&alt_modifiers(&config), key);
-            log(&format!(
-                "mode: from {now} to {next}, sent G-Helper's shortcut for it (key {key:#04x})"
-            ));
-            remember_mode(next);
-            emit_changed(app);
-            return Ok(());
-        }
-        let key = int(&config, "keybind_profile").unwrap_or(VK_F5 as i64);
-        if key > 0 && key < 0xFF {
-            press(&main_modifiers(&config), key as u16);
-            log(&format!(
-                "mode: from {now} to {next}, sent G-Helper's cycle shortcut (key {key:#04x})"
-            ));
-            remember_mode(next);
-            emit_changed(app);
-            return Ok(());
-        }
+    if find_process().is_none() {
+        return set_mode(app, next);
+    }
+    let direct = (!shortcuts_off(&config) && !MODE_KEYS_IGNORED.load(Ordering::SeqCst))
+        .then(|| mode_key(&config, next))
+        .flatten();
+    if let Some(key) = direct {
+        press(&alt_modifiers(&config), key);
+        log(&format!(
+            "mode: from {now} to {next}, sent G-Helper's shortcut for it (key {key:#04x})"
+        ));
+        remember_mode(next);
+        emit_changed(app);
+        // G-Helper notes the new mode in its settings file within 2 s. When
+        // it doesn't (the shortcut didn't reach it), its cycle shortcut is
+        // sent instead, unless another mode was asked for meanwhile.
+        let handle = app.clone();
+        std::thread::spawn(move || {
+            let taken = wait_for(Duration::from_millis(3500), |c| {
+                int(c, "performance_mode") == Some(next)
+                    || LAST_MODE
+                        .lock()
+                        .is_ok_and(|last| last.map(|(m, _)| m) != Some(next))
+            });
+            if taken {
+                return;
+            }
+            MODE_KEYS_IGNORED.store(true, Ordering::SeqCst);
+            log("mode: G-Helper didn't take the mode's own shortcut; its cycle shortcut is used from now on");
+            if let Some(config) = read_config() {
+                if send_cycle(&config) {
+                    emit_changed(&handle);
+                }
+            }
+        });
+        return Ok(());
+    }
+    if send_cycle(&config) {
+        log(&format!(
+            "mode: from {now} to {next}, sent G-Helper's cycle shortcut"
+        ));
+        remember_mode(next);
+        emit_changed(app);
+        return Ok(());
     }
     set_mode(app, next)
+}
+
+/// G-Helper's "next mode" shortcut (it always has it, even with its other
+/// shortcuts turned off). False when it is set to none.
+fn send_cycle(config: &Map<String, Value>) -> bool {
+    let key = int(config, "keybind_profile").unwrap_or(VK_F5 as i64);
+    if key > 0 && key < 0xFF {
+        press(&main_modifiers(config), key as u16);
+        true
+    } else {
+        false
+    }
 }
 
 /// Ultimate (or back from it): the MUX switch, then a restart, as in G-Helper.

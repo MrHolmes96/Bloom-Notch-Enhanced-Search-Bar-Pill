@@ -404,6 +404,19 @@ pub fn export_logs(app: Option<&AppHandle>) -> Result<PathBuf, String> {
             }
         }
     }
+    // G-Helper's own log, its last 300 lines (which keys it got, which mode
+    // it set), when it is installed: to see whether a shortcut reached it.
+    if let Some(log) = std::env::var_os("APPDATA")
+        .map(|dir| PathBuf::from(dir).join("GHelper").join("log.txt"))
+        .and_then(|file| std::fs::read(file).ok())
+    {
+        let text = String::from_utf8_lossy(&log);
+        let lines: Vec<&str> = text.lines().collect();
+        let tail = lines[lines.len().saturating_sub(300)..].join("\n");
+        if zip.start_file("ghelper-app-log.txt", options).is_ok() {
+            let _ = zip.write_all(tail.as_bytes());
+        }
+    }
     zip.finish().map_err(|e| e.to_string())?;
     Ok(path)
 }

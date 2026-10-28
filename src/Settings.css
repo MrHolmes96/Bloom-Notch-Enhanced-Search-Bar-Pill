@@ -1474,3 +1474,86 @@ input:checked + .slider:before {
 .gh-save-row > span {
 	flex: 1;
 }
+
+/* Save and Undo under G-Helper's key bindings: real buttons, outside the
+   note's muted look. Save turns G-Helper blue while there is something to
+   save, presses in when clicked, and says "Saved" for a moment after. */
+.sb-note.gh-save-row {
+	opacity: 1;
+}
+
+.gh-save-row > span {
+	opacity: 0.8;
+}
+
+.gh-button {
+	flex: none;
+	min-width: 72px;
+	padding: 7px 16px;
+	border: 1px solid rgba(255, 255, 255, 0.22);
+	border-radius: 8px;
+	background: rgba(255, 255, 255, 0.12);
+	color: var(--bloom-text, white);
+	font-family: inherit;
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+	transition:
+		background 0.15s ease,
+		border-color 0.15s ease,
+		transform 0.08s ease,
+		opacity 0.15s ease;
+}
+
+.gh-button:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.2);
+}
+
+.gh-button:active:not(:disabled) {
+	transform: scale(0.95);
+	background: rgba(255, 255, 255, 0.28);
+}
+
+.gh-button:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
+.gh-button-save.gh-button-ready {
+	background: #3aaeef;
+	border-color: #3aaeef;
+	color: #fff;
+}
+
+.gh-button-save.gh-button-ready:hover:not(:disabled) {
+	background: #5bbcf3;
+}
+
+.gh-button-save.gh-button-ready:active:not(:disabled) {
+	background: #2a8ec6;
+}
+
+.gh-button-save.gh-button-done {
+	opacity: 1;
+	border-color: #06b48a;
+	color: #06b48a;
+}
+
+.light-mode .gh-button {
+	border-color: rgba(0, 0, 0, 0.18);
+	background: rgba(0, 0, 0, 0.06);
+}
+
+.light-mode .gh-button:hover:not(:disabled) {
+	background: rgba(0, 0, 0, 0.1);
+}
+
+.light-mode .gh-button:active:not(:disabled) {
+	background: rgba(0, 0, 0, 0.16);
+}
+
+.light-mode .gh-button-save.gh-button-ready {
+	background: #3aaeef;
+	border-color: #3aaeef;
+	color: #fff;
+}

@@ -18,6 +18,7 @@ import {
 	Settings2,
 	Sparkles
 } from "lucide-react";
+import { GHelperIcon } from "../icons/GHelperIcon";
 import "./GHelperPanel.css";
 
 /**
@@ -201,9 +202,15 @@ export function GHelperPanel({
 		window.setTimeout(() => setMessage((m) => (m === text ? null : m)), 6000);
 	};
 
+	// G-Helper's mark, in the colour of the mode in use (as G-Helper colours it).
+	const markMode = state?.modes.find(
+		(m) => m.id === (pending?.startsWith("mode:") ? Number(pending.slice(5)) : state.mode)
+	);
+	const markColor = markMode ? modeColor(markMode.base) : GH_COLORS.standard;
+
 	const top = (
 		<div className="gh-top">
-			<Gauge className="gh-mark" size={15} />
+			<GHelperIcon className="gh-mark" size={15} strokeWidth={2} style={{ color: markColor }} />
 			<span className="gh-title">G-Helper</span>
 			{(pending || state?.applying) && <Loader2 className="gh-spin" size={14} />}
 			<button

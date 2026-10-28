@@ -29,6 +29,7 @@
 .gh-mark {
 	color: #3aaeef;
 	flex: none;
+	transition: color 0.2s ease;
 }
 
 .gh-title {

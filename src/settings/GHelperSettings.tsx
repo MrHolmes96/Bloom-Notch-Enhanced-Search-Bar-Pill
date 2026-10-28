@@ -243,6 +243,8 @@ export function GHelperSettings() {
 	const [enabled, setEnabled] = useStoredFlag("bloom-ghelper-enabled", true);
 	const [draft, setDraft] = useState<GHelperBinding[] | null>(null);
 	const [saving, setSaving] = useState(false);
+	/** Just saved: the button says so for a moment. */
+	const [saved, setSaved] = useState(false);
 	const [problem, setProblem] = useState<string | null>(null);
 	const [hotkeysRaw, setHotkeysRaw] = useStoredString(HOTKEYS_KEY, "[]");
 	const hotkeys = useMemo(() => parseShortcuts(hotkeysRaw), [hotkeysRaw]);
@@ -315,6 +317,8 @@ export function GHelperSettings() {
 		try {
 			await invoke("ghelper_set_bindings", { bindings: draft });
 			setDraft(null);
+			setSaved(true);
+			window.setTimeout(() => setSaved(false), 2000);
 			await refresh();
 		} catch (e) {
 			setProblem(String(e));
@@ -393,19 +397,19 @@ export function GHelperSettings() {
 							Changing what a row does is saved into G-Helper with Save (the laptop's own key
 							does the same then).
 						</span>
-						<button
-							type="button"
-							className="settings-button"
-							disabled={!changed || saving}
-							onClick={() => void saveBindings()}
-						>
-							{saving ? "Saving…" : "Save"}
-						</button>
 						{changed && !saving && (
-							<button type="button" className="settings-button" onClick={() => setDraft(null)}>
+							<button type="button" className="gh-button" onClick={() => setDraft(null)}>
 								Undo
 							</button>
 						)}
+						<button
+							type="button"
+							className={`gh-button gh-button-save ${changed ? "gh-button-ready" : ""} ${saved ? "gh-button-done" : ""}`}
+							disabled={!changed || saving}
+							onClick={() => void saveBindings()}
+						>
+							{saving ? "Saving…" : saved && !changed ? "Saved" : "Save"}
+						</button>
 					</div>
 				</>
 			)}
