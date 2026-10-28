@@ -210,6 +210,7 @@ fn main() {
             open_app,
             launch_new_instance,
             update_dock_rect,
+            set_dock_height,
             update_notch_rect,
             set_dock_hovered,
             set_notch_hovered,

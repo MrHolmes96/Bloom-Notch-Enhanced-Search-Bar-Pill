@@ -157,6 +157,36 @@ pub async fn update_dock_rect(rect: IntRect) {
     }
 }
 
+/// The dock's height at rest (logical px, at its size setting), as drawn.
+pub static DOCK_HEIGHT: std::sync::Mutex<Option<f64>> = std::sync::Mutex::new(None);
+
+/// The gap (logical px) between the dock and snapped or maximized windows.
+pub const DOCK_GAP: f64 = 5.0;
+
+/// The dock tells Bloom its height; the strip Windows keeps free for it is
+/// set again when that changed.
+#[tauri::command]
+pub async fn set_dock_height(app: AppHandle, height: f64) {
+    if !(height.is_finite() && height > 0.0) {
+        return;
+    }
+    let changed = match DOCK_HEIGHT.lock() {
+        Ok(mut current) => {
+            let changed = current.is_none_or(|old| (old - height).abs() >= 0.5);
+            if changed {
+                *current = Some(height);
+            }
+            changed
+        }
+        Err(_) => false,
+    };
+    if changed && dock_enabled() && DOCK_APPBAR_REGISTERED.load(Ordering::Relaxed) {
+        if let Some(dock_win) = app.get_webview_window("dock") {
+            register_dock_appbar(dock_win);
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn update_notch_rect(rect: IntRect) {
     if let Ok(mut r) = NOTCH_RECT.lock() {

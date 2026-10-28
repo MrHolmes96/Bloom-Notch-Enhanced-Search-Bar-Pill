@@ -261,6 +261,8 @@ const Dock = memo(function Dock() {
 	const [isReady, setIsReady] = useState(false);
 	const [isImpacted, setIsImpacted] = useState(false);
 	const [isExpanded, setIsExpanded] = useState(false);
+	/** The dock height last sent to Bloom (`set_dock_height`). */
+	const sentDockHeight = useRef(0);
 	const [startupAnimating, setStartupAnimating] = useState(false);
 	const [customIcons, setCustomIcons] = useState<Record<string, string>>({});
 	const [toast, setToast] = useState<string | null>(null);
@@ -400,6 +402,16 @@ const Dock = memo(function Dock() {
 						right = Math.max(right, box.right + 16);
 						top = Math.min(top, box.top - 16);
 						bottom = Math.max(bottom, box.bottom);
+					}
+				}
+				// The dock's own height at rest (not while it slides or shows a
+				// preview): the strip Windows keeps free for it is that plus a
+				// small gap, so snapped and maximized windows stop just above it.
+				if (isExpanded && !isHidden && isVisible && !previewData) {
+					const height = dockRef.current.offsetHeight * scale;
+					if (height > 34 * scale && Math.abs(height - sentDockHeight.current) >= 0.5) {
+						sentDockHeight.current = height;
+						invoke("set_dock_height", { height }).catch(() => {});
 					}
 				}
 				invoke("update_dock_rect", {
