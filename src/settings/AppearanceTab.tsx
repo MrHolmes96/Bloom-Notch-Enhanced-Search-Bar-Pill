@@ -1,4 +1,5 @@
-import { Palette, Droplet, Contrast, Droplets, Sun, Square, Maximize2, PanelBottom } from "lucide-react";
+import { Palette, Droplet, Contrast, Droplets, Sun, Square, Maximize2, PanelBottom, SeparatorHorizontal } from "lucide-react";
+import { useStoredString } from "./useStoredSetting";
 import { SettingRow } from "./SettingRow";
 import { WindowBordersSettings } from "./WindowBordersSettings";
 
@@ -54,6 +55,38 @@ function ScaleControl({
 				disabled={value >= MAX_SCALE}
 				className="scale-adjust-btn"
 				title={`Make the ${what} larger`}
+			>
+				+
+			</button>
+		</div>
+	);
+}
+
+/** Space between the dock and snapped or maximized windows, 1 px a step. */
+const DOCK_GAP_KEY = "bloom-dock-gap";
+const DOCK_GAP_DEFAULT = 6;
+const DOCK_GAP_MAX = 40;
+
+function DockGapControl() {
+	const [raw, setRaw] = useStoredString(DOCK_GAP_KEY, String(DOCK_GAP_DEFAULT));
+	const parsed = Number.parseInt(raw, 10);
+	const value = Number.isFinite(parsed) ? Math.min(DOCK_GAP_MAX, Math.max(0, parsed)) : DOCK_GAP_DEFAULT;
+	return (
+		<div className="scale-button-container">
+			<button
+				onClick={() => setRaw(String(Math.max(0, value - 1)))}
+				disabled={value <= 0}
+				className="scale-adjust-btn"
+				title="1 px less space"
+			>
+				—
+			</button>
+			<span className="scale-display-value">{value} px</span>
+			<button
+				onClick={() => setRaw(String(Math.min(DOCK_GAP_MAX, value + 1)))}
+				disabled={value >= DOCK_GAP_MAX}
+				className="scale-adjust-btn"
+				title="1 px more space"
 			>
 				+
 			</button>
@@ -222,9 +255,16 @@ export function AppearanceTab({
 							icon={PanelBottom}
 							label="Dock Size"
 							desc="The dock, its icons and its menus"
-							divider={false}
 						>
 							<ScaleControl value={dockScale} onChange={handleDockScaleChange} what="dock" />
+						</SettingRow>
+						<SettingRow
+							icon={SeparatorHorizontal}
+							label="Dock Gap"
+							desc="Space between the dock and snapped or maximized windows, in screen pixels"
+							divider={false}
+						>
+							<DockGapControl />
 						</SettingRow>
 					</div>
 				</>

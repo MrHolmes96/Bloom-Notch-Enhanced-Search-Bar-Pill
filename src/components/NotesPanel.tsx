@@ -4,11 +4,13 @@ import {
 	Check,
 	ListTodo,
 	Maximize2,
+	Pencil,
 	StickyNote,
 	X
 } from "lucide-react";
 import { saveStoredSetting } from "../settings/useStoredSetting";
 import { noteHasMore, noteTitle } from "./noteFormat";
+import { setNoteItemDone } from "./noteTodos";
 import { PanelBoundary } from "./PanelBoundary";
 import "./NotesPanel.css";
 
@@ -36,6 +38,31 @@ export interface NoteItem {
 	/** The text is Markdown, as the note's editor writes it (notes from
 	 * before the editor's toolbar are plain text). */
 	md?: boolean;
+	/** A note's own title for the list (else its first line shows). */
+	title?: string;
+	/** A note: its bullets and checklist items go to To-Do as they are written. */
+	autoTodo?: boolean;
+	/** A note: the words of its items made into to-dos (see noteTodos.ts). */
+	todoLinks?: string[];
+	/** A to-do made from a note's item: that note, and the item's words. */
+	from?: { note: string; text: string };
+}
+
+/** What the note's editor hands over with its text (see noteTodos.ts). */
+export interface TodoSync {
+	/** Items to make into to-dos. */
+	add: { text: string; done: boolean }[];
+	/** Linked items whose words changed. */
+	renamed: { from: string; to: string }[];
+	/** Each linked item, ticked or struck through or not. */
+	states: { text: string; done: boolean }[];
+	/** The words of every linked item now. */
+	links: string[];
+}
+
+/** How a note shows in the list: its title, else its first line. */
+export function noteLabel(item: NoteItem): string {
+	return item.title?.trim() || noteTitle(item.text, !!item.md);
 }
 
 export type NotesView = "all" | "notes" | "todos";
@@ -133,8 +160,8 @@ function sorted(items: NoteItem[], sort: NotesSort, kind: "notes" | "todos") {
 	const by: Record<NotesSort, (a: NoteItem, b: NoteItem) => number> = {
 		newest: (a, b) => b.created - a.created,
 		oldest: (a, b) => a.created - b.created,
-		az: (a, b) => a.text.localeCompare(b.text, undefined, { sensitivity: "base" }),
-		za: (a, b) => b.text.localeCompare(a.text, undefined, { sensitivity: "base" })
+		az: (a, b) => noteLabel(a).localeCompare(noteLabel(b), undefined, { sensitivity: "base" }),
+		za: (a, b) => noteLabel(b).localeCompare(noteLabel(a), undefined, { sensitivity: "base" })
 	};
 	list.sort(by[sort]);
 	// Open to-dos come before the ones that are done.
@@ -163,6 +190,8 @@ export const NotesPanel = memo(function NotesPanel({
 	const [draft, setDraft] = useState("");
 	const [todo, setTodo] = useState(() => localStorage.getItem("bloom-notch-notes-kind") !== "note");
 	const [editing, setEditing] = useState<string | null>(null);
+	/** A note's title is being edited (else a to-do's words). */
+	const [editingTitle, setEditingTitle] = useState(false);
 	const [editText, setEditText] = useState("");
 	const [view, setViewState] = useState<NotesView>(() =>
 		readNotesView(localStorage.getItem(VIEW_KEY))
@@ -175,6 +204,12 @@ export const NotesPanel = memo(function NotesPanel({
 	// The latest list, for the editor's saves (it keeps typing between them).
 	const itemsRef = useRef(items);
 	itemsRef.current = items;
+	/** Hands on a new list made from `itemsRef`, which follows it at once, so
+	 * a second change before the next draw builds on this one. */
+	const commit = (next: NoteItem[]) => {
+		itemsRef.current = next;
+		onChange(next);
+	};
 
 	useEffect(() => {
 		void loadNoteEditor();
@@ -225,10 +260,89 @@ export const NotesPanel = memo(function NotesPanel({
 	const finishEdit = (save: boolean) => {
 		if (save && editing) {
 			const text = editText.trim();
-			if (text) update(editing, { text, updated: Date.now() });
+			// A title left empty goes back to the note's first line.
+			if (editingTitle) update(editing, { title: text || undefined });
+			else if (text) update(editing, { text, updated: Date.now() });
 		}
 		setEditing(null);
+		setEditingTitle(false);
 		onPinChange(false);
+	};
+
+	/** Ticks a to-do off (or back on); one made from a note's item ticks or
+	 * strikes that item in the note too. */
+	const toggleDone = (item: NoteItem) => {
+		const done = !item.done;
+		const from = item.from;
+		onChange(
+			items.map((n) => {
+				if (n.id === item.id) return { ...n, done };
+				if (from && n.id === from.note && n.md) {
+					const text = setNoteItemDone(n.text, from.text, done);
+					return text === null ? n : { ...n, text };
+				}
+				return n;
+			})
+		);
+	};
+
+	/** The note's text, and what its editor says about its linked to-dos. */
+	const saveFromEditor = (id: string, text: string, sync: TodoSync | null) => {
+		const current = itemsRef.current;
+		const known = current.find((n) => n.id === id);
+		if (!known) return;
+		let changed = false;
+		let next = current;
+		if (!(known.text === text && known.md)) {
+			next = next.map((n) => (n.id === id ? { ...n, text, md: true, updated: Date.now() } : n));
+			changed = true;
+		}
+		if (sync) {
+			const renamed = new Map(sync.renamed.map((r) => [r.from, r.to]));
+			const states = new Map(sync.states.map((s) => [s.text, s.done]));
+			next = next.map((n) => {
+				if (!n.todo || n.from?.note !== id) return n;
+				let item = n;
+				const to = renamed.get(n.from.text);
+				if (to !== undefined) {
+					item = {
+						...item,
+						// Words changed in the list stay as they were made there.
+						text: item.text === n.from.text ? to : item.text,
+						from: { note: id, text: to }
+					};
+				}
+				const done = states.get(item.from!.text);
+				if (done !== undefined && done !== item.done) item = { ...item, done };
+				if (item !== n) changed = true;
+				return item;
+			});
+			const now = Date.now();
+			const added: NoteItem[] = sync.add
+				.filter(
+					(a) =>
+						a.text &&
+						!next.some((n) => n.todo && n.from?.note === id && n.from.text === a.text)
+				)
+				.map((a, i) => ({
+					id: newId(),
+					text: a.text,
+					todo: true,
+					done: a.done,
+					created: now + i,
+					from: { note: id, text: a.text }
+				}));
+			if (added.length) {
+				next = [...added, ...next];
+				changed = true;
+			}
+			const before = known.todoLinks ?? [];
+			if (before.length !== sync.links.length || before.some((w, i) => w !== sync.links[i])) {
+				next = next.map((n) => (n.id === id ? { ...n, todoLinks: sync.links } : n));
+				changed = true;
+			}
+		}
+		if (changed) commit(next);
 	};
 
 	const shown = useMemo(() => sections(items, view), [items, view]);
@@ -247,16 +361,17 @@ export const NotesPanel = memo(function NotesPanel({
 				key={note.id}
 				note={note}
 				onPinChange={onPinChange}
-				onSave={(text) => {
-					const current = itemsRef.current;
-					const known = current.find((n) => n.id === note.id);
-					if (!known || (known.text === text && known.md)) return;
-					onChange(
-						current.map((n) =>
-							n.id === note.id ? { ...n, text, md: true, updated: Date.now() } : n
+				onSave={(text, sync) => saveFromEditor(note.id, text, sync)}
+				onTitle={(title) =>
+					commit(
+						itemsRef.current.map((n) =>
+							n.id === note.id ? { ...n, title: title.trim() ? title : undefined } : n
 						)
-					);
-				}}
+					)
+				}
+				onAutoTodo={(on) =>
+					commit(itemsRef.current.map((n) => (n.id === note.id ? { ...n, autoTodo: on } : n)))
+				}
 				onClose={(text) => {
 					const current = itemsRef.current;
 					// A note left empty isn't kept.
@@ -381,7 +496,7 @@ export const NotesPanel = memo(function NotesPanel({
 											type="button"
 											className={`notes-check${item.done ? " checked" : ""}`}
 											title={item.done ? "Mark as not done" : "Mark as done"}
-											onClick={() => update(item.id, { done: !item.done })}
+											onClick={() => toggleDone(item)}
 										>
 											{item.done && <Check size={11} strokeWidth={3} />}
 										</button>
@@ -392,6 +507,9 @@ export const NotesPanel = memo(function NotesPanel({
 										<input
 											className="notes-edit"
 											autoFocus
+											placeholder={
+												editingTitle ? noteTitle(item.text, !!item.md) || "Title" : undefined
+											}
 											value={editText}
 											onChange={(e) => setEditText(e.target.value)}
 											onFocus={() => onPinChange(true)}
@@ -409,17 +527,32 @@ export const NotesPanel = memo(function NotesPanel({
 											onDoubleClick={() => {
 												if (item.todo) {
 													setEditing(item.id);
+													setEditingTitle(false);
 													setEditText(item.text);
 												} else {
 													setOpenNote(item.id);
 												}
 											}}
 										>
-											{noteTitle(item.text, !!item.md) || "Empty note"}
-											{!item.todo && noteHasMore(item.text) && (
+											{(item.todo ? noteTitle(item.text, !!item.md) : noteLabel(item)) || "Empty note"}
+											{!item.todo && !item.title?.trim() && noteHasMore(item.text) && (
 												<span className="notes-more"> …</span>
 											)}
 										</span>
+									)}
+									{!item.todo && editing !== item.id && (
+										<button
+											type="button"
+											className="notes-delete"
+											title="Give the note a title"
+											onClick={() => {
+												setEditing(item.id);
+												setEditingTitle(true);
+												setEditText(item.title ?? "");
+											}}
+										>
+											<Pencil size={11} />
+										</button>
 									)}
 									<button
 										type="button"

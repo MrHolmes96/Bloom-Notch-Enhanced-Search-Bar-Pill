@@ -160,8 +160,18 @@ pub async fn update_dock_rect(rect: IntRect) {
 /// The dock's height at rest (logical px, at its size setting), as drawn.
 pub static DOCK_HEIGHT: std::sync::Mutex<Option<f64>> = std::sync::Mutex::new(None);
 
-/// The gap (logical px) between the dock and snapped or maximized windows.
-pub const DOCK_GAP: f64 = 5.0;
+/// The gap between the dock and snapped or maximized windows, in the
+/// screen's own pixels (Settings > Appearance > Size & Corners > Dock Gap).
+pub const DOCK_GAP_KEY: &str = "bloom-dock-gap";
+pub const DOCK_GAP_DEFAULT: i32 = 6;
+pub const DOCK_GAP_MAX: i32 = 40;
+
+pub fn dock_gap(app: &AppHandle) -> i32 {
+    crate::utils::get_setting_str(app, DOCK_GAP_KEY)
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .unwrap_or(DOCK_GAP_DEFAULT)
+        .clamp(0, DOCK_GAP_MAX)
+}
 
 /// The dock tells Bloom its height; the strip Windows keeps free for it is
 /// set again when that changed.
@@ -3607,7 +3617,7 @@ pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Re
         serde_json::json!({ "key": &key, "value": &settings[&key] }),
     );
 
-    if crate::utils::is_scale_key(&key) {
+    if crate::utils::is_scale_key(&key) || key == DOCK_GAP_KEY {
         re_register_appbars(&app, &settings);
     }
     if key.starts_with("bloom-launcher-") || key.starts_with("bloom-hotkey-") {
@@ -4245,7 +4255,10 @@ pub fn import_settings(app: AppHandle, settings: String) -> Result<(), String> {
         );
     }
 
-    if imported.keys().any(|key| crate::utils::is_scale_key(key)) {
+    if imported
+        .keys()
+        .any(|key| crate::utils::is_scale_key(key) || key == DOCK_GAP_KEY)
+    {
         re_register_appbars(&app, &imported);
     }
 

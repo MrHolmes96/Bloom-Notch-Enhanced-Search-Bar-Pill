@@ -197,6 +197,7 @@ Example:
 | ------------------------------ | -------------------- | --------- | ---------------------------------------------------------------------------------------------------- |
 | `bloom-notch-scale` | number `"0.8"`–`"1.3"` | `bloom-scale`, else `"1.0"` | Size of the notch and its text, the volume and brightness pop-ups and the settings window (Settings > Appearance > Notch Size). |
 | `bloom-dock-scale` | number `"0.8"`–`"1.3"` | `bloom-scale`, else `"1.0"` | Size of the dock, its icons and its menus (Settings > Appearance > Dock Size). |
+| `bloom-dock-gap` | number `"0"`–`"40"` | `"6"` | Space in screen pixels between the dock and snapped or maximized windows (Settings > Appearance > Dock Gap). |
 | `bloom-scale`                  | float string         | `"1.0"`   | The one size for everything in older versions. A part without its own size (`bloom-notch-scale`, `bloom-dock-scale`) still uses it; Settings no longer changes it. |
 | `bloom-low-battery-threshold`  | integer string       | `"20"`    | Battery percentage that triggers the low-battery alert pulse (5 to 50, step 5).                      |
 | `bloom-time-format-24h`        | `"true"` / `"false"` | `"false"` | Use 24-hour clock format in the notch. When `"false"`, displays 12-hour format with AM/PM.           |

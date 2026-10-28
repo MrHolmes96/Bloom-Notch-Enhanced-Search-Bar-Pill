@@ -4149,15 +4149,17 @@ fn register_dock_appbar_inner(window: tauri::WebviewWindow, attempt: i32) {
             return;
         }
 
-        // The dock's own height (as it draws it) and a small gap above it,
-        // so snapped and maximized windows stop just above the dock. Until
+        // The dock's own height (as it draws it) and the gap above it (in
+        // screen pixels, a setting), so snapped and maximized windows stop
+        // just above the dock. Until
         // the dock has said how tall it is, its usual height.
         let dock_height = crate::commands::DOCK_HEIGHT
             .lock()
             .ok()
             .and_then(|h| *h)
             .unwrap_or(52.0 * bloom_scale);
-        let pr = ((dock_height + crate::commands::DOCK_GAP) * scale).round() as i32;
+        let pr =
+            (dock_height * scale).round() as i32 + crate::commands::dock_gap(window.app_handle());
 
         // Serialize with disable_dock_appbar, then check the setting again.
         // A pending registration must not outlive a dock-disable request.

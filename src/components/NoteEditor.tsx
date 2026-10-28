@@ -16,6 +16,8 @@ import {
 	List,
 	ListChecks,
 	ListOrdered,
+	ListPlus,
+	ListTodo,
 	Minus,
 	Quote,
 	Redo2,
@@ -24,7 +26,15 @@ import {
 	Underline,
 	Undo2
 } from "lucide-react";
-import type { NoteItem } from "./NotesPanel";
+import type { NoteItem, TodoSync } from "./NotesPanel";
+import {
+	linkedItems,
+	listEntries,
+	selectedEntries,
+	TodoLinks,
+	todoLinksKey,
+	type ListEntry
+} from "./noteTodos";
 import { noteTitle, plainTextDoc, toMarkdownFile, toTextFile, type DocNode } from "./noteFormat";
 
 /**
@@ -51,8 +61,13 @@ function whenText(time: number) {
 interface NoteEditorProps {
 	note: NoteItem;
 	onPinChange: (pinned: boolean) => void;
-	/** Saves the note's text (Markdown), a moment after each pause in typing. */
-	onSave: (text: string) => void;
+	/** Saves the note's text (Markdown), a moment after each pause in typing,
+	 * with what changed about its items that are to-dos. */
+	onSave: (text: string, sync: TodoSync | null) => void;
+	/** The note's own title (empty: its first line shows in the list). */
+	onTitle: (title: string) => void;
+	/** Turns adding the note's bullets to To-Do as they are written on or off. */
+	onAutoTodo: (on: boolean) => void;
 	/** Back to the list, with the text as it is now. */
 	onClose: (text: string) => void;
 	onDelete: () => void;
@@ -100,13 +115,30 @@ function textStyle(editor: Editor) {
 	return "body";
 }
 
+/** The selected items that can still be made into to-dos, for the pop-up. */
+function pickable(e: Editor) {
+	const picked = selectedEntries(e.state).filter((entry) => entry.text);
+	if (!picked.length) return null;
+	const linked = new Set(linkedItems(e.state).map((l) => l.entry.pos));
+	const count = picked.filter((entry) => !linked.has(entry.pos)).length;
+	return { first: picked[0].pos, last: picked[picked.length - 1].pos, count };
+}
+
 export default function NoteEditor({
 	note,
 	onPinChange,
 	onSave,
+	onTitle,
+	onAutoTodo,
 	onClose,
 	onDelete
 }: NoteEditorProps) {
+	const textRef = useRef<HTMLDivElement>(null);
+	const [title, setTitle] = useState(note.title ?? "");
+	/** Where the "Add to To-Do" pop-up sits over the selected items. */
+	const [pickAt, setPickAt] = useState<{ top: number; left: number } | null>(null);
+	const autoTodoRef = useRef(!!note.autoTodo);
+	autoTodoRef.current = !!note.autoTodo;
 	const panelRef = useRef<HTMLDivElement>(null);
 	const saveTimer = useRef<number | null>(null);
 	const closeRef = useRef<() => void>(() => {});
@@ -127,7 +159,8 @@ export default function NoteEditor({
 			TaskList,
 			TaskItem.configure({ nested: true }),
 			Placeholder.configure({ placeholder: "Write your note…" }),
-			Markdown
+			Markdown,
+			TodoLinks.configure({ linked: () => note.todoLinks ?? [] })
 		],
 		// Notes written before the toolbar are plain text, a paragraph a line.
 		content: note.md ? note.text : (plainTextDoc(note.text) as never),
@@ -178,7 +211,8 @@ export default function NoteEditor({
 					quote: e.isActive("blockquote"),
 					canUndo: e.can().undo(),
 					canRedo: e.can().redo(),
-					characters: e.state.doc.textContent.length
+					characters: e.state.doc.textContent.length,
+					picked: pickable(e)
 				};
 			} catch {
 				return null;
@@ -195,17 +229,73 @@ export default function NoteEditor({
 
 	const markdown = () => (alive(editor) ? editor.getMarkdown() : note.text);
 
-	function saveNow() {
+	/**
+	 * What changed about the note's to-dos: linked items whose words changed,
+	 * whether each is ticked, and items to add (`extra`, and with auto-add on
+	 * every item not added yet, except the one still being typed unless `all`).
+	 */
+	function todoSync(e: Editor, extra: ListEntry[], all: boolean): TodoSync {
+		const linked = linkedItems(e.state);
+		const renamed: TodoSync["renamed"] = [];
+		for (const { entry, link } of linked) {
+			if (entry.text && entry.text !== link.words) {
+				renamed.push({ from: link.words, to: entry.text });
+				link.words = entry.text;
+			}
+		}
+		const taken = new Set(linked.map((l) => l.entry.pos));
+		const fresh = new Map<number, ListEntry>();
+		for (const entry of extra) {
+			if (entry.text && !taken.has(entry.pos)) fresh.set(entry.pos, entry);
+		}
+		if (autoTodoRef.current) {
+			const head = e.state.selection.$head.pos;
+			for (const entry of listEntries(e.state.doc)) {
+				if (!entry.text || taken.has(entry.pos)) continue;
+				const node = e.state.doc.nodeAt(entry.pos);
+				const first = node?.firstChild;
+				// The item being typed waits until it is left (or the note closes).
+				const typing =
+					!all && !!first && head > entry.pos && head <= entry.pos + 1 + first.nodeSize;
+				if (typing) continue;
+				fresh.set(entry.pos, entry);
+			}
+		}
+		const add = [...fresh.values()];
+		if (add.length) {
+			e.view.dispatch(
+				e.state.tr
+					.setMeta(todoLinksKey, add.map((a) => ({ pos: a.pos, words: a.text })))
+					.setMeta("addToHistory", false)
+			);
+		}
+		const now = linkedItems(e.state);
+		return {
+			add: add.map((a) => ({ text: a.text, done: a.done })),
+			renamed,
+			states: now.map(({ entry }) => ({ text: entry.text, done: entry.done })),
+			links: now.map(({ entry, link }) => entry.text || link.words)
+		};
+	}
+
+	function saveNow(extra: ListEntry[] = [], all = false) {
 		if (saveTimer.current !== null) {
 			window.clearTimeout(saveTimer.current);
 			saveTimer.current = null;
 		}
 		const current = editorRef.current;
-		if (alive(current)) onSaveRef.current(current.getMarkdown());
+		if (!alive(current)) return;
+		let sync: TodoSync | null = null;
+		try {
+			sync = todoSync(current, extra, all);
+		} catch {
+			sync = null;
+		}
+		onSaveRef.current(current.getMarkdown(), sync);
 	}
 
 	const close = () => {
-		saveNow();
+		saveNow([], true);
 		if (!alive(editor)) {
 			onClose(note.text);
 			return;
@@ -229,6 +319,51 @@ export default function NoteEditor({
 		setLinkText((editor.getAttributes("link").href as string | undefined) ?? "");
 		setLinkOpen(true);
 	}
+
+	// The "Add to To-Do" pop-up sits just under the last selected item, so it
+	// covers none of the selected text.
+	const pickedKey = state?.picked
+		? `${state.picked.first}:${state.picked.last}:${state.picked.count}`
+		: "";
+	useEffect(() => {
+		if (!state?.picked || !alive(editor) || !textRef.current) {
+			setPickAt(null);
+			return;
+		}
+		const dom = editor.view.nodeDOM(state.picked.last);
+		if (!(dom instanceof HTMLElement)) {
+			setPickAt(null);
+			return;
+		}
+		// Its own line only (an item's list under it isn't selected).
+		const line = (dom.querySelector(":scope > p, :scope > div > p") as HTMLElement | null) ?? dom;
+		let top = line.offsetHeight;
+		let left = 0;
+		let node: HTMLElement | null = line;
+		while (node && node !== textRef.current) {
+			top += node.offsetTop;
+			left += node.offsetLeft;
+			node = node.offsetParent as HTMLElement | null;
+		}
+		setPickAt({ top: top + 4, left: Math.max(0, left - 4) });
+	}, [pickedKey, editor]);
+
+	const addPicked = () => {
+		if (!alive(editor)) return;
+		const picked = selectedEntries(editor.state).filter((entry) => entry.text);
+		saveNow(picked, true);
+		setPickAt(null);
+		// The selection goes, so the pop-up does.
+		editor.chain().focus().setTextSelection(editor.state.selection.to).run();
+	};
+
+	const toggleAutoTodo = () => {
+		const on = !note.autoTodo;
+		autoTodoRef.current = on;
+		onAutoTodo(on);
+		// Turned on: the bullets already written go to To-Do as well.
+		if (on) saveNow([], true);
+	};
 
 	const applyLink = () => {
 		if (!alive(editor)) return;
@@ -302,6 +437,24 @@ export default function NoteEditor({
 					<ChevronLeft size={14} />
 					Notes
 				</button>
+				<input
+					className="note-title-input"
+					value={title}
+					placeholder={noteTitle(note.text, !!note.md) || "Title"}
+					title="The note's title in the list (empty: its first line)"
+					spellCheck={false}
+					onChange={(e) => {
+						setTitle(e.target.value);
+						onTitle(e.target.value);
+					}}
+					onKeyDown={(e) => {
+						e.stopPropagation();
+						if (e.key === "Enter" || e.key === "Escape") {
+							e.preventDefault();
+							if (alive(editor)) editor.commands.focus();
+						}
+					}}
+				/>
 				<span className="notes-editor-meta">
 					{status ??
 						`${note.updated ? `Edited ${whenText(note.updated)}` : `Created ${whenText(note.created)}`} · ${
@@ -413,6 +566,21 @@ export default function NoteEditor({
 				>
 					<ListChecks size={14} />
 				</ToolButton>
+				<button
+					type="button"
+					className={`note-tool note-auto-todo${note.autoTodo ? " active" : ""}`}
+					title={
+						note.autoTodo
+							? "Bullets and checklist items go to To-Do as you write them. Click to turn off"
+							: "Add this note's bullets and checklist items to To-Do as you write them. Click to turn on"
+					}
+					aria-pressed={!!note.autoTodo}
+					onMouseDown={(e) => e.preventDefault()}
+					onClick={toggleAutoTodo}
+				>
+					<ListPlus size={14} />
+					Auto To-Do {note.autoTodo ? "On" : "Off"}
+				</button>
 				<span className="note-tool-gap" />
 				<ToolButton title="Link (Ctrl+K)" active={state?.link} onRun={openLink}>
 					<Link2 size={14} />
@@ -482,8 +650,31 @@ export default function NoteEditor({
 				</div>
 			)}
 
-			<div className="notes-editor-text" onWheel={(e) => e.stopPropagation()}>
+			<div
+				ref={textRef}
+				className="notes-editor-text"
+				onWheel={(e) => e.stopPropagation()}
+			>
 				<EditorContent editor={editor} />
+				{pickAt && state?.picked && (
+					<div className="note-todo-pop" style={{ top: pickAt.top, left: pickAt.left }}>
+						{state.picked.count > 0 ? (
+							<button
+								type="button"
+								onMouseDown={(e) => e.preventDefault()}
+								onClick={addPicked}
+							>
+								<ListTodo size={13} />
+								{state.picked.count === 1 ? "Add to To-Do" : `Add ${state.picked.count} to To-Do`}
+							</button>
+						) : (
+							<span>
+								<ListTodo size={13} />
+								Already in To-Do
+							</span>
+						)}
+					</div>
+				)}
 			</div>
 		</div>
 	);
