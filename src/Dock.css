@@ -328,8 +328,8 @@ body {
 }
 
 .dock-icon-only .dock-icon img {
-	width: 32px;
-	height: 32px;
+	width: 30px;
+	height: 30px;
 }
 
 /* Tray Bin's bin is a tall outline that fills its whole box, so it reads a
@@ -340,8 +340,8 @@ body {
 }
 
 .dock-icon-only .dock-icon img.dock-bin-glyph {
-	width: 27px;
-	height: 27px;
+	width: 25px;
+	height: 25px;
 }
 
 .dock-icon-only .fallback-icon {

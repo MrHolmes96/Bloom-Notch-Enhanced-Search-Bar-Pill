@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronRight, Gauge, Zap } from "lucide-react";
+import { ChevronRight, Zap } from "lucide-react";
+import { GHelperIcon } from "../icons/GHelperIcon";
 import type { BlitzitStatus } from "../components/BlitzitPanel";
 
 /**
@@ -45,7 +46,7 @@ export function IntegrationsTab({ openTab }: { openTab: (tab: string) => void })
 				<div className="setting-divider" />
 				<div className="setting-item action" onClick={() => openTab("integrations/ghelper")}>
 					<div className="setting-icon-bg">
-						<Gauge size={14} strokeWidth={1.5} />
+						<GHelperIcon size={14} strokeWidth={1.5} />
 					</div>
 					<div className="setting-info">
 						<span className="setting-label">G-Helper</span>

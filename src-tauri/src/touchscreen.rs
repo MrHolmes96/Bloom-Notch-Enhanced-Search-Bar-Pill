@@ -5,13 +5,14 @@
 //!
 //! Turning a device off or on needs administrator rights, which Bloom doesn't
 //! run with. The first time, Windows asks once (UAC) to set up two scheduled
-//! tasks, "Bloom\Touchscreen Off" and "Bloom\Touchscreen On", which run
-//! Windows' own device tool (pnputil) for exactly this touchscreen; after that
-//! they run with no prompt. The tasks carry fixed commands with the
-//! touchscreen's device ID, so they can do nothing else. They are registered
-//! by Bloom itself, started as administrator for that one moment
-//! (`bloom.exe --register-touchscreen-tasks`), through Windows' Task Scheduler,
-//! and every step that fails says why in ghelper.log.
+//! tasks, "Bloom Touchscreen Off" and "Bloom Touchscreen On"; after that they
+//! run with no prompt. Each runs Bloom itself as administrator for a moment
+//! (`bloom.exe --touchscreen-device off|on "<ids>"`), which turns exactly this
+//! touchscreen off or on through Windows' device API, the same change as
+//! Device Manager's Disable/Enable (and G-Helper's Disable-PnpDevice), and
+//! notes the result in ghelper.log. The tasks are registered by Bloom itself,
+//! started as administrator for that one moment
+//! (`bloom.exe --register-touchscreen-tasks`), through Windows' Task Scheduler.
 
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
@@ -27,6 +28,7 @@ const TASK_OFF: &str = "Touchscreen Off";
 const TASK_ON: &str = "Touchscreen On";
 const IDS_KEY: &str = "bloom-touchscreen-ids";
 pub const REGISTER_ARG: &str = "--register-touchscreen-tasks";
+pub const DEVICE_ARG: &str = "--touchscreen-device";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// CM_PROB_DISABLED: the device was turned off.
 const PROBLEM_DISABLED: u32 = 0x16;
@@ -120,28 +122,98 @@ fn log(line: &str) {
     crate::ghelper::log(&format!("touchscreen: {line}"));
 }
 
-/// Where the tasks write what pnputil answered (in Export Diagnostics).
-pub const TASK_LOG: &str = "touchscreen-task.log";
-
-/// What a task runs: pnputil for each touchscreen, with no window. What
-/// pnputil answers goes into `log` (a path), so a failure can be seen.
-fn task_command(ids: &[String], verb: &str, log: Option<&str>) -> (String, String) {
-    let pnputil = system32("pnputil.exe").display().to_string();
-    let to_log = log
-        .map(|path| format!(" >> \"{path}\" 2>&1"))
-        .unwrap_or_default();
-    let commands: Vec<String> = ids
-        .iter()
-        .map(|id| format!("{pnputil} {verb} \"{id}\"{to_log}"))
-        .collect();
+/// What a task runs: Bloom, to turn these touchscreens off ("off") or on.
+fn task_command(exe: &str, ids: &[String], state: &str) -> (String, String) {
     (
-        system32("conhost.exe").display().to_string(),
-        format!(
-            "--headless {} /c {}",
-            system32("cmd.exe").display(),
-            commands.join(" & ")
-        ),
+        exe.to_string(),
+        format!("{DEVICE_ARG} {state} \"{}\"", ids.join("|")),
     )
+}
+
+/// `bloom.exe --touchscreen-device off|on "<id>|<id>"`, run as administrator
+/// by a task: turns each device off or on, as Device Manager does (kept
+/// after a restart). True when every one took the change.
+pub fn set_devices(rest: &[std::ffi::OsString]) -> bool {
+    let arg = |i: usize| {
+        rest.get(i)
+            .map(|a| a.to_string_lossy().to_string())
+            .unwrap_or_default()
+    };
+    let on = match arg(0).as_str() {
+        "on" => true,
+        "off" => false,
+        other => {
+            log(&format!("device: unknown state \"{other}\""));
+            return false;
+        }
+    };
+    let ids: Vec<String> = arg(1)
+        .split('|')
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .collect();
+    if ids.is_empty() {
+        log("device: no device IDs given");
+        return false;
+    }
+    let mut all = true;
+    for id in &ids {
+        match unsafe { change_device(id, on) } {
+            Ok(()) => log(&format!(
+                "device: turned {} {id}",
+                if on { "on" } else { "off" }
+            )),
+            Err(e) => {
+                all = false;
+                log(&format!(
+                    "device: couldn't turn {} {id}: {e}",
+                    if on { "on" } else { "off" }
+                ));
+            }
+        }
+    }
+    all
+}
+
+/// Device Manager's Disable/Enable for one device (by its instance ID).
+unsafe fn change_device(id: &str, on: bool) -> Result<(), String> {
+    use windows::Win32::Devices::DeviceAndDriverInstallation::{
+        SetupDiCallClassInstaller, SetupDiCreateDeviceInfoList, SetupDiDestroyDeviceInfoList,
+        SetupDiOpenDeviceInfoW, SetupDiSetClassInstallParamsW, DICS_DISABLE, DICS_ENABLE,
+        DICS_FLAG_GLOBAL, DIF_PROPERTYCHANGE, SP_CLASSINSTALL_HEADER, SP_DEVINFO_DATA,
+        SP_PROPCHANGE_PARAMS,
+    };
+    let step = |what: &str, e: windows::core::Error| format!("{what}: {e} ({:#010x})", e.code().0);
+    let set = SetupDiCreateDeviceInfoList(None, None).map_err(|e| step("device list", e))?;
+    let result = (|| {
+        let wide: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut info = SP_DEVINFO_DATA {
+            cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32,
+            ..Default::default()
+        };
+        SetupDiOpenDeviceInfoW(set, PCWSTR(wide.as_ptr()), None, 0, Some(&mut info))
+            .map_err(|e| step("find the device", e))?;
+        let params = SP_PROPCHANGE_PARAMS {
+            ClassInstallHeader: SP_CLASSINSTALL_HEADER {
+                cbSize: std::mem::size_of::<SP_CLASSINSTALL_HEADER>() as u32,
+                InstallFunction: DIF_PROPERTYCHANGE,
+            },
+            StateChange: if on { DICS_ENABLE } else { DICS_DISABLE },
+            Scope: DICS_FLAG_GLOBAL,
+            HwProfile: 0,
+        };
+        SetupDiSetClassInstallParamsW(
+            set,
+            Some(&info),
+            Some(&params.ClassInstallHeader),
+            std::mem::size_of::<SP_PROPCHANGE_PARAMS>() as u32,
+        )
+        .map_err(|e| step("prepare the change", e))?;
+        SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, set, Some(&info))
+            .map_err(|e| step("change", e))
+    })();
+    let _ = SetupDiDestroyDeviceInfoList(set);
+    result
 }
 
 /// `bloom.exe --register-touchscreen-tasks "<id>|<id>"`, run as
@@ -212,10 +284,11 @@ unsafe fn register(ids: &[String]) -> Result<(), String> {
     let access = VARIANT::from(BSTR::from(format!(
         "D:(A;;FA;;;BA)(A;;FA;;;SY)(A;;GRGX;;;{sid})"
     )));
-    for (name, verb, what) in [
-        (TASK_OFF, "/disable-device", "off"),
-        (TASK_ON, "/enable-device", "on"),
-    ] {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Bloom's own path: {e}"))?
+        .display()
+        .to_string();
+    for (name, state, what) in [(TASK_OFF, "off", "off"), (TASK_ON, "on", "on")] {
         let task = service.NewTask(0).map_err(|e| step("new task", e))?;
         task.RegistrationInfo()
             .and_then(|info| {
@@ -238,8 +311,7 @@ unsafe fn register(ids: &[String]) -> Result<(), String> {
             .and_then(|_| settings.SetExecutionTimeLimit(&BSTR::from("PT1M")))
             .and_then(|_| settings.SetMultipleInstances(TASK_INSTANCES_IGNORE_NEW))
             .map_err(|e| step("settings", e))?;
-        let task_log = crate::utils::data_file(TASK_LOG).map(|p| p.display().to_string());
-        let (path, arguments) = task_command(ids, verb, task_log.as_deref());
+        let (path, arguments) = task_command(&exe, ids, state);
         let action: IExecAction = task
             .Actions()
             .and_then(|actions| actions.Create(TASK_ACTION_EXEC))
@@ -358,7 +430,11 @@ fn switch(app: &AppHandle) -> Result<(), String> {
     let turn_off = devices.iter().any(|d| d.enabled);
     // The version of the setup is part of what is remembered, so tasks made
     // by an earlier Bloom are made again (once) when that changes.
-    let ids_text = format!("v4|{}", ids.join("|"));
+    // Bloom's path is part of it too: the tasks start Bloom.
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let ids_text = format!("v5|{exe}|{}", ids.join("|"));
     if crate::utils::get_setting_str(app, IDS_KEY).as_deref() != Some(ids_text.as_str()) {
         set_up(&ids)?;
         let _ = crate::commands::save_setting(app.clone(), IDS_KEY.into(), Value::String(ids_text));
@@ -383,7 +459,7 @@ fn switch(app: &AppHandle) -> Result<(), String> {
     log(&format!("ran {task}"));
     let handle = app.clone();
     std::thread::spawn(move || {
-        // pnputil takes a moment; the result is checked, not assumed.
+        // The change takes a moment; the result is checked, not assumed.
         let mut now_on = !turn_off;
         for _ in 0..40 {
             std::thread::sleep(Duration::from_millis(250));
@@ -393,9 +469,7 @@ fn switch(app: &AppHandle) -> Result<(), String> {
             }
         }
         if now_on == turn_off {
-            log(&format!(
-                "the task ran but the touchscreen didn't change within 10 s (pnputil's answer is in {TASK_LOG})"
-            ));
+            log("the task ran but the touchscreen didn't change within 10 s (the task's own lines above say why)");
         } else {
             log(if now_on {
                 "touchscreen is on"
@@ -425,19 +499,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn task_runs_only_pnputil_for_the_given_devices() {
+    fn task_starts_bloom_for_the_given_devices() {
         let (path, arguments) = task_command(
+            "C:\\Bloom\\bloom.exe",
             &["HID\\VID_1&PID_2\\3&ABC".to_string(), "HID\\X".to_string()],
-            "/disable-device",
-            Some("C:\\Data\\touchscreen-task.log"),
+            "off",
         );
-        assert!(path.ends_with("conhost.exe"));
-        assert!(arguments.starts_with("--headless "));
-        assert!(arguments.contains(
-            "pnputil.exe /disable-device \"HID\\VID_1&PID_2\\3&ABC\" >> \"C:\\Data\\touchscreen-task.log\" 2>&1 & "
-        ));
-        assert!(arguments.ends_with(
-            "pnputil.exe /disable-device \"HID\\X\" >> \"C:\\Data\\touchscreen-task.log\" 2>&1"
-        ));
+        assert_eq!(path, "C:\\Bloom\\bloom.exe");
+        assert_eq!(
+            arguments,
+            "--touchscreen-device off \"HID\\VID_1&PID_2\\3&ABC|HID\\X\""
+        );
     }
 }

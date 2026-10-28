@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Gauge, Keyboard, PanelTop, X } from "lucide-react";
+import { Keyboard, PanelTop, X } from "lucide-react";
+import { GHelperIcon } from "../icons/GHelperIcon";
 import { SettingRow } from "./SettingRow";
 import { HotkeyRecorder } from "./SearchBarTab";
 import { useStoredFlag, useStoredString } from "./useStoredSetting";
@@ -188,7 +189,7 @@ function BindingRow({
 	const effective = binding.action || without || "";
 	const insideOnly = ONLY_IN_GHELPER.includes(effective);
 	const desc = insideOnly
-		? "G-Helper does this one only from the laptop's own key, so a hotkey can't"
+		? "This is only available to toggle from the laptop's own keyboard"
 		: hotkeyTaken
 			? "Another app already uses this hotkey. Pick another (or close that app)"
 			: described
@@ -334,7 +335,7 @@ export function GHelperSettings() {
 		<>
 			<div className="setting-group-label">G-Helper</div>
 			<div className="setting-group">
-				<SettingRow icon={Gauge} label="G-Helper" desc={statusText}>
+				<SettingRow icon={GHelperIcon} label="G-Helper" desc={statusText}>
 					{state?.installed && !state.running && (
 						<button
 							type="button"

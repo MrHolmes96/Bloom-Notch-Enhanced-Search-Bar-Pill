@@ -72,6 +72,7 @@ import type {
 } from "./settings/index";
 import { initTheme } from "./theme";
 import "./Settings.css";
+import { GHelperIcon } from "./icons/GHelperIcon";
 
 const appWindow = getCurrentWebviewWindow();
 
@@ -182,7 +183,7 @@ const CATEGORIES: {
 		sections: [
 			{ id: "apps", label: "Apps", icon: Blocks },
 			{ id: "blitzit", label: "Blitzit", icon: Zap },
-			{ id: "ghelper", label: "G-Helper", icon: Gauge }
+			{ id: "ghelper", label: "G-Helper", icon: GHelperIcon }
 		]
 	},
 	{ id: "about", label: "About", icon: Info, sections: [] }
@@ -285,8 +286,8 @@ function SettingsApp() {
 	// The settings window follows the notch's size.
 	useEffect(() => {
 		invoke("resize_settings_window", {
-			width: 620 * settings.notchScale,
-			height: 480 * settings.notchScale
+			width: 1010 * settings.notchScale,
+			height: 660 * settings.notchScale
 		}).catch(console.error);
 	}, [settings.notchScale]);
 

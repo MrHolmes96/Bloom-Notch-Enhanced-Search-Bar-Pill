@@ -392,7 +392,6 @@ pub fn export_logs(app: Option<&AppHandle>) -> Result<PathBuf, String> {
         "taskbar-progress.log",
         "notification-clicks.log",
         "ghelper.log",
-        "touchscreen-task.log",
         "tray-app-hidden.txt",
         "tray-icons.txt",
         "restarts.txt",
@@ -427,6 +426,11 @@ pub fn run_command(arg: &std::ffi::OsStr, rest: &[std::ffi::OsString]) -> bool {
         // Run as administrator once, to set up the touchscreen tasks.
         arg if arg == crate::touchscreen::REGISTER_ARG => {
             let done = crate::touchscreen::register_tasks(rest);
+            std::process::exit(if done { 0 } else { 1 });
+        }
+        // Run as administrator by one of those tasks: the touchscreen off/on.
+        arg if arg == crate::touchscreen::DEVICE_ARG => {
+            let done = crate::touchscreen::set_devices(rest);
             std::process::exit(if done { 0 } else { 1 });
         }
         "--update-watchdog" => {
