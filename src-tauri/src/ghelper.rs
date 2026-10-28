@@ -505,37 +505,52 @@ fn press(modifiers: &[u16], key: u16) {
         },
     };
     // The user's own shortcut may still be held (Bloom acts on its key
-    // going down): those keys are let go of first, so the app gets exactly
-    // this combination and not, say, Alt with it. A key no one uses goes
-    // first, so letting go of Alt or Win doesn't open a menu or Start.
-    let held: Vec<u16> = [
-        VK_LSHIFT_CODE,
-        VK_RSHIFT_CODE,
-        VK_LCONTROL_CODE,
-        VK_RCONTROL_CODE,
-        VK_LMENU_CODE,
-        VK_RMENU_CODE,
-        VK_LWIN,
-        VK_RWIN_CODE,
-    ]
-    .into_iter()
-    .filter(|&vk| unsafe {
-        windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk as i32) as u16 & 0x8000
-            != 0
-    })
-    .collect();
+    // going down). Its keys mixed into this combination stop the app from
+    // seeing it, so this waits for them to be let go of (as a click in the
+    // notch, which never has keys held, always works). Held on longer than
+    // 1.5 s, they are let go of for it instead; a key no one uses goes first,
+    // so letting go of Alt or Win doesn't open a menu or Start.
+    let held = || -> Vec<u16> {
+        [
+            VK_LSHIFT_CODE,
+            VK_RSHIFT_CODE,
+            VK_LCONTROL_CODE,
+            VK_RCONTROL_CODE,
+            VK_LMENU_CODE,
+            VK_RMENU_CODE,
+            VK_LWIN,
+            VK_RWIN_CODE,
+        ]
+        .into_iter()
+        .filter(|&vk| unsafe {
+            windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk as i32) as u16 & 0x8000
+                != 0
+        })
+        .collect()
+    };
+    let started = Instant::now();
+    let mut still = held();
+    while !still.is_empty() && started.elapsed() < Duration::from_millis(1500) {
+        std::thread::sleep(Duration::from_millis(15));
+        still = held();
+    }
     let mut inputs: Vec<INPUT> = Vec::new();
-    if !held.is_empty() {
+    if !still.is_empty() {
         inputs.push(event(VK_UNASSIGNED, false));
         inputs.push(event(VK_UNASSIGNED, true));
-        inputs.extend(held.iter().map(|&m| event(m, true)));
+        inputs.extend(still.iter().map(|&m| event(m, true)));
     }
     inputs.extend(modifiers.iter().map(|&m| event(m, false)));
     inputs.push(event(key, false));
     inputs.push(event(key, true));
     inputs.extend(modifiers.iter().rev().map(|&m| event(m, true)));
-    unsafe {
-        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    if sent as usize != inputs.len() {
+        log(&format!(
+            "keys: Windows took {sent} of {} key events ({})",
+            inputs.len(),
+            windows::core::Error::from_win32()
+        ));
     }
 }
 
@@ -1087,21 +1102,29 @@ fn set_mode(app: &AppHandle, mode: i64) -> Result<(), String> {
     })
 }
 
-/// The next mode, in G-Helper's order. G-Helper's own cycle shortcut waits
-/// a second (its "mode_delay") before it applies the mode, so the next mode
-/// is asked for by its own shortcut instead, which G-Helper applies at once
-/// with the same pop-up. The cycle shortcut is only used for a mode that has
-/// no shortcut of its own.
-/// G-Helper's mode pop-up ("Balanced", with the battery or charger icon),
-/// shown by Bloom when G-Helper's own didn't come up a moment after Bloom's
-/// shortcut changed the mode, so it is there every time and never twice.
-fn mode_toast(name: String) {
+/// G-Helper's mode pop-up ("Balanced", with the battery or charger icon).
+/// G-Helper shows it itself when its shortcut reaches it; Bloom shows the
+/// same one only when G-Helper's didn't come up and G-Helper did change to
+/// `mode`, so it never shows a mode that wasn't set, and never twice.
+fn mode_toast(mode: i64, name: String) {
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(500));
         if !osd_enabled() {
             return;
         }
-        if find_process().is_some_and(|(pid, _)| crate::ghelper_toast::ghelper_toast_visible(pid)) {
+        let pid = find_process().map(|(pid, _)| pid);
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_millis(700) {
+            if pid.is_some_and(crate::ghelper_toast::ghelper_toast_visible) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if !wait_for(Duration::from_millis(3000), |c| {
+            int(c, "performance_mode") == Some(mode)
+        }) {
+            log(&format!(
+                "mode: G-Helper hasn't changed to {mode}, so no pop-up"
+            ));
             return;
         }
         let plugged_in = unsafe {
@@ -1124,6 +1147,11 @@ fn mode_toast(name: String) {
 /// Bloom restarts) its cycle shortcut is used, which it always takes.
 static MODE_KEYS_IGNORED: AtomicBool = AtomicBool::new(false);
 
+/// The next mode, in G-Helper's order. G-Helper's own cycle shortcut waits
+/// a second (its "mode_delay") before it applies the mode, so the next mode
+/// is asked for by its own shortcut instead, which G-Helper applies at once
+/// with the same pop-up. The cycle shortcut is only used for a mode that has
+/// no shortcut of its own.
 fn cycle_mode(app: &AppHandle) -> Result<(), String> {
     let config = read_config().ok_or("G-Helper's settings file wasn't found")?;
     let list = modes(&config);
@@ -1144,7 +1172,7 @@ fn cycle_mode(app: &AppHandle) -> Result<(), String> {
         ));
         remember_mode(next);
         emit_changed(app);
-        mode_toast(next_name.clone());
+        mode_toast(next, next_name.clone());
         // G-Helper notes the new mode in its settings file within 2 s. When
         // it doesn't (the shortcut didn't reach it), its cycle shortcut is
         // sent instead, unless another mode was asked for meanwhile.
@@ -1164,7 +1192,7 @@ fn cycle_mode(app: &AppHandle) -> Result<(), String> {
             if let Some(config) = read_config() {
                 if send_cycle(&config) {
                     emit_changed(&handle);
-                    mode_toast(next_name);
+                    mode_toast(next, next_name);
                 }
             }
         });
@@ -1176,7 +1204,7 @@ fn cycle_mode(app: &AppHandle) -> Result<(), String> {
         ));
         remember_mode(next);
         emit_changed(app);
-        mode_toast(next_name);
+        mode_toast(next, next_name);
         return Ok(());
     }
     set_mode(app, next)
