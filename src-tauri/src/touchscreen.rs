@@ -120,12 +120,19 @@ fn log(line: &str) {
     crate::ghelper::log(&format!("touchscreen: {line}"));
 }
 
-/// What a task runs: pnputil for each touchscreen, with no window.
-fn task_command(ids: &[String], verb: &str) -> (String, String) {
+/// Where the tasks write what pnputil answered (in Export Diagnostics).
+pub const TASK_LOG: &str = "touchscreen-task.log";
+
+/// What a task runs: pnputil for each touchscreen, with no window. What
+/// pnputil answers goes into `log` (a path), so a failure can be seen.
+fn task_command(ids: &[String], verb: &str, log: Option<&str>) -> (String, String) {
     let pnputil = system32("pnputil.exe").display().to_string();
+    let to_log = log
+        .map(|path| format!(" >> \"{path}\" 2>&1"))
+        .unwrap_or_default();
     let commands: Vec<String> = ids
         .iter()
-        .map(|id| format!("{pnputil} {verb} \"{id}\""))
+        .map(|id| format!("{pnputil} {verb} \"{id}\"{to_log}"))
         .collect();
     (
         system32("conhost.exe").display().to_string(),
@@ -231,7 +238,8 @@ unsafe fn register(ids: &[String]) -> Result<(), String> {
             .and_then(|_| settings.SetExecutionTimeLimit(&BSTR::from("PT1M")))
             .and_then(|_| settings.SetMultipleInstances(TASK_INSTANCES_IGNORE_NEW))
             .map_err(|e| step("settings", e))?;
-        let (path, arguments) = task_command(ids, verb);
+        let task_log = crate::utils::data_file(TASK_LOG).map(|p| p.display().to_string());
+        let (path, arguments) = task_command(ids, verb, task_log.as_deref());
         let action: IExecAction = task
             .Actions()
             .and_then(|actions| actions.Create(TASK_ACTION_EXEC))
@@ -350,7 +358,7 @@ fn switch(app: &AppHandle) -> Result<(), String> {
     let turn_off = devices.iter().any(|d| d.enabled);
     // The version of the setup is part of what is remembered, so tasks made
     // by an earlier Bloom are made again (once) when that changes.
-    let ids_text = format!("v3|{}", ids.join("|"));
+    let ids_text = format!("v4|{}", ids.join("|"));
     if crate::utils::get_setting_str(app, IDS_KEY).as_deref() != Some(ids_text.as_str()) {
         set_up(&ids)?;
         let _ = crate::commands::save_setting(app.clone(), IDS_KEY.into(), Value::String(ids_text));
@@ -377,7 +385,7 @@ fn switch(app: &AppHandle) -> Result<(), String> {
     std::thread::spawn(move || {
         // pnputil takes a moment; the result is checked, not assumed.
         let mut now_on = !turn_off;
-        for _ in 0..16 {
+        for _ in 0..40 {
             std::thread::sleep(Duration::from_millis(250));
             now_on = touch_screens().iter().any(|d| d.enabled);
             if now_on != turn_off {
@@ -385,8 +393,17 @@ fn switch(app: &AppHandle) -> Result<(), String> {
             }
         }
         if now_on == turn_off {
-            log("the task ran but the touchscreen didn't change");
-        } else if crate::ghelper::osd_enabled() {
+            log(&format!(
+                "the task ran but the touchscreen didn't change within 10 s (pnputil's answer is in {TASK_LOG})"
+            ));
+        } else {
+            log(if now_on {
+                "touchscreen is on"
+            } else {
+                "touchscreen is off"
+            });
+        }
+        if now_on != turn_off && crate::ghelper::osd_enabled() {
             // G-Helper's own words and icon: "Touchscreen On" / "Off".
             crate::ghelper_toast::show(
                 if now_on {
@@ -412,10 +429,15 @@ mod tests {
         let (path, arguments) = task_command(
             &["HID\\VID_1&PID_2\\3&ABC".to_string(), "HID\\X".to_string()],
             "/disable-device",
+            Some("C:\\Data\\touchscreen-task.log"),
         );
         assert!(path.ends_with("conhost.exe"));
         assert!(arguments.starts_with("--headless "));
-        assert!(arguments.contains("pnputil.exe /disable-device \"HID\\VID_1&PID_2\\3&ABC\" & "));
-        assert!(arguments.ends_with("pnputil.exe /disable-device \"HID\\X\""));
+        assert!(arguments.contains(
+            "pnputil.exe /disable-device \"HID\\VID_1&PID_2\\3&ABC\" >> \"C:\\Data\\touchscreen-task.log\" 2>&1 & "
+        ));
+        assert!(arguments.ends_with(
+            "pnputil.exe /disable-device \"HID\\X\" >> \"C:\\Data\\touchscreen-task.log\" 2>&1"
+        ));
     }
 }

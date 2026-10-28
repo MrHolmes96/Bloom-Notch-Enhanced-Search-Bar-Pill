@@ -1059,6 +1059,9 @@ fn cycle_mode(app: &AppHandle) -> Result<(), String> {
     if find_process().is_some() && !shortcuts_off(&config) {
         if let Some(key) = mode_key(&config, next) {
             press(&alt_modifiers(&config), key);
+            log(&format!(
+                "mode: from {now} to {next}, sent G-Helper's shortcut for it (key {key:#04x})"
+            ));
             remember_mode(next);
             emit_changed(app);
             return Ok(());
@@ -1066,6 +1069,9 @@ fn cycle_mode(app: &AppHandle) -> Result<(), String> {
         let key = int(&config, "keybind_profile").unwrap_or(VK_F5 as i64);
         if key > 0 && key < 0xFF {
             press(&main_modifiers(&config), key as u16);
+            log(&format!(
+                "mode: from {now} to {next}, sent G-Helper's cycle shortcut (key {key:#04x})"
+            ));
             remember_mode(next);
             emit_changed(app);
             return Ok(());
