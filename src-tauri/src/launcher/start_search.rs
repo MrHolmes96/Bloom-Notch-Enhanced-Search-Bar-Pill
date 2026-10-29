@@ -220,42 +220,42 @@ static SYSTEM_SETTINGS: OnceLock<Vec<SystemSetting>> = OnceLock::new();
 /// Windows' own index of its settings
 /// (`%SystemRoot%\ImmersiveControlPanel\Settings\AllSystemSettings_*.xml`),
 /// which the Settings app's search uses. Empty when this Windows has none.
-#[tauri::command]
-pub async fn launcher_system_settings() -> Vec<SystemSetting> {
-    tauri::async_runtime::spawn_blocking(|| {
-        SYSTEM_SETTINGS
-            .get_or_init(|| {
-                let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
-                let folder = std::path::Path::new(&root).join("ImmersiveControlPanel\\Settings");
-                let Ok(entries) = std::fs::read_dir(folder) else {
-                    return Vec::new();
-                };
-                let mut seen = HashSet::new();
-                let mut found = Vec::new();
-                for entry in entries.flatten() {
-                    let file = entry.file_name().to_string_lossy().to_lowercase();
-                    if !file.starts_with("allsystemsettings") || !file.ends_with(".xml") {
-                        continue;
-                    }
-                    let Ok(bytes) = std::fs::read(entry.path()) else {
-                        continue;
-                    };
-                    let text = decode(&bytes);
-                    for block in text.split("<SearchableContent").skip(1) {
-                        let block = block.split("</SearchableContent>").next().unwrap_or(block);
-                        if let Some(setting) = parse_setting(block) {
-                            if seen.insert((setting.name.to_lowercase(), setting.command.clone())) {
-                                found.push(setting);
-                            }
-                        }
+pub fn system_settings() -> &'static Vec<SystemSetting> {
+    SYSTEM_SETTINGS.get_or_init(|| {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+        let folder = std::path::Path::new(&root).join("ImmersiveControlPanel\\Settings");
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::new();
+        let mut found = Vec::new();
+        for entry in entries.flatten() {
+            let file = entry.file_name().to_string_lossy().to_lowercase();
+            if !file.starts_with("allsystemsettings") || !file.ends_with(".xml") {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(entry.path()) else {
+                continue;
+            };
+            let text = decode(&bytes);
+            for block in text.split("<SearchableContent").skip(1) {
+                let block = block.split("</SearchableContent>").next().unwrap_or(block);
+                if let Some(setting) = parse_setting(block) {
+                    if seen.insert((setting.name.to_lowercase(), setting.command.clone())) {
+                        found.push(setting);
                     }
                 }
-                found
-            })
-            .clone()
+            }
+        }
+        found
     })
-    .await
-    .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn launcher_system_settings() -> Vec<SystemSetting> {
+    tauri::async_runtime::spawn_blocking(|| system_settings().clone())
+        .await
+        .unwrap_or_default()
 }
 
 /// The file as text: UTF-16 with a byte order mark, or UTF-8.

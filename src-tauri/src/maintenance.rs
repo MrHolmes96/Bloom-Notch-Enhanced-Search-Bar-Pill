@@ -267,6 +267,16 @@ fn health(app: Option<&AppHandle>) -> String {
             }
         ),
     ];
+    let settings = crate::launcher::start_search::system_settings();
+    lines.push(format!(
+        "Settings search: {} settings from Windows' index{}",
+        settings.len(),
+        settings
+            .iter()
+            .find(|s| s.command.contains("keyboard") || s.name.to_lowercase().contains("keyboard"))
+            .map(|s| format!(" (for example \"{}\": {})", s.name, s.command))
+            .unwrap_or_default()
+    ));
     if app.is_some() {
         let tray = crate::tray_host::window() != 0;
         let tasks = crate::taskbar_progress::window() != 0;

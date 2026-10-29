@@ -293,8 +293,20 @@ export const WINDOWS_SETTINGS: WindowsSettingRow[] = [
 	["Date and time", "Time and language", "A", "ms-settings:dateandtime", ""],
 	["Japan IME settings", "Time and language", "A", "ms-settings:regionlanguage-jpnime", "jpnime"],
 	["Region", "Time and language", "A", "ms-settings:regionformatting", "region formatting"],
-	["Keyboard", "Time and language", "A", "ms-settings:keyboard", ""],
-	["Regional language", "Time and language", "A", "ms-settings:regionlanguage", ""],
+	[
+		"Keyboard",
+		"Time and language",
+		"A",
+		"ms-settings:keyboard",
+		"keyboard layout input method switch keyboard language bar"
+	],
+	[
+		"Language & region",
+		"Time and language",
+		"A",
+		"ms-settings:regionlanguage",
+		"regional language keyboard layout add keyboard input language display language"
+	],
 	["Bopomofo IME", "Time and language", "A", "ms-settings:regionlanguage-bpmfime", "bpmf"],
 	["Cangjie IME", "Time and language", "A", "ms-settings:regionlanguage-cangjieime", ""],
 	[

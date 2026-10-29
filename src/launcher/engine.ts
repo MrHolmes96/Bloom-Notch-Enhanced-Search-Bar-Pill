@@ -132,7 +132,9 @@ function runGlobal(ctx: SearchContext, search: string, isCurrent: () => boolean)
 	if (isGlobal(config, "url") && !location) now.push(...searchUrl(ctx, q));
 	if (isGlobal(config, "programs") && !location) now.push(...searchPrograms(ctx, q));
 	if (isGlobal(config, "system") && !location) now.push(...searchSystem(ctx, q));
-	if (isGlobal(config, "settings") && !location) now.push(...searchWindowsSettings(ctx, q));
+	// Windows' settings are part of every search, as in Start (their keyword
+	// still shows them alone).
+	if (config.plugins.settings.enabled && !location) now.push(...searchWindowsSettings(ctx, q));
 	if (isGlobal(config, "shell")) now.push(...searchShell(ctx, q).slice(0, 1));
 	if (config.plugins.web.enabled && !location) {
 		now.push(...searchWeb(ctx, null, q));

@@ -99,7 +99,9 @@ export function searchWindowsSettings(ctx: SearchContext, search: string): Resul
 	const out: Result[] = [];
 	const names = new Set<string>();
 	for (const [name, area, kind, command, extra] of WINDOWS_SETTINGS) {
-		const score = bestMatch(q, [name, extra, area], [1, 0.75, 0.5]);
+		// The name and its search words together too, as Start matches them:
+		// "keyboard layout" finds Keyboard ("layout" being a search word).
+		const score = bestMatch(q, [name, extra, area, `${name} ${extra}`], [1, 0.75, 0.5, 0.7]);
 		if (score < ctx.min) continue;
 		names.add(name.toLowerCase());
 		out.push(
@@ -117,7 +119,11 @@ export function searchWindowsSettings(ctx: SearchContext, search: string): Resul
 	if (!systemSettings.length) loadSystemSettings();
 	for (const setting of systemSettings) {
 		if (names.has(setting.name.toLowerCase())) continue;
-		const score = bestMatch(q, [setting.name, setting.words], [1, 0.75]);
+		const score = bestMatch(
+			q,
+			[setting.name, setting.words, `${setting.name} ${setting.words}`],
+			[1, 0.75, 0.7]
+		);
 		if (score < ctx.min) continue;
 		names.add(setting.name.toLowerCase());
 		const where = setting.command.startsWith("ms-settings:") ? "Settings" : "Control Panel";
