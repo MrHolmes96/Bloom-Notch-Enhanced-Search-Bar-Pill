@@ -31,6 +31,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const ANSWER_MS: u32 = 1500;
 /// Checks in a row without an answer before Bloom restarts.
 const MISSES: u32 = 3;
+/// The same while Explorer doesn't answer either (about 20 s or more).
+const MISSES_EXPLORER_STUCK: u32 = 6;
 
 /// Whether the window's thread answers (true also when there is no window).
 fn answers(window: isize) -> bool {
@@ -78,15 +80,20 @@ pub fn start(app: AppHandle) {
                     }
                     // Bloom's threads pass messages on to Explorer and wait for
                     // it: while Explorer itself doesn't answer (signing in, or
-                    // restarting) the wait is Explorer's, not Bloom's.
+                    // restarting) the wait may be Explorer's, not Bloom's, so
+                    // it is given longer. But never for ever: Explorer can be
+                    // the one waiting on Bloom, and then neither would answer.
                     let explorer = crate::tray_host::explorer_taskbar()
                         .map(|hwnd| hwnd.0 as isize)
                         .unwrap_or(0);
-                    if explorer == 0 || !answers(explorer) {
-                        continue;
-                    }
+                    let explorer_answers = explorer != 0 && answers(explorer);
                     misses[index] += 1;
-                    if misses[index] < MISSES {
+                    let needed = if explorer_answers {
+                        MISSES
+                    } else {
+                        MISSES_EXPLORER_STUCK
+                    };
+                    if misses[index] < needed {
                         continue;
                     }
                     // Apps reporting progress or tabs go straight to Explorer
@@ -100,8 +107,9 @@ pub fn start(app: AppHandle) {
                         continue;
                     }
                     crate::utils::note_crash(&format!(
-                        "Bloom's {name} window stopped answering apps for {} s; restarting Bloom so no app waits on it",
-                        MISSES * 2
+                        "Bloom's {name} window stopped answering apps for {} s{}; restarting Bloom so no app waits on it",
+                        needed * 2,
+                        if explorer_answers { "" } else { " (Explorer didn't answer either)" }
                     ));
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move {

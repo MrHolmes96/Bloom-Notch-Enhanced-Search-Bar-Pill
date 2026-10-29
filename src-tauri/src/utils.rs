@@ -101,6 +101,12 @@ const FROZEN_EXIT: u32 = 0xE0B1_0001;
 /// Checks in a row without an answer before Bloom counts as frozen (one
 /// every 2 s plus up to 2 s waiting for each: 15 to 30 s).
 const FROZEN_CHECKS: u32 = 8;
+/// Exit code the watchdog ends Bloom with when other apps are stuck
+/// together (also treated as a crash: taskbar back, Bloom started again).
+const APPS_STUCK_EXIT: u32 = 0xE0B1_0002;
+/// Checks in a row with two or more apps stuck (each already stuck 5 s by
+/// Windows' count): about 15 to 20 s.
+const STUCK_APPS_CHECKS: u32 = 5;
 
 /// Whether Bloom's windows answer: its visible windows (the notch, the dock,
 /// the pop-ups) all run on its main thread, so one of them answering is
@@ -308,6 +314,7 @@ unsafe fn watch_until_exit(
     let mut last = std::time::Instant::now();
     let mut usage = UsageWatch::new();
     let mut rounds = 0u32;
+    let mut stuck_apps = 0u32;
     loop {
         let result = WaitForSingleObject(parent, 2000);
         if result != WAIT_TIMEOUT {
@@ -320,31 +327,108 @@ unsafe fn watch_until_exit(
         let now = std::time::Instant::now();
         // A long gap means Windows slept: start counting again.
         let slept = now.duration_since(last) > std::time::Duration::from_secs(10);
-        last = now;
         if slept || started.elapsed() < std::time::Duration::from_secs(90) || session_ending() {
             misses = 0;
-            continue;
-        }
-        if bloom_answers(parent_pid) {
-            misses = 0;
+            stuck_apps = 0;
             last = std::time::Instant::now();
             continue;
         }
+        let answering = bloom_answers(parent_pid);
+        misses = if answering { 0 } else { misses + 1 };
+        // Other apps stuck together while Bloom runs: an app waits on the
+        // taskbar (its tray icon, its progress, a strip at the screen's
+        // edge), and Bloom stands in for the taskbar. Whatever the cause,
+        // Bloom steps aside so nothing can keep waiting on it.
+        let hung = hung_apps(parent_pid);
+        stuck_apps = if hung.len() >= 2 { stuck_apps + 1 } else { 0 };
         last = std::time::Instant::now();
-        misses += 1;
-        if misses < FROZEN_CHECKS {
+        let (reason, code) = if misses >= FROZEN_CHECKS {
+            (
+                format!(
+                    "Bloom's windows stopped answering for {} s or more: ended so it starts again cleanly",
+                    FROZEN_CHECKS * 2
+                ),
+                FROZEN_EXIT,
+            )
+        } else if stuck_apps >= STUCK_APPS_CHECKS {
+            (
+                format!(
+                    "Apps stopped responding together for {} s or more ({}); Bloom {}: ended so no app can wait on it, the taskbar put back and Bloom started again",
+                    STUCK_APPS_CHECKS * 2,
+                    hung.join(", "),
+                    if answering { "still answered" } else { "didn't answer either" }
+                ),
+                APPS_STUCK_EXIT,
+            )
+        } else {
             continue;
-        }
-        note_crash(&format!(
-            "Bloom's windows stopped answering for {} s or more: ended so it starts again cleanly",
-            FROZEN_CHECKS * 2
-        ));
-        if TerminateProcess(parent, FROZEN_EXIT).is_err() {
+        };
+        note_crash(&reason);
+        if TerminateProcess(parent, code).is_err() {
             misses = 0;
+            stuck_apps = 0;
             continue;
         }
         return WaitForSingleObject(parent, 10_000);
     }
+}
+
+/// Apps (other than Bloom) with a window that has stopped responding, as
+/// Windows counts it (no answer for 5 s): shown windows only, not ones
+/// Windows keeps cloaked (suspended Store apps). Each app once, by name.
+fn hung_apps(bloom_pid: u32) -> Vec<String> {
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM};
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, IsHungAppWindow, IsWindowVisible,
+    };
+    struct Search {
+        bloom: u32,
+        pids: Vec<u32>,
+    }
+    unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let search = &mut *(lparam.0 as *mut Search);
+        if !IsWindowVisible(hwnd).as_bool() || !IsHungAppWindow(hwnd).as_bool() {
+            return BOOL(1);
+        }
+        let mut cloaked = 0u32;
+        let _ = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            &mut cloaked as *mut u32 as *mut _,
+            std::mem::size_of::<u32>() as u32,
+        );
+        if cloaked != 0 {
+            return BOOL(1);
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid != 0 && pid != search.bloom && !search.pids.contains(&pid) {
+            search.pids.push(pid);
+        }
+        BOOL(1)
+    }
+    let mut search = Search {
+        bloom: bloom_pid,
+        pids: Vec::new(),
+    };
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut search as *mut Search as isize));
+    }
+    search
+        .pids
+        .into_iter()
+        .map(|pid| {
+            unsafe { crate::commands::process_image_path(pid) }
+                .and_then(|path| {
+                    std::path::Path::new(&path)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .unwrap_or_else(|| format!("process {pid}"))
+        })
+        .collect()
 }
 
 pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
@@ -483,6 +567,20 @@ pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
             note_crash("Started Bloom again");
         }
     }
+    // For the record: whether the stuck apps came back once Bloom was gone,
+    // which tells whether Bloom was what they waited on.
+    if code == APPS_STUCK_EXIT {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let still = hung_apps(0);
+        note_crash(&if still.is_empty() {
+            "The stuck apps answer again since Bloom was ended".to_string()
+        } else {
+            format!(
+                "Still stuck after Bloom was ended ({}): the cause is outside Bloom",
+                still.join(", ")
+            )
+        });
+    }
 }
 
 /// An exit code that means Bloom crashed, not that it was ended: Windows'
@@ -502,6 +600,7 @@ fn crash_meaning(code: u32) -> &'static str {
         0xC000_0017 | 0xC000_012D => "out of memory",
         0xE06D_7363 => "unhandled C++ exception",
         FROZEN_EXIT => "frozen (its windows stopped answering)",
+        APPS_STUCK_EXIT => "ended because other apps were stuck",
         101 => "a Rust panic on the main thread",
         _ => "crash",
     }
