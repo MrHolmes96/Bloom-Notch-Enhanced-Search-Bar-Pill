@@ -677,6 +677,93 @@ fn write_marker(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
     file.sync_all()
 }
 
+/// Makes sure this Bloom is gone within `after`, whatever hangs on its way
+/// out (a web view whose process died, Windows' window library): a Bloom that
+/// asked to quit or restart never lingers with its windows on screen. On a
+/// restart the next Bloom is started here too, unless one already runs.
+pub fn exit_fuse(after: std::time::Duration, start_next: bool) {
+    let _ = std::thread::Builder::new()
+        .name("bloom-exit-fuse".into())
+        .spawn(move || {
+            std::thread::sleep(after);
+            note_crash(&format!(
+                "Bloom was still closing after {} s: ended{}",
+                after.as_secs(),
+                if start_next { " and started again" } else { "" }
+            ));
+            if start_next && !another_bloom_runs() {
+                if let Ok(exe) = std::env::current_exe() {
+                    let _ = std::process::Command::new(exe)
+                        .arg(crate::startup::AUTOSTART_ARG)
+                        .spawn();
+                }
+            }
+            unsafe {
+                use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+                let _ = TerminateProcess(GetCurrentProcess(), 0);
+            }
+        });
+}
+
+/// Another Bloom holds the one-copy lock (this one let go of it to restart).
+fn another_bloom_runs() -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
+    unsafe {
+        match OpenMutexW(
+            SYNCHRONIZATION_SYNCHRONIZE,
+            false,
+            windows::core::w!("BloomSingleInstance"),
+        ) {
+            Ok(handle) => {
+                let _ = CloseHandle(handle);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+/// The Bloom before this one (from the marker) is still there: it was
+/// closing and got stuck. Given 8 s to finish, then ended, so two Blooms
+/// never fight over the taskbar, the tray and the screen's edges. Only a
+/// process running this same program is ever ended.
+fn end_stale_bloom(pid: u32) {
+    use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{
+        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    };
+    if pid == 0 || pid == std::process::id() {
+        return;
+    }
+    let same_program = match (
+        unsafe { crate::commands::process_image_path(pid) },
+        std::env::current_exe(),
+    ) {
+        (Some(path), Ok(exe)) => path.eq_ignore_ascii_case(&exe.to_string_lossy()),
+        _ => false,
+    };
+    if !same_program {
+        return;
+    }
+    unsafe {
+        let Ok(process) = OpenProcess(
+            PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+            false,
+            pid,
+        ) else {
+            return;
+        };
+        if WaitForSingleObject(process, 8000) != WAIT_OBJECT_0 {
+            note_crash("The Bloom before was still running, stuck closing: ended");
+            let _ = TerminateProcess(process, 0);
+            let _ = WaitForSingleObject(process, 3000);
+        }
+        let _ = CloseHandle(process);
+    }
+}
+
 /// At start, with a marker left by the Bloom before: the taskbar was left
 /// hidden on purpose or by a crash. This Bloom takes it over as it is (the
 /// user's own auto-hide setting and position come from the marker), instead
@@ -690,6 +777,9 @@ pub fn adopt_taskbar_marker() -> bool {
     let Ok(contents) = std::fs::read_to_string(path) else {
         return false;
     };
+    if let Some(before) = parse_marker_pid(&contents) {
+        end_stale_bloom(before);
+    }
     let Some(state) = parse_marker_state(&contents) else {
         return false;
     };

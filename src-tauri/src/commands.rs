@@ -3536,7 +3536,9 @@ pub fn release_appbars(handle: &AppHandle) {
 /// handlers so that any shutdown path (including Task Manager's WM_CLOSE) behaves
 /// identically.
 pub fn restore_taskbar_and_exit(handle: &AppHandle) {
-    SHUTTING_DOWN.store(true, Ordering::Relaxed);
+    if !SHUTTING_DOWN.swap(true, Ordering::Relaxed) {
+        crate::utils::exit_fuse(std::time::Duration::from_secs(8), false);
+    }
     release_appbars(handle);
     // Handed to the next Bloom (an update): it stays hidden.
     if !HANDING_OVER.load(Ordering::Relaxed) {
@@ -3563,7 +3565,9 @@ pub async fn quit_bloom(handle: AppHandle) {
 
 #[tauri::command]
 pub async fn restart_bloom(handle: AppHandle) {
-    SHUTTING_DOWN.store(true, Ordering::Relaxed);
+    if !SHUTTING_DOWN.swap(true, Ordering::Relaxed) {
+        crate::utils::exit_fuse(std::time::Duration::from_secs(8), true);
+    }
     if let Some(w) = handle.get_webview_window("main") {
         if let Ok(hwnd) = w.hwnd() {
             unregister_appbar_native(hwnd);

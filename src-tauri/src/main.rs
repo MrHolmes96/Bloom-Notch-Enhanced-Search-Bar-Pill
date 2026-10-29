@@ -576,6 +576,7 @@ fn main() {
                     .on_menu_event(move |_, event| match event.id().as_ref() {
                         "quit" => {
                             SHUTTING_DOWN.store(true, Ordering::Relaxed);
+                            crate::utils::exit_fuse(std::time::Duration::from_secs(8), false);
                             if let Some(w) = ah.get_webview_window("main") {
                                 unregister_appbar_native(w.hwnd().unwrap());
                             }
@@ -590,6 +591,7 @@ fn main() {
                         }
                         "restart" => {
                             SHUTTING_DOWN.store(true, Ordering::Relaxed);
+                            crate::utils::exit_fuse(std::time::Duration::from_secs(8), true);
                             if let Some(w) = ah.get_webview_window("main") {
                                 unregister_appbar_native(w.hwnd().unwrap());
                             }
