@@ -529,7 +529,7 @@ fn main() {
             hang_guard::start(app.handle().clone());
             snap_borders::apply(app.handle());
             startup::listen_for_quit(app.handle().clone());
-            startup::migrate(app.handle());
+            startup::keep(app.handle());
             startup::clean_update_watchers();
             maintenance::repair_after_windows_update();
             window_memory::start(app.handle().clone());

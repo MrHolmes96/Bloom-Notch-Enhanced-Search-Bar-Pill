@@ -263,6 +263,8 @@ const Dock = memo(function Dock() {
 	const [isExpanded, setIsExpanded] = useState(false);
 	/** The dock height last sent to Bloom (`set_dock_height`). */
 	const sentDockHeight = useRef(0);
+	/** Sends a new dock height once it has held for a moment. */
+	const heightTimer = useRef<number | null>(null);
 	const [startupAnimating, setStartupAnimating] = useState(false);
 	const [customIcons, setCustomIcons] = useState<Record<string, string>>({});
 	const [toast, setToast] = useState<string | null>(null);
@@ -404,14 +406,32 @@ const Dock = memo(function Dock() {
 						bottom = Math.max(bottom, box.bottom);
 					}
 				}
-				// The dock's own height at rest (not while it slides or shows a
-				// preview): the strip Windows keeps free for it is that plus a
-				// small gap, so snapped and maximized windows stop just above it.
+				// The dock's own height at rest: the strip Windows keeps free for
+				// it is that plus the gap setting, so snapped and maximized
+				// windows stop just above it. Measured from its content and
+				// padding, never from its animated outline (which passes through
+				// every height while it opens or springs), whole pixels only, and
+				// sent once it has held for a second: each new height moves
+				// every maximized window, so it must never change in a stream.
 				if (isExpanded && !isHidden && isVisible && !previewData) {
-					const height = dockRef.current.offsetHeight * scale;
-					if (height > 34 * scale && Math.abs(height - sentDockHeight.current) >= 0.5) {
-						sentDockHeight.current = height;
-						invoke("set_dock_height", { height }).catch(() => {});
+					const dock = dockRef.current;
+					const content = dock.querySelector<HTMLElement>(":scope > .dock-reorder-container");
+					if (content) {
+						const style = getComputedStyle(dock);
+						const rest =
+							content.offsetHeight +
+							parseFloat(style.paddingTop || "0") +
+							parseFloat(style.paddingBottom || "0");
+						const height = Math.round(rest * scale);
+						if (rest >= 34 && height !== sentDockHeight.current) {
+							if (heightTimer.current !== null) window.clearTimeout(heightTimer.current);
+							heightTimer.current = window.setTimeout(() => {
+								heightTimer.current = null;
+								if (height === sentDockHeight.current) return;
+								sentDockHeight.current = height;
+								invoke("set_dock_height", { height }).catch(() => {});
+							}, 1000);
+						}
 					}
 				}
 				invoke("update_dock_rect", {

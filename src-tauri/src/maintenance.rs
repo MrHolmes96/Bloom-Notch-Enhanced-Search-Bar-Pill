@@ -211,6 +211,7 @@ fn message(text: &str) {
 
 /// `--recovery`: Windows as it was, at once. Also from the Start menu.
 pub fn recovery() {
+    crate::startup::set_wanted(false);
     crate::startup::restore_windows();
     let mut lines = vec![
         "Windows' taskbar and pop-ups are back, and Bloom no longer starts with Windows."
@@ -226,12 +227,14 @@ pub fn recovery() {
 
 /// `--disable`: Bloom off and not starting with Windows (quietly).
 pub fn disable() {
+    crate::startup::set_wanted(false);
     crate::startup::restore_windows();
     crate::utils::note_crash("Disabled from the command line");
 }
 
 /// `--enable`: Bloom starts with Windows again, and starts now.
 pub fn enable() {
+    crate::startup::set_wanted(true);
     let _ = crate::startup::create_task();
     if let Ok(exe) = std::env::current_exe() {
         let _ = std::process::Command::new(exe)

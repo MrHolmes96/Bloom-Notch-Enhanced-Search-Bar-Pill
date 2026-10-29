@@ -163,9 +163,31 @@ pub fn is_enabled(app: &AppHandle) -> bool {
     task_exists() || app.autolaunch().is_enabled().unwrap_or(false)
 }
 
+/// Whether the user wants Bloom to start with Windows, as they last chose it
+/// (in Settings, by Bloom Recovery, or `--enable` / `--disable`). Kept in
+/// Bloom's data folder, apart from the task itself, so a task that goes
+/// missing is noticed and made again (see `keep`).
+const WANTED_FILE: &str = "start-with-windows.txt";
+
+fn wanted() -> Option<bool> {
+    let text = std::fs::read_to_string(crate::utils::data_file(WANTED_FILE)?).ok()?;
+    match text.trim() {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+
+pub(crate) fn set_wanted(on: bool) {
+    if let Some(path) = crate::utils::data_file(WANTED_FILE) {
+        let _ = std::fs::write(path, if on { "on" } else { "off" });
+    }
+}
+
 /// Turns starting with Windows on or off. On uses the startup task, falling
 /// back to the `Run` entry when the task can't be registered.
 pub fn set_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    set_wanted(enabled);
     let autolaunch = app.autolaunch();
     if !enabled {
         delete_task();
@@ -181,27 +203,71 @@ pub fn set_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
     }
 }
 
-/// Moves an existing "launch at startup" over to the startup task, and keeps
-/// the task pointing at this copy of Bloom (after it was moved or reinstalled).
-pub fn migrate(app: &AppHandle) {
-    let app = app.clone();
-    std::thread::spawn(move || {
-        // After the notch and dock are up: this runs schtasks.
-        std::thread::sleep(std::time::Duration::from_secs(6));
-        let exe = std::env::current_exe()
-            .map(|p| p.to_string_lossy().to_lowercase())
-            .unwrap_or_default();
-        if let Some(xml) = task_xml() {
-            if !xml.to_lowercase().contains(&exe) {
-                let _ = create_task();
-            }
-            let _ = app.autolaunch().disable();
-            return;
-        }
-        if app.autolaunch().is_enabled().unwrap_or(false) && create_task() {
-            let _ = app.autolaunch().disable();
-        }
+/// Makes sure Bloom starts with Windows as the user chose: the startup task
+/// is there and starts this copy of Bloom (after it was moved or
+/// reinstalled), an older `Run` entry is moved over to it, and a task that
+/// went missing is made again. Returns what it did, if anything.
+fn ensure(app: &AppHandle) -> Option<&'static str> {
+    let exe = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let run_entry = app.autolaunch().is_enabled().unwrap_or(false);
+    let xml = task_xml();
+    // First start with this: what is in place now is what the user chose.
+    let want = wanted().unwrap_or_else(|| {
+        let on = xml.is_some() || run_entry;
+        set_wanted(on);
+        on
     });
+    if !want {
+        return None;
+    }
+    match xml {
+        Some(xml) => {
+            if run_entry {
+                let _ = app.autolaunch().disable();
+            }
+            if !xml.to_lowercase().contains(&exe) && create_task() {
+                return Some("Startup task pointed at another copy of Bloom: set to this one");
+            }
+            None
+        }
+        None => {
+            if create_task() {
+                let _ = app.autolaunch().disable();
+                Some("Startup task was missing: made again")
+            } else if !run_entry {
+                let _ = app.autolaunch().enable();
+                Some("Startup task couldn't be made: using the Run entry instead")
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Keeps starting with Windows in place while Bloom runs: checked shortly
+/// after Bloom starts, then every 15 minutes (one schtasks query, a few
+/// milliseconds), so whatever removes the task, Bloom still starts at the
+/// next sign-in.
+pub fn keep(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::Builder::new()
+        .name("bloom-keep-startup".into())
+        .spawn(move || {
+            // After the notch and dock are up: this runs schtasks.
+            std::thread::sleep(std::time::Duration::from_secs(6));
+            loop {
+                if crate::state::SHUTTING_DOWN.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                if let Some(done) = ensure(&app) {
+                    crate::utils::note_crash(done);
+                }
+                std::thread::sleep(std::time::Duration::from_secs(15 * 60));
+            }
+        })
+        .ok();
 }
 
 #[tauri::command]

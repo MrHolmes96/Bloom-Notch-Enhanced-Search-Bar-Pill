@@ -173,24 +173,62 @@ pub fn dock_gap(app: &AppHandle) -> i32 {
         .clamp(0, DOCK_GAP_MAX)
 }
 
-/// The dock tells Bloom its height; the strip Windows keeps free for it is
-/// set again when that changed.
+/// When the dock's height last moved the strip Windows keeps free for it.
+static DOCK_HEIGHT_MOVES: std::sync::Mutex<Vec<std::time::Instant>> =
+    std::sync::Mutex::new(Vec::new());
+/// Until when the strip stays as it is after the height went back and forth.
+static DOCK_HEIGHT_HELD_UNTIL: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
+
+/// The dock tells Bloom its height at rest (whole pixels, held for a second);
+/// the strip Windows keeps free for it is set again when that changed.
+///
+/// Every change of that strip makes Windows move all maximized and snapped
+/// windows and tell every app, so it must never happen in a stream: more
+/// than four changes in a minute means the height is going back and forth
+/// (something answering each change with another), and the strip is then
+/// left as it is for ten minutes, with a note in crash.log.
 #[tauri::command]
 pub async fn set_dock_height(app: AppHandle, height: f64) {
-    if !(height.is_finite() && height > 0.0) {
+    if !(height.is_finite() && (20.0..=400.0).contains(&height)) {
         return;
     }
+    let height = height.round();
     let changed = match DOCK_HEIGHT.lock() {
-        Ok(mut current) => {
-            let changed = current.is_none_or(|old| (old - height).abs() >= 0.5);
-            if changed {
-                *current = Some(height);
-            }
-            changed
-        }
+        Ok(current) => current.is_none_or(|old| (old - height).abs() >= 1.0),
         Err(_) => false,
     };
-    if changed && dock_enabled() && DOCK_APPBAR_REGISTERED.load(Ordering::Relaxed) {
+    if !changed {
+        return;
+    }
+    let first = DOCK_HEIGHT.lock().map(|h| h.is_none()).unwrap_or(false);
+    if !first {
+        let Ok(mut moves) = DOCK_HEIGHT_MOVES.lock() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        if let Ok(held) = DOCK_HEIGHT_HELD_UNTIL.lock() {
+            if held.is_some_and(|until| now < until) {
+                return;
+            }
+        }
+        moves.retain(|at| now.duration_since(*at) < std::time::Duration::from_secs(60));
+        if moves.len() >= 4 {
+            moves.clear();
+            if let Ok(mut held) = DOCK_HEIGHT_HELD_UNTIL.lock() {
+                *held = Some(now + std::time::Duration::from_secs(600));
+            }
+            crate::utils::note_crash(
+                "The dock's height kept changing; the space kept free for it stays as it is for ten minutes",
+            );
+            return;
+        }
+        moves.push(now);
+    }
+    if let Ok(mut current) = DOCK_HEIGHT.lock() {
+        *current = Some(height);
+    }
+    if dock_enabled() && DOCK_APPBAR_REGISTERED.load(Ordering::Relaxed) {
         if let Some(dock_win) = app.get_webview_window("dock") {
             register_dock_appbar(dock_win);
         }

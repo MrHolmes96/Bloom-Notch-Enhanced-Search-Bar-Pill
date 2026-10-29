@@ -95,13 +95,265 @@ pub fn start_taskbar_watchdog() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Exit code the watchdog ends a frozen Bloom with (an error code, so it is
+/// treated as a crash: the taskbar is put back and Bloom is started again).
+const FROZEN_EXIT: u32 = 0xE0B1_0001;
+/// Checks in a row without an answer before Bloom counts as frozen (one
+/// every 2 s plus up to 2 s waiting for each: 15 to 30 s).
+const FROZEN_CHECKS: u32 = 8;
+
+/// Whether Bloom's windows answer: its visible windows (the notch, the dock,
+/// the pop-ups) all run on its main thread, so one of them answering is
+/// enough. None shown: nothing to ask, counted as answering.
+fn bloom_answers(pid: u32) -> bool {
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SendMessageTimeoutW,
+        SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_NULL,
+    };
+    struct Search {
+        pid: u32,
+        found: Vec<isize>,
+    }
+    unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let search = &mut *(lparam.0 as *mut Search);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == search.pid && IsWindowVisible(hwnd).as_bool() {
+            search.found.push(hwnd.0 as isize);
+        }
+        BOOL(1)
+    }
+    let mut search = Search {
+        pid,
+        found: Vec::new(),
+    };
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut search as *mut Search as isize));
+    }
+    let Some(&window) = search.found.first() else {
+        return true;
+    };
+    let mut result = 0usize;
+    unsafe {
+        SendMessageTimeoutW(
+            HWND(window as *mut _),
+            WM_NULL,
+            WPARAM(0),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG | SMTO_BLOCK,
+            2000,
+            Some(&mut result),
+        )
+        .0 != 0
+    }
+}
+
+/// What Bloom's processes (Bloom and the web views that draw it) use, noted
+/// in crash.log when it is high for a minute (at most every 10 minutes), so
+/// a slowdown can be traced to the part that caused it.
+struct UsageWatch {
+    last: std::collections::HashMap<u32, u64>,
+    at: std::time::Instant,
+    high: u32,
+    noted: Option<std::time::Instant>,
+}
+
+impl UsageWatch {
+    fn new() -> Self {
+        Self {
+            last: std::collections::HashMap::new(),
+            at: std::time::Instant::now(),
+            high: 0,
+            noted: None,
+        }
+    }
+
+    /// Bloom and every process below it: (pid, program, processor time in
+    /// 100 ns units, memory in MB).
+    fn processes(root: u32) -> Vec<(u32, String, u64, u64)> {
+        use windows::Win32::Foundation::{CloseHandle, FILETIME};
+        use windows::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        };
+        use windows::Win32::System::ProcessStatus::{
+            GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        };
+        use windows::Win32::System::Threading::{
+            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        let mut all: Vec<(u32, u32, String)> = Vec::new();
+        unsafe {
+            let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+                return Vec::new();
+            };
+            let mut entry = PROCESSENTRY32W {
+                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                ..Default::default()
+            };
+            let mut ok = Process32FirstW(snapshot, &mut entry).is_ok();
+            while ok {
+                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(0);
+                all.push((
+                    entry.th32ProcessID,
+                    entry.th32ParentProcessID,
+                    String::from_utf16_lossy(&entry.szExeFile[..len]),
+                ));
+                ok = Process32NextW(snapshot, &mut entry).is_ok();
+            }
+            let _ = CloseHandle(snapshot);
+        }
+        let mut tree = vec![root];
+        let mut i = 0;
+        while i < tree.len() {
+            let parent = tree[i];
+            for (pid, of, _) in &all {
+                if *of == parent && *pid != 0 && !tree.contains(pid) {
+                    tree.push(*pid);
+                }
+            }
+            i += 1;
+        }
+        tree.into_iter()
+            .filter_map(|pid| {
+                let name = all.iter().find(|(p, _, _)| *p == pid)?.2.clone();
+                unsafe {
+                    let process =
+                        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+                    let (mut a, mut b, mut kernel, mut user) = (
+                        FILETIME::default(),
+                        FILETIME::default(),
+                        FILETIME::default(),
+                        FILETIME::default(),
+                    );
+                    let times = GetProcessTimes(process, &mut a, &mut b, &mut kernel, &mut user);
+                    let mut memory = PROCESS_MEMORY_COUNTERS {
+                        cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+                        ..Default::default()
+                    };
+                    let mb = if GetProcessMemoryInfo(process, &mut memory, memory.cb).is_ok() {
+                        memory.WorkingSetSize as u64 / (1024 * 1024)
+                    } else {
+                        0
+                    };
+                    let _ = CloseHandle(process);
+                    times.ok()?;
+                    let total =
+                        |t: FILETIME| ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64;
+                    Some((pid, name, total(kernel) + total(user), mb))
+                }
+            })
+            .collect()
+    }
+
+    /// One look (every 30 s).
+    fn sample(&mut self, root: u32) {
+        let now = std::time::Instant::now();
+        let wall = now.duration_since(self.at).as_secs_f64();
+        self.at = now;
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1) as f64;
+        let processes = Self::processes(root);
+        let mut used: Vec<(f64, String, u32, u64)> = Vec::new();
+        let mut next = std::collections::HashMap::new();
+        for (pid, name, time, mb) in processes {
+            if let Some(before) = self.last.get(&pid) {
+                let busy = time.saturating_sub(*before) as f64 / 10_000_000.0;
+                used.push((busy / (wall * cores) * 100.0, name, pid, mb));
+            }
+            next.insert(pid, time);
+        }
+        self.last = next;
+        if wall <= 0.0 || used.is_empty() {
+            return;
+        }
+        let total: f64 = used.iter().map(|u| u.0).sum();
+        self.high = if total >= 20.0 { self.high + 1 } else { 0 };
+        if self.high < 2
+            || self
+                .noted
+                .is_some_and(|at| now.duration_since(at).as_secs() < 600)
+        {
+            return;
+        }
+        self.noted = Some(now);
+        used.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let parts: Vec<String> = used
+            .iter()
+            .take(4)
+            .map(|(cpu, name, pid, mb)| format!("{name} {pid}: {cpu:.0}% CPU, {mb} MB"))
+            .collect();
+        note_crash(&format!(
+            "Bloom used {total:.0}% of the processor for a minute: {}",
+            parts.join("; ")
+        ));
+    }
+}
+
+/// Waits for Bloom to exit, and checks every 2 s that its windows answer.
+/// Frozen (no answer for 15 to 30 s in a row, not while it starts, Windows
+/// sleeps or the session ends), it is ended, which puts the taskbar back and
+/// starts Bloom again (see below): a frozen Bloom never holds the screen.
+unsafe fn watch_until_exit(
+    parent: windows::Win32::Foundation::HANDLE,
+    parent_pid: u32,
+) -> windows::Win32::Foundation::WAIT_EVENT {
+    use windows::Win32::Foundation::WAIT_TIMEOUT;
+    use windows::Win32::System::Threading::{TerminateProcess, WaitForSingleObject};
+    let started = std::time::Instant::now();
+    let mut misses = 0u32;
+    let mut last = std::time::Instant::now();
+    let mut usage = UsageWatch::new();
+    let mut rounds = 0u32;
+    loop {
+        let result = WaitForSingleObject(parent, 2000);
+        if result != WAIT_TIMEOUT {
+            return result;
+        }
+        rounds += 1;
+        if rounds.is_multiple_of(15) {
+            usage.sample(parent_pid);
+        }
+        let now = std::time::Instant::now();
+        // A long gap means Windows slept: start counting again.
+        let slept = now.duration_since(last) > std::time::Duration::from_secs(10);
+        last = now;
+        if slept || started.elapsed() < std::time::Duration::from_secs(90) || session_ending() {
+            misses = 0;
+            continue;
+        }
+        if bloom_answers(parent_pid) {
+            misses = 0;
+            last = std::time::Instant::now();
+            continue;
+        }
+        last = std::time::Instant::now();
+        misses += 1;
+        if misses < FROZEN_CHECKS {
+            continue;
+        }
+        note_crash(&format!(
+            "Bloom's windows stopped answering for {} s or more: ended so it starts again cleanly",
+            FROZEN_CHECKS * 2
+        ));
+        if TerminateProcess(parent, FROZEN_EXIT).is_err() {
+            misses = 0;
+            continue;
+        }
+        return WaitForSingleObject(parent, 10_000);
+    }
+}
+
 pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
     use windows::Win32::Foundation::{
         CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0,
     };
     use windows::Win32::System::Threading::{
-        CreateEventW, GetExitCodeProcess, OpenProcess, WaitForSingleObject, INFINITE,
-        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+        CreateEventW, GetExitCodeProcess, OpenProcess, WaitForSingleObject,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     };
     // Bloom's "please quit" signal (the installer and uninstaller set it): a
     // Bloom that was asked to quit is never started again.
@@ -116,12 +368,19 @@ pub fn run_taskbar_watchdog(parent_pid: u32, marker: PathBuf) {
     let mut exit_code: Option<u32> = None;
     unsafe {
         match OpenProcess(
-            PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+            PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
             false,
             parent_pid,
-        ) {
+        )
+        .or_else(|_| {
+            OpenProcess(
+                PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                false,
+                parent_pid,
+            )
+        }) {
             Ok(parent) => {
-                let result = WaitForSingleObject(parent, INFINITE);
+                let result = watch_until_exit(parent, parent_pid);
                 let mut code = 0u32;
                 if GetExitCodeProcess(parent, &mut code).is_ok() {
                     exit_code = Some(code);
@@ -242,6 +501,7 @@ fn crash_meaning(code: u32) -> &'static str {
         0xC000_0409 => "a failed check (a Rust panic in a Windows callback, or a fail-fast)",
         0xC000_0017 | 0xC000_012D => "out of memory",
         0xE06D_7363 => "unhandled C++ exception",
+        FROZEN_EXIT => "frozen (its windows stopped answering)",
         101 => "a Rust panic on the main thread",
         _ => "crash",
     }

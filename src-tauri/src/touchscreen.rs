@@ -23,7 +23,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use windows::core::PCWSTR;
 
-const TASK_FOLDER: &str = "Bloom";
+const TASK_PREFIX: &str = "Bloom";
 const TASK_OFF: &str = "Touchscreen Off";
 const TASK_ON: &str = "Touchscreen On";
 const IDS_KEY: &str = "bloom-touchscreen-ids";
@@ -268,15 +268,9 @@ unsafe fn register(ids: &[String]) -> Result<(), String> {
         .GetFolder(&BSTR::from("\\"))
         .map_err(|e| step("root folder", e))?;
     // The tasks go straight under Task Scheduler's root, as "Bloom
-    // Touchscreen Off/On" (a folder of Bloom's own would need its own access
-    // rules). A "Bloom" folder an earlier Bloom left is removed when empty.
-    for path in [format!("\\{TASK_FOLDER}"), TASK_FOLDER.to_string()] {
-        if let Ok(old) = root.GetFolder(&BSTR::from(path.as_str())) {
-            let _ = old.DeleteTask(&BSTR::from(TASK_OFF), 0);
-            let _ = old.DeleteTask(&BSTR::from(TASK_ON), 0);
-        }
-        let _ = root.DeleteFolder(&BSTR::from(path.as_str()), 0);
-    }
+    // Touchscreen Off/On". Nothing else in Task Scheduler is touched: "Bloom"
+    // there is Bloom's own startup task (an earlier version took that name
+    // for a folder and removed it, which turned off starting with Windows).
     // Registered as administrator, a task belongs to the administrators:
     // without this, Bloom (not running as administrator) couldn't start it.
     // Administrators and Windows keep full control; this account may read
@@ -387,7 +381,7 @@ fn set_up(ids: &[String]) -> Result<(), String> {
 
 /// A task's name in Task Scheduler ("Bloom Touchscreen Off").
 fn task_name(name: &str) -> String {
-    format!("{TASK_FOLDER} {name}")
+    format!("{TASK_PREFIX} {name}")
 }
 
 fn run_task(name: &str) -> Result<(), String> {
