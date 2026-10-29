@@ -5,7 +5,7 @@
 //! can't take for granted where the pop-ups and the center live. This notes
 //! each window of a Windows program (one under the Windows folder) as it
 //! appears or comes to the front: its program, class, title, size and when.
-//! Only what windows are called, never what they show. The last 80 different
+//! Only what windows are called, never what they show. The last 200 different
 //! windows are kept, in memory only.
 
 use std::collections::{HashMap, VecDeque};
@@ -37,7 +37,10 @@ fn windows_program(pid: u32) -> Option<String> {
                 .unwrap_or_else(|_| "C:\\Windows".into())
                 .to_lowercase();
             let path = unsafe { crate::commands::process_image_path(pid) }?.to_lowercase();
-            path.starts_with(&root).then_some(path)
+            // Also apps whose windows Bloom has to tell apart (Portals: its
+            // loading pop-up from its portals).
+            let watched_app = path.ends_with("\\portals.exe");
+            (path.starts_with(&root) || watched_app).then_some(path)
         })
         .clone()
 }
@@ -67,14 +70,25 @@ pub(crate) fn describe(hwnd: HWND) -> Option<String> {
             &mut cloaked as *mut u32 as *mut _,
             4,
         );
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindow, GetWindowLongW, GWL_EXSTYLE, GWL_STYLE, GW_OWNER,
+        };
+        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        let owned = GetWindow(hwnd, GW_OWNER).is_ok_and(|owner| !owner.0.is_null());
         Some(format!(
-            "{} | {} | \"{}\" | {}x{} | cloaked={}",
+            "{} | {} | \"{}\" | {}x{} at {},{} | cloaked={} | style={:#010x} ex={:#010x} owned={}",
             program.rsplit('\\').next().unwrap_or(&program),
             String::from_utf16_lossy(&class[..class_len.min(128)]),
             String::from_utf16_lossy(&title[..title_len.min(128)]),
             rect.right - rect.left,
             rect.bottom - rect.top,
-            cloaked != 0
+            rect.left,
+            rect.top,
+            cloaked != 0,
+            style,
+            ex_style,
+            owned
         ))
     }
 }
@@ -113,7 +127,7 @@ unsafe extern "system" fn on_event(
             event: name,
             line,
         });
-        while seen.len() > 80 {
+        while seen.len() > 200 {
             seen.pop_front();
         }
     }
