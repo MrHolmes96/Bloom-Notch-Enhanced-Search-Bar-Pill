@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_icon;
+mod app_tweaks;
 mod audio_default;
 mod backup;
 mod black_screen;
@@ -534,6 +535,7 @@ fn main() {
             maintenance::repair_after_windows_update();
             window_memory::start(app.handle().clone());
             shell_probe::start();
+            app_tweaks::start();
             setup_taskbar_hook();
             setup_audio_visualization(app.handle().clone());
             setup_settings_watcher(app.handle().clone());
