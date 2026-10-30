@@ -238,19 +238,25 @@ fn find_toast_window() -> Option<HWND> {
 
 // ---------------------------------------------------------------- how long Windows' pop-up stays
 
-/// Windows' hidden pop-up stays this long (seconds) while Bloom's cards
-/// stand in for it: Windows' own longest choice (5 minutes). Apps built on
-/// Electron (Discord, Slack, WhatsApp and many more) forget a notification
-/// the moment its pop-up closes, by its time running out or being
-/// dismissed: from then on a click, even in Windows' own notification
-/// center, can only open the app, never the message. So the hidden pop-up is
-/// kept after its card goes (time up), and a click on the notification in
-/// Bloom's center within these minutes is a click on it, landing on the
-/// exact message. Dismissing the card (its X) closes it at once.
-const POPUP_SECONDS: u32 = 300;
-/// The time earlier Bloom versions kept the pop-up (their value is Bloom's
+/// How long Windows' hidden pop-up stays (seconds) while Bloom's cards stand
+/// in for it. Apps built on Electron (Discord, Slack, WhatsApp and many more)
+/// forget a notification the moment its pop-up closes, by its time running
+/// out or being dismissed: from then on a click, even in Windows' own
+/// notification center, can only open the app, never the message. So the
+/// hidden pop-up is kept for as long as Windows allows (a day), and a click
+/// on the notification in Bloom's center is a click on it, landing on the
+/// exact message. Windows shows three pop-ups at a time and holds newer ones
+/// back while three are up, so the oldest hidden one is closed whenever a
+/// newer notification arrives (see `make_room`): the newest three always
+/// open their exact message. Dismissing a card (its X) closes its pop-up.
+const POPUP_SECONDS: u32 = 86_400;
+/// Windows' own longest choice, used when it won't take the longer time.
+const POPUP_SECONDS_FALLBACK: u32 = 300;
+/// The times earlier Bloom versions kept the pop-up (their value is Bloom's
 /// too, never the user's).
-const EARLIER_POPUP_SECONDS: [u32; 1] = [60];
+const EARLIER_POPUP_SECONDS: [u32; 2] = [60, 300];
+/// Pop-ups Windows shows at once (it holds newer ones back meanwhile).
+const POPUPS_AT_ONCE: usize = 3;
 /// SPI_GETMESSAGEDURATION / SPI_SETMESSAGEDURATION: Settings > Accessibility >
 /// Visual effects > "Dismiss notifications after this amount of time".
 const SPI_GETMESSAGEDURATION: u32 = 0x2016;
@@ -312,8 +318,10 @@ fn keep_popups_for_cards() {
     };
     if backup.exists() {
         // Kept by an earlier Bloom, for a shorter time: Bloom's time now.
-        if message_duration().is_some_and(|now| EARLIER_POPUP_SECONDS.contains(&now)) {
-            set_message_duration(POPUP_SECONDS);
+        if message_duration()
+            .is_some_and(|now| now != POPUP_SECONDS && EARLIER_POPUP_SECONDS.contains(&now))
+        {
+            set_bloom_popup_time();
         }
         return;
     }
@@ -323,9 +331,21 @@ fn keep_popups_for_cards() {
     if own >= POPUP_SECONDS {
         return;
     }
-    if std::fs::write(&backup, own.to_string()).is_ok() && !set_message_duration(POPUP_SECONDS) {
+    if std::fs::write(&backup, own.to_string()).is_ok() && !set_bloom_popup_time() {
         let _ = std::fs::remove_file(&backup);
     }
+}
+
+/// Sets Bloom's pop-up time: a day, or Windows' own longest (5 minutes)
+/// when Windows doesn't keep the longer one. Noted in the click log.
+fn set_bloom_popup_time() -> bool {
+    if set_message_duration(POPUP_SECONDS) && message_duration() == Some(POPUP_SECONDS) {
+        trace("Windows keeps the hidden pop-ups for a day (clicks open the exact message)");
+        return true;
+    }
+    let done = set_message_duration(POPUP_SECONDS_FALLBACK);
+    trace("Windows keeps the hidden pop-ups for 5 minutes at most");
+    done
 }
 
 /// Puts the user's own pop-up time back (Bloom style off, Bloom quitting, or
@@ -341,12 +361,51 @@ fn put_back_popup_time() {
         return;
     };
     // Only Bloom's own value is replaced: one the user changed meanwhile stays.
-    if message_duration()
-        .is_some_and(|now| now == POPUP_SECONDS || EARLIER_POPUP_SECONDS.contains(&now))
-    {
+    if message_duration().is_some_and(|now| {
+        now == POPUP_SECONDS
+            || now == POPUP_SECONDS_FALLBACK
+            || EARLIER_POPUP_SECONDS.contains(&now)
+    }) {
         set_message_duration(own);
     }
     let _ = std::fs::remove_file(&backup);
+}
+
+/// Notifications whose hidden pop-up Windows still shows, oldest first: id,
+/// title, first line.
+static POPUPS_UP: Mutex<Vec<(u32, String, String)>> = Mutex::new(Vec::new());
+
+/// New notifications arrived: Windows shows three pop-ups at once and holds
+/// newer ones back while three are up, so the oldest hidden ones are closed
+/// to make room (a click on those then opens their app; on the newest three,
+/// their exact message). Ones Windows no longer has are let go of.
+fn make_room(fresh: &[(u32, String, String)], current: &HashSet<u32>) {
+    let closing: Vec<(u32, String, String)> = {
+        let Ok(mut up) = POPUPS_UP.lock() else {
+            return;
+        };
+        up.retain(|(id, _, _)| current.contains(id));
+        up.extend(fresh.iter().cloned());
+        let extra = up.len().saturating_sub(POPUPS_AT_ONCE);
+        up.drain(..extra).collect()
+    };
+    if closing.is_empty() || KEEP_POPUPS_OFF.load(Ordering::Relaxed) {
+        return;
+    }
+    std::thread::spawn(move || {
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        for (_, title, body) in closing {
+            let _ = on_windows_popup(&title, &body, PopupAct::Dismiss);
+        }
+    });
+}
+
+/// A notification's pop-up is gone (clicked, or its card dismissed).
+fn popup_gone(id: u32) {
+    if let Ok(mut up) = POPUPS_UP.lock() {
+        up.retain(|(known, _, _)| *known != id);
+    }
 }
 
 /// Bloom's card for a notification was dismissed (its X): Windows' hidden
@@ -354,6 +413,9 @@ fn put_back_popup_time() {
 /// for clicks from Bloom's center (see `POPUP_SECONDS`).
 #[tauri::command]
 pub async fn notification_card_closed(title: String, body: String) {
+    if let Ok(mut up) = POPUPS_UP.lock() {
+        up.retain(|(_, t, b)| !(t == &title && b == &body));
+    }
     let _ = tauri::async_runtime::spawn_blocking(move || {
         use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
@@ -393,6 +455,12 @@ pub fn restore_native_toasts() {
         return;
     }
     let hwnd = HWND(hidden as *mut _);
+    // The pop-ups kept hidden (for a day) close first: they would show for
+    // the rest of their time otherwise.
+    close_all_popups(hwnd);
+    if let Ok(mut up) = POPUPS_UP.lock() {
+        up.clear();
+    }
     unsafe {
         let _ = SetLayeredWindowAttributes(hwnd, Default::default(), 255, LWA_ALPHA);
         SetWindowLongPtrW(
@@ -400,6 +468,48 @@ pub fn restore_native_toasts() {
             GWL_EXSTYLE,
             HIDDEN_ORIGINAL_STYLE.load(Ordering::SeqCst),
         );
+    }
+}
+
+/// Closes every notification in Windows' pop-up `hwnd` with its own dismiss
+/// button (Windows' accessibility interface, as a click on it).
+fn close_all_popups(hwnd: HWND) {
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    };
+    use windows::Win32::UI::Accessibility::{
+        CUIAutomation8, IUIAutomation, IUIAutomationInvokePattern, TreeScope_Descendants,
+        UIA_AutomationIdPropertyId, UIA_InvokePatternId,
+    };
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let Ok(automation) =
+            CoCreateInstance::<_, IUIAutomation>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)
+        else {
+            return;
+        };
+        let Ok(root) = automation.ElementFromHandle(hwnd) else {
+            return;
+        };
+        let id = windows::Win32::System::Variant::VARIANT::from(windows::core::BSTR::from(
+            "DismissButton",
+        ));
+        let Ok(condition) = automation.CreatePropertyCondition(UIA_AutomationIdPropertyId, &id)
+        else {
+            return;
+        };
+        let Ok(buttons) = root.FindAll(TreeScope_Descendants, &condition) else {
+            return;
+        };
+        for index in 0..buttons.Length().unwrap_or(0) {
+            if let Ok(button) = buttons.GetElement(index) {
+                if let Ok(pattern) =
+                    button.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+                {
+                    let _ = pattern.Invoke();
+                }
+            }
+        }
     }
 }
 
@@ -412,6 +522,7 @@ pub(crate) fn repair_leftover() {
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             let ours = WS_EX_LAYERED.0 as isize | WS_EX_TRANSPARENT.0 as isize;
             if style & ours == ours {
+                close_all_popups(hwnd);
                 let _ = SetLayeredWindowAttributes(hwnd, Default::default(), 255, LWA_ALPHA);
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style & !ours);
             }
@@ -970,6 +1081,13 @@ fn poll(seen: &mut HashSet<u32>, primed: &mut bool, app: &AppHandle) -> Result<(
     }
     let contents = attach_content(&mut fresh);
     remember(&fresh, &contents);
+    make_room(
+        &fresh
+            .iter()
+            .map(|item| (item.id, item.title.clone(), item.body.clone()))
+            .collect::<Vec<_>>(),
+        &current,
+    );
     for item in fresh {
         show_card(app, item);
     }
@@ -1418,6 +1536,7 @@ pub async fn notification_activate(
         let clicked_in_windows = texts
             .as_ref()
             .is_some_and(|(title, body)| click_windows_popup(title, body));
+        popup_gone(id);
         // Windows' own notification center is never opened for a click:
         // with Bloom's center in use, Windows' must not show at all.
         if !clicked_in_windows {
