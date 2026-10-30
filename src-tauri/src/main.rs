@@ -211,6 +211,7 @@ fn main() {
             open_app,
             launch_new_instance,
             update_dock_rect,
+            app_tweaks::portals_status,
             set_dock_height,
             update_notch_rect,
             set_dock_hovered,
@@ -387,7 +388,7 @@ fn main() {
             bluetooth::bluetooth_pairing_respond,
             bluetooth::bluetooth_unpair
         ])
-        .setup(|app| {
+        .setup(move |app| {
             init_taskbar_marker(app.handle());
             // Populate the settings cache before anything else: a webview can
             // invoke save_setting as soon as it loads, which happens before the
@@ -536,6 +537,9 @@ fn main() {
             window_memory::start(app.handle().clone());
             shell_probe::start();
             app_tweaks::start();
+            if autostart {
+                app_tweaks::start_portals_after_sign_in(app.handle());
+            }
             setup_taskbar_hook();
             setup_audio_visualization(app.handle().clone());
             setup_settings_watcher(app.handle().clone());
