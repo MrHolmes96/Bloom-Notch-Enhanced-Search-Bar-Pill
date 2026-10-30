@@ -4379,6 +4379,12 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                 return true.into();
             }
 
+            // Portals' loading pop-up, kept off the screen (app_tweaks.rs):
+            // not an app window to show in the dock either.
+            if crate::app_tweaks::is_portals_splash(hwnd) {
+                return true.into();
+            }
+
             let mut process_id = 0u32;
             GetWindowThreadProcessId(hwnd, Some(&mut process_id));
 
