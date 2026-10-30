@@ -4,6 +4,8 @@
 //! bar, a window titled "SplashScreen") is kept off the screen for as long as
 //! it exists, and isn't shown in the dock. It isn't hidden or closed: Portals
 //! goes on drawing it and starting exactly as always, it just can't be seen.
+//! It is caught as early as Windows reports it: when Portals makes or names
+//! the window, before it is shown, so it is off the screen when it appears.
 //! Portals places the pop-up again while it starts (at sign-in especially),
 //! so each time it comes back onto the screen it is moved off again. Portals
 //! and its portals are untouched: only that one window is, found by its
@@ -105,8 +107,9 @@ unsafe extern "system" fn on_event(
 ) {
     use windows::Win32::UI::Accessibility::SetWinEventHook;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetAncestor, GetWindowThreadProcessId, EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE,
-        EVENT_OBJECT_SHOW, GA_ROOT, WINEVENT_OUTOFCONTEXT,
+        GetAncestor, GetWindowThreadProcessId, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
+        EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW, GA_ROOT,
+        WINEVENT_OUTOFCONTEXT,
     };
     if id_object != 0 || id_child != 0 || hwnd.0.is_null() {
         return;
@@ -125,7 +128,15 @@ unsafe extern "system" fn on_event(
         }
         return;
     }
-    if event != EVENT_OBJECT_SHOW || GetAncestor(hwnd, GA_ROOT) != hwnd {
+    // Caught as early as Windows tells: when Portals makes the window or
+    // names it (before it is shown), else as it is shown.
+    let stage = match event {
+        e if e == EVENT_OBJECT_CREATE => "made (not shown yet)",
+        e if e == EVENT_OBJECT_NAMECHANGE => "named (not shown yet)",
+        e if e == EVENT_OBJECT_SHOW => "shown",
+        _ => return,
+    };
+    if GetAncestor(hwnd, GA_ROOT) != hwnd {
         return;
     }
     if !is_portals_splash(hwnd) {
@@ -151,7 +162,7 @@ unsafe extern "system" fn on_event(
             MOVE_HOOK.store(hook.0 as isize, Ordering::Relaxed);
         }
         log(&format!(
-            "Portals showed its loading pop-up: {}",
+            "Portals' loading pop-up caught when {stage}: {}",
             if moved {
                 "moved off the screen"
             } else {
@@ -168,10 +179,16 @@ pub fn start() {
         .spawn(|| unsafe {
             use windows::Win32::UI::Accessibility::SetWinEventHook;
             use windows::Win32::UI::WindowsAndMessaging::{
-                DispatchMessageW, GetMessageW, TranslateMessage, EVENT_OBJECT_DESTROY,
-                EVENT_OBJECT_SHOW, MSG, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+                DispatchMessageW, GetMessageW, TranslateMessage, EVENT_OBJECT_CREATE,
+                EVENT_OBJECT_DESTROY, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW, MSG,
+                WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
             };
-            for event in [EVENT_OBJECT_SHOW, EVENT_OBJECT_DESTROY] {
+            for event in [
+                EVENT_OBJECT_CREATE,
+                EVENT_OBJECT_NAMECHANGE,
+                EVENT_OBJECT_SHOW,
+                EVENT_OBJECT_DESTROY,
+            ] {
                 let _ = SetWinEventHook(
                     event,
                     event,
