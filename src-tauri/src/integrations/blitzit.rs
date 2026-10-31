@@ -69,32 +69,65 @@ fn server(app: &AppHandle) -> String {
 }
 
 const SIGNED_OUT: &str = "Signed out of Blitzit. Connect it again in Settings > Integrations";
+const NOT_CONNECTED: &str = "Blitzit isn't connected yet";
+
+/// Why talking to Blitzit didn't work.
+pub(super) enum Fail {
+    /// No connection to Blitzit right now: try again later.
+    Offline(String),
+    /// Not signed in (any more).
+    SignedOut(String),
+    Other(String),
+}
+
+impl Fail {
+    pub(super) fn message(self) -> String {
+        match self {
+            Fail::Offline(m) | Fail::SignedOut(m) | Fail::Other(m) => m,
+        }
+    }
+}
+
+/// Whether a Blitzit account is connected on this PC.
+pub(super) fn is_connected(app: &AppHandle) -> bool {
+    store_path(app).is_some_and(|p| p.is_file())
+}
+
+fn with_client<T>(
+    app: &AppHandle,
+    f: impl FnMut(&mut Client, &str) -> Result<T, McpError>,
+) -> Result<T, String> {
+    with_client_ex(app, f).map_err(Fail::message)
+}
 
 /// Runs `f` with a ready connection: signed in, token fresh, tools known. A
 /// rejected token is refreshed once; a reset connection is opened again.
-fn with_client<T>(
+pub(super) fn with_client_ex<T>(
     app: &AppHandle,
     mut f: impl FnMut(&mut Client, &str) -> Result<T, McpError>,
-) -> Result<T, String> {
-    let mut guard = CONNECTION.lock().map_err(|_| "Busy")?;
+) -> Result<T, Fail> {
+    let mut guard = CONNECTION.lock().map_err(|_| Fail::Other("Busy".into()))?;
     if guard.is_none() {
-        let session = load_session(app).ok_or("Blitzit isn't connected yet")?;
+        let session =
+            load_session(app).ok_or_else(|| Fail::SignedOut(NOT_CONNECTED.to_string()))?;
         *guard = Some(Connection {
             client: Client::new(&session.server),
             session,
         });
     }
-    let connection = guard.as_mut().ok_or("Blitzit isn't connected yet")?;
+    let connection = guard
+        .as_mut()
+        .ok_or_else(|| Fail::SignedOut(NOT_CONNECTED.to_string()))?;
 
-    let refresh = |connection: &mut Connection| -> Result<(), String> {
+    let refresh = |connection: &mut Connection| -> Result<(), Fail> {
         match oauth::refresh(&mut connection.session) {
             Ok(()) => {
                 let _ = save_session(app, &connection.session);
                 connection.client.ready = false;
                 Ok(())
             }
-            Err(RefreshError::Rejected(_)) => Err(SIGNED_OUT.to_string()),
-            Err(RefreshError::Offline(message)) => Err(message),
+            Err(RefreshError::Rejected(_)) => Err(Fail::SignedOut(SIGNED_OUT.to_string())),
+            Err(RefreshError::Offline(message)) => Err(Fail::Offline(message)),
         }
     };
 
@@ -102,12 +135,12 @@ fn with_client<T>(
     if connection.session.expires_at.is_some_and(|at| at < soon)
         && connection.session.refresh_token.is_some()
     {
-        if let Err(message) = refresh(connection) {
-            if message == SIGNED_OUT {
+        if let Err(fail) = refresh(connection) {
+            if matches!(fail, Fail::SignedOut(_)) {
                 drop(guard);
                 forget(app);
             }
-            return Err(message);
+            return Err(fail);
         }
     }
 
@@ -126,24 +159,31 @@ fn with_client<T>(
             Ok(value) => return Ok(value),
             Err(McpError::Unauthorized) if !refreshed => {
                 refreshed = true;
-                if let Err(message) = refresh(connection) {
-                    if message == SIGNED_OUT {
+                if let Err(fail) = refresh(connection) {
+                    if matches!(fail, Fail::SignedOut(_)) {
                         drop(guard);
                         forget(app);
                     }
-                    return Err(message);
+                    return Err(fail);
                 }
             }
             Err(McpError::Unauthorized) => {
                 drop(guard);
                 forget(app);
-                return Err(SIGNED_OUT.to_string());
+                return Err(Fail::SignedOut(SIGNED_OUT.to_string()));
             }
             Err(McpError::SessionGone) => continue,
-            Err(McpError::Failed(message)) => return Err(message),
+            Err(McpError::Offline(message)) => {
+                // The next call starts a fresh connection.
+                connection.client.ready = false;
+                return Err(Fail::Offline(message));
+            }
+            Err(McpError::Failed(message)) => return Err(Fail::Other(message)),
         }
     }
-    Err("Blitzit didn't answer. Try again in a moment".into())
+    Err(Fail::Offline(
+        "Blitzit didn't answer. Try again in a moment".into(),
+    ))
 }
 
 const TOOLS_SETTING: &str = "bloom-blitzit-tools";
@@ -158,7 +198,7 @@ fn chosen(app: &AppHandle, kind: Kind) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn pick(app: &AppHandle, client: &Client, kind: Kind) -> Option<super::mcp::Tool> {
+pub(super) fn pick(app: &AppHandle, client: &Client, kind: Kind) -> Option<super::mcp::Tool> {
     tools::pick(&client.tools, kind, chosen(app, kind).as_deref()).cloned()
 }
 
@@ -174,10 +214,11 @@ pub struct BlitzitStatus {
     can_read_lists: bool,
     can_read_tasks: bool,
     can_complete: bool,
+    can_move: bool,
     /// Columns a new task can go in, when Blitzit says.
     columns: Vec<String>,
-    /// Which of Blitzit's tools Bloom uses for adding, lists, tasks, done.
-    using: [Option<String>; 4],
+    /// Which of Blitzit's tools Bloom uses for adding, lists, tasks, done, moving.
+    using: [Option<String>; 5],
     /// Each of Blitzit's tools and what it says it does.
     tool_details: Vec<(String, String)>,
     /// Why Blitzit couldn't be reached or used, when it couldn't.
@@ -232,6 +273,7 @@ fn status_now(app: &AppHandle, check: bool) -> BlitzitStatus {
         can_read_lists: using[1].is_some(),
         can_read_tasks: using[2].is_some(),
         can_complete: using[3].is_some(),
+        can_move: using[4].is_some(),
         columns,
         using,
         tool_details,
@@ -254,6 +296,7 @@ pub async fn blitzit_status(app: AppHandle, check: Option<bool>) -> BlitzitStatu
             can_read_lists: false,
             can_read_tasks: false,
             can_complete: false,
+            can_move: false,
             columns: Vec::new(),
             using: Default::default(),
             tool_details: Vec::new(),
@@ -317,14 +360,16 @@ pub fn blitzit_cancel_connect() {
 #[tauri::command]
 pub fn blitzit_disconnect(app: AppHandle) {
     forget(&app);
+    // Another account may connect next: its tasks aren't these.
+    super::blitzit_sync::clear(&app);
     use tauri::Emitter;
     let _ = app.emit("blitzit-changed", ());
 }
 
 #[derive(Serialize)]
 pub struct BlitzitList {
-    id: String,
-    name: String,
+    pub(super) id: String,
+    pub(super) name: String,
 }
 
 #[tauri::command]
@@ -348,7 +393,7 @@ pub async fn blitzit_lists(app: AppHandle) -> Result<Vec<BlitzitList>, String> {
     .map_err(|e| e.to_string())?
 }
 
-fn list_ref(id: Option<String>, name: Option<String>) -> Option<ListRef> {
+pub(super) fn list_ref(id: Option<String>, name: Option<String>) -> Option<ListRef> {
     id.filter(|i| !i.is_empty()).map(|id| ListRef {
         name: name.unwrap_or_else(|| id.clone()),
         id,
@@ -369,51 +414,6 @@ pub async fn blitzit_tasks(
             let args = tools::tasks_args(&tool, list.as_ref())?;
             let answer = client.call(token, &tool.name, args)?;
             Ok(tools::items(&answer))
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub async fn blitzit_add_task(
-    app: AppHandle,
-    title: String,
-    list_id: Option<String>,
-    list_name: Option<String>,
-    column: Option<String>,
-) -> Result<(), String> {
-    let title = title.trim().to_string();
-    if title.is_empty() {
-        return Err("Write the task first".into());
-    }
-    tauri::async_runtime::spawn_blocking(move || {
-        let list = list_ref(list_id, list_name);
-        with_client(&app, |client, token| {
-            let tool = pick(&app, client, Kind::CreateTask)
-                .ok_or_else(|| McpError::Failed("Blitzit can't add tasks from here".into()))?;
-            let args = tools::create_args(&tool, &title, list.as_ref(), column.as_deref())?;
-            client.call(token, &tool.name, args).map(|_| ())
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub async fn blitzit_complete_task(
-    app: AppHandle,
-    task_id: String,
-    list_id: Option<String>,
-    list_name: Option<String>,
-) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let list = list_ref(list_id, list_name);
-        with_client(&app, |client, token| {
-            let tool = pick(&app, client, Kind::CompleteTask)
-                .ok_or_else(|| McpError::Failed("Blitzit can't tick tasks off from here".into()))?;
-            let args = tools::complete_args(&tool, &task_id, list.as_ref())?;
-            client.call(token, &tool.name, args).map(|_| ())
         })
     })
     .await

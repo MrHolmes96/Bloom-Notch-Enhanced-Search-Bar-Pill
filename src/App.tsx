@@ -32,7 +32,13 @@ import { ShelfTypeIcon } from "./components/ShelfTypeIcon";
 import { WifiPanel } from "./components/WifiPanel";
 import { BluetoothPanel } from "./components/BluetoothPanel";
 import { TrayPanel, trayPanelHeight } from "./components/TrayPanel";
-import { BlitzitPanel, blitzitPanelHeight } from "./components/BlitzitPanel";
+import { KeyboardLayoutMenu } from "./components/KeyboardLayoutMenu";
+import {
+	BlitzitPanel,
+	blitzitBoardSize,
+	blitzitPanelHeight,
+	type BlitzitView
+} from "./components/BlitzitPanel";
 import { GHelperPanel, ghelperPanelHeight } from "./components/GHelperPanel";
 import { PAGE_ORDER_KEY, isNotchPageId, parsePageOrder, type NotchPageId } from "./notchPages";
 import { isoWeek } from "./weekNumber";
@@ -1036,6 +1042,11 @@ function App() {
 		() => localStorage.getItem("bloom-notch-blitzit") !== "false"
 	);
 	const [blitzitHeight, setBlitzitHeight] = useState(() => blitzitPanelHeight(false, 0, true));
+	// The control center's keyboard layout drop-down: where it opens (below
+	// the button, in the control center's own units) and how tall it is.
+	const [kbMenu, setKbMenu] = useState<{ top: number; height: number } | null>(null);
+	// The Blitzit page as a list, or as the board (wider and taller).
+	const [blitzitView, setBlitzitView] = useState<BlitzitView>("list");
 	// G-Helper's page (Settings > Integrations > G-Helper): only on a PC with
 	// G-Helper, while the integration is on.
 	const [ghelperEnabled, setGhelperEnabled] = useState(
@@ -1397,10 +1408,16 @@ function App() {
 
 	// Bloom mode state: 'music', 'calendar', 'command-center', 'shelf', or 'status'
 	const [bloomMode, setBloomMode] = useState<BloomMode>("status");
+	// The keyboard drop-down closes with the control center.
+	useEffect(() => {
+		if (bloomMode !== "command-center") setKbMenu(null);
+	}, [bloomMode]);
 	// The notch's window is only as tall as the notch's pages; an open note
 	// is taller, so the window grows first, and goes back once the notch has
 	// shrunk again.
-	const noteOpen = bloomMode === "notes" && notesLayout.editorOpen;
+	const noteOpen =
+		(bloomMode === "notes" && notesLayout.editorOpen) ||
+		(bloomMode === "blitzit" && blitzitView === "board");
 	useEffect(() => {
 		if (noteOpen) {
 			invoke("set_notch_tall", { tall: true }).catch(() => {});
@@ -2955,6 +2972,7 @@ function App() {
 	const getDynamicWidth = () => {
 		if (isCalendarMode) return 480;
 		if (bloomMode === "notes" && notesLayout.editorOpen) return notesEditorSize(scale).width;
+		if (bloomMode === "blitzit" && blitzitView === "board") return blitzitBoardSize(scale).width;
 		if (bloomMode === "ghelper") return 400;
 		if (bloomMode === "shelf" || bloomMode === "notes" || bloomMode === "blitzit") return 380;
 		if (bloomMode === "command-center" && isOpen) return 350;
@@ -2984,6 +3002,12 @@ function App() {
 		return w;
 	};
 
+	// One row of round buttons is part of the control center's base height;
+	// each extra row adds a button and the gap above it, and an empty row
+	// gives its room back.
+	const ccRowCount = Math.ceil(ccButtons.length / CC_PER_ROW);
+	const ccPanelHeight = 230 + (ccRowCount === 0 ? -42 : (ccRowCount - 1) * 42);
+
 	const getDynamicHeight = () => {
 		if (!isExpanded || !isVisible || isHidden) {
 			return isImpacted ? 28.9 : 44.2;
@@ -3002,14 +3026,11 @@ function App() {
 		if (bloomMode === "notes") return 36 + notesPanelHeight(notes, notesLayout, scale);
 		if (bloomMode === "blitzit") return 36 + blitzitHeight;
 		if (bloomMode === "ghelper") return 36 + ghelperHeight;
-		// One row of round buttons is part of the control center's base height;
-		// each extra row adds a button and the gap above it, and an empty row
-		// gives its room back.
-		const ccRows = Math.ceil(ccButtons.length / CC_PER_ROW);
-		const ccHeight = 230 + (ccRows === 0 ? -42 : (ccRows - 1) * 42);
+		const ccHeight = ccPanelHeight;
 		if (bloomMode === "command-center") {
 			if (!isOpen) return 36;
-			return ccHeight;
+			// The keyboard drop-down makes room for itself below its button.
+			return kbMenu ? Math.max(ccHeight, 36 + kbMenu.top + kbMenu.height + 12) : ccHeight;
 		}
 		if (bloomMode === "wifi" || bloomMode === "bluetooth") return 300;
 		// Never shorter than the control center it opens from, so the pointer
@@ -3201,9 +3222,16 @@ function App() {
 				return (
 					<button
 						key={id}
-						className={`cc-circular-btn ${state ? "active" : ""}`}
+						className={`cc-circular-btn ${state || (id === "keyboard-layout" && kbMenu) ? "active" : ""}`}
 						onClick={(e) => {
 							e.stopPropagation();
+							if (id === "keyboard-layout") {
+								const button = e.currentTarget;
+								setKbMenu((open) =>
+									open ? null : { top: button.offsetTop + button.offsetHeight + 8, height: 120 }
+								);
+								return;
+							}
 							runQuickSetting(id);
 						}}
 						title={
@@ -3977,6 +4005,9 @@ function App() {
 									{bloomMode === "command-center" && (
 										<motion.div
 											className="command-center-content-minimal"
+											// With the keyboard drop-down open, the notch grows for it
+											// alone: the control center keeps its own layout.
+											style={kbMenu ? { height: ccPanelHeight - 36, overflow: "visible" } : undefined}
 											onClick={(e) => e.stopPropagation()}
 											initial={{ opacity: 0 }}
 											animate={{ opacity: 1 }}
@@ -4114,6 +4145,17 @@ function App() {
 												>
 													{ccButtons.map(renderCCButton)}
 												</div>
+											)}
+											{kbMenu && (
+												<KeyboardLayoutMenu
+													top={kbMenu.top}
+													// The notch's window is 420 tall at most.
+													maxHeight={Math.max(120, 420 - 36 - kbMenu.top - 12)}
+													onHeight={(height) =>
+														setKbMenu((open) => (open && open.height !== height ? { ...open, height } : open))
+													}
+													onClose={() => setKbMenu(null)}
+												/>
 											)}
 
 											{/* Classic Sliders Area */}
@@ -4299,6 +4341,8 @@ function App() {
 											<BlitzitPanel
 												onPinChange={setNotchPinned}
 												onHeightChange={setBlitzitHeight}
+												onViewChange={setBlitzitView}
+												scale={scale}
 												onOpenSettings={() =>
 													void invoke("open_settings_tab", { tab: "integration-blitzit" })
 												}

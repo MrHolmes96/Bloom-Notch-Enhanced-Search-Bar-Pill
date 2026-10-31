@@ -1,0 +1,125 @@
+/* The keyboard layout drop-down in the control center. */
+.kb-menu-backdrop {
+	position: absolute;
+	inset: 0;
+	z-index: 19;
+}
+
+.kb-menu {
+	position: absolute;
+	left: 14px;
+	right: 14px;
+	z-index: 20;
+	min-height: 40px;
+	overflow-y: auto;
+	padding: 4px;
+	box-sizing: border-box;
+	border-radius: 14px;
+	background: var(--bloom-bg-expanded, rgba(20, 20, 22, 0.98));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.12));
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+	scrollbar-width: thin;
+	scrollbar-color: var(--bloom-scrollbar-thumb, rgba(255, 255, 255, 0.15)) transparent;
+	animation: kb-menu-in 0.14s ease-out;
+}
+
+@keyframes kb-menu-in {
+	from {
+		opacity: 0;
+		transform: translateY(-4px);
+	}
+}
+
+.kb-menu-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	min-height: 38px;
+	padding: 4px 10px;
+	border: none;
+	border-radius: 10px;
+	background: transparent;
+	color: var(--bloom-text, white);
+	font-family: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.kb-menu-row:hover:not(:disabled),
+.kb-menu-row.is-on {
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.08));
+}
+
+.kb-menu-row:disabled {
+	cursor: default;
+}
+
+.kb-menu-short {
+	flex: none;
+	min-width: 32px;
+	padding: 2px 0;
+	border-radius: 6px;
+	background: var(--bloom-border, rgba(255, 255, 255, 0.1));
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-align: center;
+}
+
+.kb-menu-names {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.kb-menu-language,
+.kb-menu-keyboard {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.kb-menu-language {
+	font-size: 12px;
+	font-weight: 500;
+}
+
+.kb-menu-keyboard {
+	font-size: 10.5px;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.55));
+}
+
+.kb-menu-check {
+	width: 14px;
+	height: 14px;
+	flex: none;
+	color: var(--bloom-accent, #0a84ff);
+}
+
+.kb-menu-spin {
+	width: 14px;
+	height: 14px;
+	flex: none;
+	animation: kb-menu-spin 0.9s linear infinite;
+}
+
+@keyframes kb-menu-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+.kb-menu-note {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 10px;
+	font-size: 11px;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.6));
+}
+
+.kb-menu-note.is-problem {
+	color: #ff9f0a;
+}

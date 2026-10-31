@@ -16,6 +16,7 @@ mod ghelper_toast;
 mod hang_guard;
 mod integrations;
 mod jumplist;
+mod keyboard_layouts;
 mod later_windows;
 mod launcher;
 mod live_preview;
@@ -348,8 +349,12 @@ fn main() {
             integrations::blitzit::blitzit_disconnect,
             integrations::blitzit::blitzit_lists,
             integrations::blitzit::blitzit_tasks,
-            integrations::blitzit::blitzit_add_task,
-            integrations::blitzit::blitzit_complete_task,
+            integrations::blitzit_sync::blitzit_board,
+            integrations::blitzit_sync::blitzit_add_task,
+            integrations::blitzit_sync::blitzit_complete_task,
+            integrations::blitzit_sync::blitzit_move_task,
+            keyboard_layouts::keyboard_layouts,
+            keyboard_layouts::switch_keyboard_layout,
             integrations::blitzit::blitzit_start,
             integrations::blitzit::blitzit_open,
             integrations::blitzit::blitzit_tools_report,
@@ -537,6 +542,7 @@ fn main() {
             window_memory::start(app.handle().clone());
             shell_probe::start();
             app_tweaks::start();
+            integrations::blitzit_sync::start(app.handle().clone());
             if autostart {
                 app_tweaks::start_portals_after_sign_in(app.handle());
             }

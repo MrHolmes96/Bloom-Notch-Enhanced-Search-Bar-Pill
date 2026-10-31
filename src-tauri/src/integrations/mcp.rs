@@ -15,6 +15,8 @@ pub enum McpError {
     Unauthorized,
     /// The server forgot this connection; start a new one.
     SessionGone,
+    /// The server couldn't be reached, or is having trouble: try later.
+    Offline(String),
     Failed(String),
 }
 
@@ -29,6 +31,7 @@ impl std::fmt::Display for McpError {
         match self {
             McpError::Unauthorized => write!(f, "Signed out: sign in again"),
             McpError::SessionGone => write!(f, "The connection was reset"),
+            McpError::Offline(message) => write!(f, "{}", message),
             McpError::Failed(message) => write!(f, "{}", message),
         }
     }
@@ -126,7 +129,14 @@ impl Client {
                         && answer_for(sse_messages(so_far), id).is_some()
                 })
             },
-        )?;
+        )
+        .map_err(McpError::Offline)?;
+        if response.status >= 500 || response.status == 429 || response.status == 408 {
+            return Err(McpError::Offline(format!(
+                "Blitzit is having trouble right now ({})",
+                response.status
+            )));
+        }
         if response.status == 401 || response.status == 403 {
             return Err(McpError::Unauthorized);
         }

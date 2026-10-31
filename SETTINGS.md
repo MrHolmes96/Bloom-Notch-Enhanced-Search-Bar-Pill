@@ -144,12 +144,13 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | --- | --- | --- | --- |
 | `bloom-notch-blitzit` | `"true"` / `"false"` | `"true"` | Scrolling or swiping on the notch also reaches Blitzit's page (add tasks, today's tasks, Blitz now). |
 | `bloom-blitzit-server` | URL | `"https://core.blitzit.app/v3/mcp"` | Blitzit's connection for other apps (its MCP server). `https://integration-prd.blitzit.app/mcp` for Blitzit before version 3. The sign-in itself is not a setting: it is stored encrypted for this Windows user in `integrations\blitzit.bin` in Bloom's config folder. |
-| `bloom-blitzit-tools` | JSON `{ create, lists, tasks, complete }` of tool names | `"{}"` | Which of Blitzit's actions Bloom uses, when chosen by hand in Settings > Integrations > Blitzit. Missing ones are found automatically from each action's name, description and inputs. |
+| `bloom-blitzit-tools` | JSON `{ create, lists, tasks, complete, move }` of tool names | `"{}"` | Which of Blitzit's actions Bloom uses, when chosen by hand in Settings > Integrations > Blitzit. Missing ones are found automatically from each action's name, description and inputs. |
 | `bloom-ghelper-enabled` | `"true"` / `"false"` | `"true"` | Settings > Integrations > G-Helper: G-Helper's page in the notch (mode, GPU mode, screen, charge limit). Shown only on a PC where G-Helper is installed. |
 | `bloom-ghelper-exe` | path | none | Where G-Helper was last seen running from, to start it again when it isn't running. Kept by Bloom. |
 | `bloom-touchscreen-ids` | device IDs | none | The touchscreen Bloom's "Bloom Touchscreen Off/On" scheduled tasks were made for (Toggle Touchscreen from a hotkey). Made again, with one Windows prompt, when it changes. Kept by Bloom. |
 | `bloom-blitzit-list` | JSON `{ id, name }` | none | The Blitzit list new tasks go in, last chosen in the notch. |
-| `bloom-blitzit-column` | text | `""` | The column new tasks go in (Today, This week, …) when Blitzit offers a choice; Today when not set. |
+| `bloom-blitzit-column` | text | `""` | The column shown in the list view, which new tasks go in (Today, This week, …); Today when not set. |
+| `bloom-blitzit-view` | `"list"` / `"board"` | `"list"` | Blitzit's notch page as the list (add tasks to the list you're on) or as the board (Kanban: every column side by side, drag tasks between them). The lists and tasks, and changes waiting for a connection, aren't settings: they're kept in `integrations\blitzit-cache.json` and `integrations\blitzit-queue.json` in Bloom's config folder. |
 
 ### Search Bar Pill
 

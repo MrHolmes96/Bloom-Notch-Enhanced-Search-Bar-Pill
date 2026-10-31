@@ -3,7 +3,7 @@
 //! so Bloom keeps working whatever the app calls its tools. The choice can
 //! also be made by hand (Settings > Integrations), which always wins.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::mcp::Tool;
@@ -14,14 +14,17 @@ pub enum Kind {
     Lists,
     Tasks,
     CompleteTask,
+    /// Moving a task to another column (Today, This week, …).
+    MoveTask,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [
+    pub const ALL: [Kind; 5] = [
         Kind::CreateTask,
         Kind::Lists,
         Kind::Tasks,
         Kind::CompleteTask,
+        Kind::MoveTask,
     ];
 
     /// The name used for a hand-made choice in the settings.
@@ -31,6 +34,7 @@ impl Kind {
             Kind::Lists => "lists",
             Kind::Tasks => "tasks",
             Kind::CompleteTask => "complete",
+            Kind::MoveTask => "move",
         }
     }
 }
@@ -311,6 +315,23 @@ fn score(tool: &Tool, kind: Kind) -> i32 {
                 0
             }
         }
+        Kind::MoveTask => {
+            if !task_name
+                || destroy
+                || has(&name, CREATE)
+                || has(&name, &["subtask", "subtasks", "note", "notes", "comment"])
+                || move_target(&tool.schema).is_none()
+            {
+                return 0;
+            }
+            if has(&name, &["move"]) {
+                10
+            } else if edits || has(&name, &["schedule", "reschedule", "set"]) {
+                6
+            } else {
+                0
+            }
+        }
         Kind::CompleteTask => {
             if !task_name && !task_text {
                 return 0;
@@ -563,9 +584,84 @@ pub fn complete_args(tool: &Tool, id: &str, list: Option<&ListRef>) -> Result<Va
     Ok(Value::Object(args))
 }
 
+/// Where a move tool takes the column: at the top (`None`), or inside an
+/// object input (`updates: {column}`), by that input's key.
+fn move_target(schema: &Value) -> Option<Option<String>> {
+    let props = properties_of(schema);
+    if column_key(&props).is_some() {
+        return Some(None);
+    }
+    props.iter().find_map(|(key, property)| {
+        let inner = properties_of(property);
+        column_key(&inner).map(|_| Some(key.clone()))
+    })
+}
+
+/// The inputs for moving task `id` to `column`. An error when the tool
+/// can't take that column, so a move is never reported done when it wasn't.
+pub fn move_args(
+    tool: &Tool,
+    id: &str,
+    list: Option<&ListRef>,
+    column: &str,
+) -> Result<Value, String> {
+    let props = properties(tool);
+    let mut args = Map::new();
+    let id_key = find_key(
+        &props,
+        &[
+            "task_id", "taskId", "id", "task", "taskID", "item_id", "itemId",
+        ],
+    )
+    .ok_or("Blitzit's move action doesn't say which task")?;
+    args.insert(id_key, Value::String(id.to_string()));
+    put_list(&mut args, &props, list);
+    if let Some((key, value)) = action_value(&props, &["move", "update", "edit", "change", "set"]) {
+        args.insert(key, Value::String(value));
+    }
+    let not_taken = || {
+        format!(
+            "Blitzit's move action doesn't take the column \"{}\"",
+            column
+        )
+    };
+    match move_target(&tool.schema) {
+        Some(None) => {
+            put_column(&mut args, &props, Some(column));
+            let key = column_key(&props).unwrap_or_default();
+            if !args.contains_key(&key) {
+                // No list of values to check against: send it as Blitzit names it.
+                if enum_values(&props[&key]).is_empty() {
+                    args.insert(key, Value::String(column.to_string()));
+                } else {
+                    return Err(not_taken());
+                }
+            }
+        }
+        Some(Some(outer)) => {
+            let inner_schema = props[&outer].clone();
+            let inner = properties_of(&inner_schema);
+            let mut nested = Map::new();
+            put_column(&mut nested, &inner, Some(column));
+            let key = column_key(&inner).unwrap_or_default();
+            if !nested.contains_key(&key) {
+                if enum_values(&inner[&key]).is_empty() {
+                    nested.insert(key, Value::String(column.to_string()));
+                } else {
+                    return Err(not_taken());
+                }
+            }
+            args.insert(outer, Value::Object(nested));
+        }
+        None => return Err("Blitzit's action can't move tasks between columns".into()),
+    }
+    check_required(&tool.schema, &args)?;
+    Ok(Value::Object(args))
+}
+
 // ---------------------------------------------------------------- reading answers
 
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Item {
     pub id: String,
     pub name: String,
@@ -695,6 +791,28 @@ pub fn items(value: &Value) -> Vec<Item> {
     Vec::new()
 }
 
+/// The task an add answered with, when it says: the one called `title` in
+/// a list, or the task object itself (`{id, title}` or `{task: {id, title}}`).
+pub fn created_item(value: &Value, title: &str) -> Option<Item> {
+    let wanted = squash(title);
+    if let Some(found) = items(value).into_iter().find(|i| squash(&i.name) == wanted) {
+        return Some(found);
+    }
+    let object = value.as_object()?;
+    if let Some(item) = as_item(object, "") {
+        return Some(item);
+    }
+    object
+        .values()
+        .filter_map(|v| v.as_object())
+        .find_map(|inner| as_item(inner, ""))
+}
+
+/// Whether two task titles are the same task's, spacing and case aside.
+pub fn same_title(a: &str, b: &str) -> bool {
+    squash(a) == squash(b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,6 +832,47 @@ mod tests {
             description: description.into(),
             schema,
         }
+    }
+
+    #[test]
+    fn moves_go_to_the_column_or_fail_honestly() {
+        let tools = vec![
+            tool(
+                "update_task",
+                json!({"properties": {"task_id": {}, "completed": {"type": "boolean"}}}),
+            ),
+            tool(
+                "move_task",
+                json!({"properties": {"taskId": {"type": "string"}, "listId": {"type": "string"}, "column": {"enum": ["BACKLOG", "THIS_WEEK", "TODAY"]}}, "required": ["taskId", "column"]}),
+            ),
+        ];
+        // update_task has no column, so it can't move tasks.
+        let mover = pick(&tools, Kind::MoveTask, None).unwrap();
+        assert_eq!(mover.name, "move_task");
+        let list = ListRef {
+            id: "L1".into(),
+            name: "Work".into(),
+        };
+        assert_eq!(
+            move_args(mover, "T1", Some(&list), "This week").unwrap(),
+            json!({"taskId": "T1", "listId": "L1", "column": "THIS_WEEK"})
+        );
+        assert!(move_args(mover, "T1", Some(&list), "Someday").is_err());
+
+        let nested = tool(
+            "edit_task",
+            json!({"properties": {"id": {}, "updates": {"properties": {"section": {"type": "string"}}}}}),
+        );
+        assert_eq!(
+            pick(std::slice::from_ref(&nested), Kind::MoveTask, None)
+                .unwrap()
+                .name,
+            "edit_task"
+        );
+        assert_eq!(
+            move_args(&nested, "T2", None, "today").unwrap(),
+            json!({"id": "T2", "updates": {"section": "today"}})
+        );
     }
 
     #[test]

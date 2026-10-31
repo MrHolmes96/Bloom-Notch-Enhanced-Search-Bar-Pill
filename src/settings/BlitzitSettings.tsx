@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
+	ArrowLeftRight,
 	CheckSquare,
 	ClipboardCopy,
 	Link2,
@@ -33,8 +34,9 @@ const SERVERS = [
 const ACTIONS = [
 	{ id: "create", label: "Add a Task", icon: Plus },
 	{ id: "lists", label: "Your Lists", icon: ListTodo },
-	{ id: "tasks", label: "Today's Tasks", icon: ListChecks },
-	{ id: "complete", label: "Tick a Task Off", icon: CheckSquare }
+	{ id: "tasks", label: "A List's Tasks", icon: ListChecks },
+	{ id: "complete", label: "Tick a Task Off", icon: CheckSquare },
+	{ id: "move", label: "Move a Task to Another Column", icon: ArrowLeftRight }
 ] as const;
 
 function parseChoices(raw: string): Record<string, string> {

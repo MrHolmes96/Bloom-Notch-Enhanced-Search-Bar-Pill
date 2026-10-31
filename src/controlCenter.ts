@@ -86,7 +86,7 @@ export const CC_BUTTONS: CCButtonInfo[] = [
 	{
 		id: "keyboard-layout",
 		label: "Keyboard Layout",
-		desc: "Switch to your next keyboard layout",
+		desc: "Pick one of your keyboard layouts from a list",
 		windows: true
 	},
 	{

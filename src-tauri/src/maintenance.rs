@@ -406,6 +406,7 @@ pub fn export_logs(app: Option<&AppHandle>) -> Result<PathBuf, String> {
         "notification-clicks.log",
         "ghelper.log",
         "app-tweaks.log",
+        "blitzit-sync.log",
         "tray-app-hidden.txt",
         "tray-icons.txt",
         "restarts.txt",
