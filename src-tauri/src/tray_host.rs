@@ -1239,6 +1239,72 @@ pub(crate) fn open_menus(point: POINT, excluded: &[u32]) -> Vec<isize> {
         .collect()
 }
 
+/// Every shown top-level window now (what was on screen before a click).
+pub(crate) fn visible_top_windows() -> Vec<isize> {
+    use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, IsWindowVisible};
+    unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> windows::core::BOOL {
+        let found = &mut *(param.0 as *mut Vec<isize>);
+        if IsWindowVisible(hwnd).as_bool() {
+            found.push(hwnd.0 as isize);
+        }
+        true.into()
+    }
+    let mut found: Vec<isize> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(visit), LPARAM(&mut found as *mut Vec<isize> as isize));
+    }
+    found
+}
+
+/// Windows shown since `before` that can be a click's menu: any app's window
+/// without a title bar (Windows' own menus, and the menus apps draw
+/// themselves however they make them, Steam's among them), of at most a
+/// screen's size. Bloom's own windows aren't, and of Explorer's only its
+/// menus are (it shows notifications and more on its own).
+fn new_menus(before: &[isize], excluded: &[u32], shell: u32) -> Vec<isize> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetWindowLongW, GetWindowRect, GWL_EXSTYLE, GWL_STYLE, WS_CAPTION,
+        WS_EX_TRANSPARENT,
+    };
+    visible_top_windows()
+        .into_iter()
+        .filter(|hwnd| !before.contains(hwnd))
+        .filter(|&hwnd| {
+            let window = HWND(hwnd as *mut _);
+            if !really_shown(window) {
+                return false;
+            }
+            let mut pid = 0u32;
+            unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+            if excluded.contains(&pid) {
+                return false;
+            }
+            let mut class = [0u16; 16];
+            let length = unsafe { GetClassNameW(window, &mut class) } as usize;
+            let system_menu = &class[..length.min(class.len())]
+                == "#32768".encode_utf16().collect::<Vec<_>>().as_slice();
+            if system_menu {
+                return true;
+            }
+            if pid == shell {
+                return false;
+            }
+            let style = unsafe { GetWindowLongW(window, GWL_STYLE) } as u32;
+            let ex_style = unsafe { GetWindowLongW(window, GWL_EXSTYLE) } as u32;
+            if style & WS_CAPTION.0 == WS_CAPTION.0 || ex_style & WS_EX_TRANSPARENT.0 != 0 {
+                return false;
+            }
+            let mut rect = RECT::default();
+            if unsafe { GetWindowRect(window, &mut rect) }.is_err() {
+                return false;
+            }
+            let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+            width > 8 && height > 8 && width <= 2400 && height <= 2400
+        })
+        .collect()
+}
+
 fn menu_log(line: &str) {
     use std::io::Write;
     let Some(path) = crate::utils::data_file("tray-menus.log") else {
@@ -1263,7 +1329,9 @@ fn menu_log(line: &str) {
 
 fn describe_window(hwnd: isize) -> String {
     use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindowRect};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetWindowLongW, GetWindowRect, GWL_EXSTYLE, GWL_STYLE,
+    };
     let window = HWND(hwnd as *mut _);
     let mut class = [0u16; 128];
     let length = unsafe { GetClassNameW(window, &mut class) } as usize;
@@ -1278,8 +1346,10 @@ fn describe_window(hwnd: isize) -> String {
         .unwrap_or_default();
     let mut rect = RECT::default();
     let _ = unsafe { GetWindowRect(window, &mut rect) };
+    let style = unsafe { GetWindowLongW(window, GWL_STYLE) } as u32;
+    let ex_style = unsafe { GetWindowLongW(window, GWL_EXSTYLE) } as u32;
     format!(
-        "{hwnd:#x} {} ({exe}) at {},{} {}x{}",
+        "{hwnd:#x} {} ({exe}) style {style:#x} ex {ex_style:#x} at {},{} {}x{}",
         String::from_utf16_lossy(&class[..length.min(class.len())]),
         rect.left,
         rect.top,
@@ -1437,10 +1507,21 @@ pub(crate) fn watch_interaction(
         // pointed at for a while lets the notch go: it may be one an app keeps
         // around after closing it in a way that can't be told from open.
         let mut last_on_menu = std::time::Instant::now();
+        let shell = shell_pid();
         let reason;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            for hwnd in open_menus(point, &excluded) {
+            let found = if started.elapsed().as_millis() <= 2500 {
+                new_menus(&before, &excluded, shell)
+            } else {
+                // Later, only menus at the click count as new ones (sub-menus
+                // of the ones open are found below).
+                open_menus(point, &excluded)
+                    .into_iter()
+                    .filter(|h| !before.contains(h))
+                    .collect()
+            };
+            for hwnd in found {
                 if !before.contains(&hwnd) && !tracked.contains(&hwnd) {
                     menu_log(&format!("{id}: menu {}", describe_window(hwnd)));
                     let mut pid = 0u32;
@@ -1504,6 +1585,16 @@ pub(crate) fn watch_interaction(
             // No menu at all: the click did something else.
             if !seen && elapsed.as_millis() > 1500 {
                 reason = "no menu appeared";
+                // What did appear, so a menu Bloom misses can be told apart.
+                for hwnd in visible_top_windows()
+                    .into_iter()
+                    .filter(|h| !before.contains(h))
+                {
+                    menu_log(&format!(
+                        "{id}: shown, not taken as a menu: {}",
+                        describe_window(hwnd)
+                    ));
+                }
                 break;
             }
             if elapsed.as_secs() > 600 {
@@ -1651,7 +1742,7 @@ pub fn click(id: &str, button: Button) -> Result<(), String> {
         let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut cursor);
     }
     let excluded = bloom_processes();
-    let before = open_menus(cursor, &excluded);
+    let before = visible_top_windows();
     // The app may bring its menu or window to the front.
     crate::foreground::grant_to(pid);
     let anchor = ((cursor.y as u32 & 0xFFFF) << 16) | (cursor.x as u32 & 0xFFFF);

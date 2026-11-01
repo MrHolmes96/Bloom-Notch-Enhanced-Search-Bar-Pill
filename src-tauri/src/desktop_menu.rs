@@ -3,14 +3,18 @@
 //! The strip beside the dock (and beside the notch, when it keeps its place
 //! at the top) is kept free for Bloom, so it's outside the area Windows
 //! gives apps. A right click on the desktop there still opens the desktop's
-//! menu, but Windows keeps that menu inside the apps' area, so it opened a
-//! long way from the pointer, as if the old taskbar were still there.
+//! menu, but Windows places that menu inside the apps' area, so it opened a
+//! long way from the pointer, as if the old taskbar were still there. Moving
+//! the menu after it opens doesn't work: Windows' menu (WinUI) puts itself
+//! back.
 //!
-//! Bloom notes a right click on the desktop in that strip, and moves the menu
-//! the desktop opens for it (and the classic one "Show more options" opens
-//! from it) to the pointer: above it in the strip at the bottom, below it in
-//! the strip at the top, kept on the screen. Sub-menus open from the menu
-//! where it now is, so they aren't moved.
+//! So Bloom takes that click over: a right click on the desktop in the
+//! strip is held back from Windows, the apps' area is made the whole screen
+//! for a moment, the same click is given to the desktop again, and once its
+//! menu has been placed (at the pointer, since the strip is part of the
+//! screen now) the apps' area is put back. Nothing is told to other apps in
+//! between, so no window moves; whatever happens, the area is put back
+//! within two seconds.
 
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{Duration, Instant};
@@ -21,22 +25,23 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetShellWindow, GetWindowLongW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetWindowPos, WindowFromPoint, GA_ROOT,
-    GWL_STYLE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION, WS_POPUP,
+    GetWindowThreadProcessId, IsWindowVisible, WindowFromPoint, GA_ROOT, GWL_STYLE,
 };
 
-/// Where the strip is, for a press in it: the bottom (menu above the
-/// pointer) or the top (menu below it).
+/// Where the strip is: the bottom (beside the dock) or the top (beside a
+/// notch that keeps its place).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Strip {
     Bottom,
     Top,
 }
 
-/// A right press on the desktop in a strip, waiting for its release.
-static PRESSED_AT: AtomicI64 = AtomicI64::new(i64::MIN);
-/// One menu followed at a time.
-static FOLLOWING: AtomicBool = AtomicBool::new(false);
+/// A right press on the desktop in a strip was held back from Windows.
+static HELD_BACK: AtomicBool = AtomicBool::new(false);
+/// The release that goes with it, waiting for the cursor worker.
+static RELEASED_AT: AtomicI64 = AtomicI64::new(i64::MIN);
+/// One click taken over at a time.
+static OPENING: AtomicBool = AtomicBool::new(false);
 
 fn log(line: &str) {
     use std::io::Write;
@@ -120,43 +125,6 @@ fn class_of(hwnd: HWND) -> String {
     String::from_utf16_lossy(&class[..length.min(class.len())])
 }
 
-/// Moves a menu to the pointer: above it from the bottom strip, below it
-/// from the top one, kept on the pointer's screen.
-fn move_to_pointer(menu: HWND, point: POINT, strip: Strip) -> bool {
-    let Some(info) = monitor_of(point) else {
-        return false;
-    };
-    let screen = info.rcMonitor;
-    let mut rect = RECT::default();
-    if unsafe { GetWindowRect(menu, &mut rect) }.is_err() {
-        return false;
-    }
-    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
-    let x = point
-        .x
-        .clamp(screen.left, (screen.right - width).max(screen.left));
-    let y = match strip {
-        Strip::Bottom => point.y - height,
-        Strip::Top => point.y,
-    }
-    .clamp(screen.top, (screen.bottom - height).max(screen.top));
-    if (x, y) == (rect.left, rect.top) {
-        return true;
-    }
-    unsafe {
-        SetWindowPos(
-            menu,
-            None,
-            x,
-            y,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-        )
-        .is_ok()
-    }
-}
-
 /// Every shown top-level window of Explorer's right now.
 fn explorer_windows(shell: u32) -> Vec<HWND> {
     struct Search {
@@ -195,149 +163,138 @@ fn describe(hwnd: HWND) -> String {
     )
 }
 
-/// A right press: noted when it's in a strip, with what Explorer has open
-/// already (so only the menu it opens next is moved). What's under the
-/// pointer doesn't matter: in the strip there's only the desktop and Bloom's
-/// dock, and a press on the dock opens no Explorer menu.
-pub fn right_pressed(point: POINT) {
-    PRESSED_AT.store(i64::MIN, Ordering::Relaxed);
-    let Some(strip) = strip_at(point) else {
-        return;
-    };
-    let before: Vec<isize> = explorer_windows(shell_pid())
-        .into_iter()
-        .map(|h| h.0 as isize)
-        .collect();
-    log(&format!(
-        "right press at {},{} in the {strip:?} strip (desktop under it: {})",
-        point.x,
-        point.y,
-        desktop_under(point)
-    ));
-    PRESSED_AT.store(crate::utils::get_now_ms(), Ordering::Relaxed);
-    if let Ok(mut slot) = BEFORE.lock() {
-        *slot = before;
+/// From the mouse hook (it must answer at once): whether to hold this right
+/// press back from Windows. Only a real (not Bloom-made) press on the desktop
+/// in a strip is.
+pub fn hold_back_press(point: POINT, injected: bool) -> bool {
+    if injected || OPENING.load(Ordering::Relaxed) {
+        return false;
     }
+    let take = strip_at(point).is_some() && desktop_under(point);
+    HELD_BACK.store(take, Ordering::Relaxed);
+    take
 }
 
-static BEFORE: std::sync::Mutex<Vec<isize>> = std::sync::Mutex::new(Vec::new());
+/// From the mouse hook: whether to hold this right release back too (it
+/// belongs to a press that was). Notes where, for `open_menu_pending`.
+pub fn hold_back_release(point: POINT, injected: bool) -> bool {
+    if injected || !HELD_BACK.swap(false, Ordering::Relaxed) {
+        return false;
+    }
+    RELEASED_AT.store(
+        ((point.x as u32 as u64) << 32 | point.y as u32 as u64) as i64,
+        Ordering::Relaxed,
+    );
+    true
+}
 
-/// The right button let go: the desktop opens its menu now. Follows it.
-pub fn right_released(point: POINT) {
-    let pressed = PRESSED_AT.swap(i64::MIN, Ordering::Relaxed);
-    if pressed == i64::MIN || crate::utils::get_now_ms() - pressed > 3000 {
+/// From the cursor worker: opens the desktop's menu for a click held back.
+pub fn open_menu_pending() {
+    let packed = RELEASED_AT.swap(i64::MIN, Ordering::Relaxed);
+    if packed == i64::MIN {
         return;
     }
-    let Some(strip) = strip_at(point) else {
-        log("released outside the strip: nothing to do");
-        return;
+    let point = POINT {
+        x: (packed as u64 >> 32) as u32 as i32,
+        y: packed as u32 as i32,
     };
-    if FOLLOWING.swap(true, Ordering::Relaxed) {
-        log("already following a menu");
+    if OPENING.swap(true, Ordering::Relaxed) {
         return;
     }
-    let before = BEFORE.lock().map(|b| b.clone()).unwrap_or_default();
     std::thread::spawn(move || {
-        follow(point, strip, before);
-        FOLLOWING.store(false, Ordering::Relaxed);
+        open_at(point);
+        OPENING.store(false, Ordering::Relaxed);
     });
 }
 
-/// Whether a window is a menu: a pop-up without a caption, of menu size.
-fn menu_sized_popup(hwnd: HWND) -> bool {
-    let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32;
-    if style & WS_POPUP.0 == 0 || style & WS_CAPTION.0 == WS_CAPTION.0 {
-        return false;
-    }
-    let mut rect = RECT::default();
-    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
-        return false;
-    }
-    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
-    (40..=1200).contains(&width) && (40..=1600).contains(&height)
-}
-
-fn shown(hwnd: HWND) -> bool {
-    unsafe { IsWindow(Some(hwnd)).as_bool() && IsWindowVisible(hwnd).as_bool() }
-}
-
-/// Keeps `menu` at the pointer while it's open (Windows may place it again
-/// as it lays it out). Gives back when it closed.
-fn hold_at_pointer(menu: HWND, point: POINT, strip: Strip, limit: Duration) {
-    let started = Instant::now();
-    while started.elapsed() < limit && shown(menu) {
-        move_to_pointer(menu, point, strip);
-        std::thread::sleep(Duration::from_millis(25));
+fn set_work_area(area: &RECT) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_SETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+    let mut area = *area;
+    unsafe {
+        SystemParametersInfoW(
+            SPI_SETWORKAREA,
+            0,
+            Some(&mut area as *mut RECT as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .is_ok()
     }
 }
 
-fn follow(point: POINT, strip: Strip, mut before: Vec<isize>) {
+/// The same right click again, where the pointer is (marked as Bloom's, so
+/// the mouse hook lets it through).
+fn right_click() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
+        MOUSEINPUT,
+    };
+    let event = |flags| INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dwFlags: flags,
+                ..Default::default()
+            },
+        },
+    };
+    unsafe {
+        SendInput(
+            &[event(MOUSEEVENTF_RIGHTDOWN), event(MOUSEEVENTF_RIGHTUP)],
+            std::mem::size_of::<INPUT>() as i32,
+        );
+    }
+}
+
+/// The desktop's menu, once it's on screen with its size (WinUI's, or the
+/// classic one).
+fn menu_shown(shell: u32) -> Option<HWND> {
+    explorer_windows(shell).into_iter().find(|&hwnd| {
+        let class = class_of(hwnd);
+        if class != "Microsoft.UI.Content.PopupWindowSiteBridge" && class != "#32768" {
+            return false;
+        }
+        let mut rect = RECT::default();
+        unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok()
+            && rect.right - rect.left > 40
+            && rect.bottom - rect.top > 40
+    })
+}
+
+fn open_at(point: POINT) {
+    let Some(info) = monitor_of(point) else {
+        right_click();
+        return;
+    };
+    let (work, screen) = (info.rcWork, info.rcMonitor);
     let shell = shell_pid();
-    let new_windows = |before: &[isize]| -> Vec<HWND> {
-        explorer_windows(shell)
-            .into_iter()
-            .filter(|h| !before.contains(&(h.0 as isize)))
-            .collect()
-    };
-    // The desktop's menu, once it's open.
-    let started = Instant::now();
-    let menu = loop {
-        let fresh = new_windows(&before);
-        if let Some(menu) = fresh.iter().copied().find(|&h| menu_sized_popup(h)) {
-            break menu;
-        }
-        for other in &fresh {
-            log(&format!(
-                "new Explorer window, not a menu: {}",
-                describe(*other)
-            ));
-            before.push(other.0 as isize);
-        }
-        if started.elapsed() > Duration::from_millis(2000) {
-            log("no menu came from Explorer");
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    let placed = describe(menu);
-    let moved = move_to_pointer(menu, point, strip);
+    let widened = set_work_area(&screen);
     log(&format!(
-        "desktop menu {placed} moved to the pointer at {},{} ({strip:?} strip): {moved}, now {}",
-        point.x,
-        point.y,
-        describe(menu)
+        "right click at {},{} taken over: apps' area made the whole screen: {widened}",
+        point.x, point.y
     ));
-    // Windows lays the menu out as it opens: it's held at the pointer for a
-    // moment, and checked while it stays open.
-    hold_at_pointer(menu, point, strip, Duration::from_millis(600));
-    // Everything open now is the menu's own (its sub-menus open from where
-    // it is now). "Show more options" closes it and opens the classic menu
-    // in the old place: that one is moved too.
-    before.extend(explorer_windows(shell).into_iter().map(|h| h.0 as isize));
-    let open_until = Instant::now() + Duration::from_secs(120);
-    while Instant::now() < open_until {
-        std::thread::sleep(Duration::from_millis(40));
-        if shown(menu) {
-            move_to_pointer(menu, point, strip);
-            before.extend(explorer_windows(shell).into_iter().map(|h| h.0 as isize));
-            continue;
-        }
-        let closed_at = Instant::now();
-        while closed_at.elapsed() < Duration::from_millis(1000) {
-            if let Some(classic) = new_windows(&before)
-                .into_iter()
-                .find(|&h| class_of(h) == "#32768")
-            {
-                move_to_pointer(classic, point, strip);
-                log(&format!(
-                    "classic desktop menu moved to the pointer: {}",
-                    describe(classic)
-                ));
-                hold_at_pointer(classic, point, strip, Duration::from_millis(300));
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(15));
-        }
+    right_click();
+    if !widened {
         return;
     }
+    let started = Instant::now();
+    let mut menu = None;
+    while started.elapsed() < Duration::from_millis(1800) {
+        std::thread::sleep(Duration::from_millis(10));
+        if let Some(found) = menu_shown(shell) {
+            menu = Some(found);
+            break;
+        }
+    }
+    // Placed as it gets its size; a moment more for it to settle.
+    if menu.is_some() {
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    let restored = set_work_area(&work);
+    log(&format!(
+        "menu {} after {} ms; apps' area put back: {restored}",
+        menu.map(describe).unwrap_or_else(|| "didn't open".into()),
+        started.elapsed().as_millis()
+    ));
 }

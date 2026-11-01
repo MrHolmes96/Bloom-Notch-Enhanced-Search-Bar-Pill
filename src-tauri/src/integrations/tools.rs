@@ -16,15 +16,18 @@ pub enum Kind {
     CompleteTask,
     /// Moving a task to another column (Today, This week, …).
     MoveTask,
+    /// Changing a task's place within its column.
+    ReorderTask,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 5] = [
+    pub const ALL: [Kind; 6] = [
         Kind::CreateTask,
         Kind::Lists,
         Kind::Tasks,
         Kind::CompleteTask,
         Kind::MoveTask,
+        Kind::ReorderTask,
     ];
 
     /// The name used for a hand-made choice in the settings.
@@ -35,6 +38,7 @@ impl Kind {
             Kind::Tasks => "tasks",
             Kind::CompleteTask => "complete",
             Kind::MoveTask => "move",
+            Kind::ReorderTask => "reorder",
         }
     }
 }
@@ -302,7 +306,40 @@ fn score(tool: &Tool, kind: Kind) -> i32 {
                 return 0;
             }
             if task_name && has(&name, READ) {
-                10 + if has(&name, &["tasks"]) { 2 } else { 0 }
+                let mut score = 10 + if has(&name, &["tasks"]) { 2 } else { 0 };
+                // All of a list's tasks, not a slice of them (today's, this
+                // week's, the scheduled ones, the ones matching a search).
+                if joined == "list_tasks" || joined == "get_tasks" || joined == "get_all_tasks" {
+                    score += 4;
+                }
+                if list_key(&props).is_some() {
+                    score += 2;
+                }
+                if has(
+                    &name,
+                    &[
+                        "today",
+                        "todays",
+                        "week",
+                        "weeks",
+                        "scheduled",
+                        "deleted",
+                        "search",
+                        "counts",
+                        "count",
+                    ],
+                ) {
+                    score -= 4;
+                }
+                if !has(&name, &["tasks"])
+                    && required_of(&tool.schema)
+                        .iter()
+                        .any(|r| has(&words(r), &["id"]))
+                {
+                    // One task by its id.
+                    score -= 6;
+                }
+                score.max(1)
             } else if task_text
                 && has(
                     &text,
@@ -311,6 +348,22 @@ fn score(tool: &Tool, kind: Kind) -> i32 {
                 && !has(&text, &["create", "creates"])
             {
                 5
+            } else {
+                0
+            }
+        }
+        Kind::ReorderTask => {
+            if !task_name || destroy || has(&name, CREATE) || has(&name, &["subtask", "subtasks"]) {
+                return 0;
+            }
+            let places = props.keys().any(|k| {
+                has(
+                    &words(k),
+                    &["before", "after", "position", "index", "order", "rank"],
+                )
+            });
+            if has(&name, &["reorder", "sort", "rank", "position"]) && places {
+                10
             } else {
                 0
             }
@@ -341,6 +394,8 @@ fn score(tool: &Tool, kind: Kind) -> i32 {
                     &name,
                     &["subtask", "uncomplete", "incomplete", "undo", "reopen"],
                 )
+                // Reading the done ones isn't ticking one off.
+                || has(&name, &["get", "list", "search", "fetch", "find", "read", "count"])
             {
                 return 0;
             }
@@ -379,7 +434,7 @@ fn list_key(props: &Map<String, Value>) -> Option<String> {
         .keys()
         .filter(|k| {
             let w = words(k);
-            has(&w, &["list", "listid", "project", "board"]) && !has(&w, &["column", "lists"])
+            has(&w, &["list", "listid", "project"]) && !has(&w, &["column", "lists"])
         })
         .collect();
     // An id is the safest thing to send.
@@ -393,7 +448,7 @@ fn column_key(props: &Map<String, Value>) -> Option<String> {
         .find(|k| {
             has(
                 &words(k),
-                &["column", "section", "bucket", "stage", "status"],
+                &["column", "section", "bucket", "stage", "board", "status"],
             )
         })
         .cloned()
@@ -535,14 +590,62 @@ pub fn column_choices(tool: &Tool) -> Vec<String> {
 
 /// The inputs for reading tasks, from one list when the tool takes one.
 pub fn tasks_args(tool: &Tool, list: Option<&ListRef>) -> Result<Value, String> {
+    tasks_page_args(tool, list, None)
+}
+
+/// The inputs for reading tasks, done ones too (the board's Done column),
+/// as many at once as the tool allows, from `cursor` on when paging.
+pub fn tasks_page_args(
+    tool: &Tool,
+    list: Option<&ListRef>,
+    cursor: Option<&str>,
+) -> Result<Value, String> {
     let props = properties(tool);
     let mut args = Map::new();
     if let Some((key, value)) = action_value(&props, READ) {
         args.insert(key, Value::String(value));
     }
     put_list(&mut args, &props, list);
+    if let Some(key) = find_key(
+        &props,
+        &[
+            "includeCompleted",
+            "include_completed",
+            "includeDone",
+            "include_done",
+            "showCompleted",
+        ],
+    ) {
+        args.insert(key, Value::Bool(true));
+    }
+    if let Some(key) = find_key(&props, &["limit", "pageSize", "page_size", "per_page"]) {
+        args.insert(key, Value::from(100));
+    }
+    if let (Some(cursor), Some(key)) = (
+        cursor,
+        find_key(&props, &["cursor", "nextCursor", "pageToken", "page_token"]),
+    ) {
+        args.insert(key, Value::String(cursor.to_string()));
+    }
     check_required(&tool.schema, &args)?;
     Ok(Value::Object(args))
+}
+
+/// The cursor for the next page of an answer, when there is one.
+pub fn next_cursor(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    [
+        "nextCursor",
+        "next_cursor",
+        "cursor",
+        "nextPageToken",
+        "next_page_token",
+    ]
+    .iter()
+    .find_map(|k| object.get(*k))
+    .and_then(|v| v.as_str())
+    .filter(|c| !c.is_empty())
+    .map(str::to_string)
 }
 
 /// The inputs for reading the lists.
@@ -560,14 +663,9 @@ pub fn lists_args(tool: &Tool) -> Result<Value, String> {
 pub fn complete_args(tool: &Tool, id: &str, list: Option<&ListRef>) -> Result<Value, String> {
     let props = properties(tool);
     let mut args = Map::new();
-    let id_key = find_key(
-        &props,
-        &[
-            "task_id", "taskId", "id", "task", "taskID", "item_id", "itemId",
-        ],
-    )
-    .ok_or("Blitzit's tool doesn't say which task")?;
-    args.insert(id_key, Value::String(id.to_string()));
+    if !put_task_id(&mut args, &props, id) {
+        return Err("Blitzit's tool doesn't say which task".into());
+    }
     put_list(&mut args, &props, list);
     if let Some((key, value)) = action_value(&props, DONE) {
         args.insert(key, Value::String(value));
@@ -579,6 +677,84 @@ pub fn complete_args(tool: &Tool, id: &str, list: Option<&ListRef>) -> Result<Va
         if required_of(&tool.schema).contains(&key) {
             args.insert(key, value);
         }
+    }
+    check_required(&tool.schema, &args)?;
+    Ok(Value::Object(args))
+}
+
+/// The task an action is for: `taskId: "T1"`, or `taskIds: ["T1"]` for an
+/// action that takes several.
+fn put_task_id(args: &mut Map<String, Value>, props: &Map<String, Value>, id: &str) -> bool {
+    if let Some(key) = find_key(
+        props,
+        &[
+            "task_id", "taskId", "id", "task", "taskID", "item_id", "itemId",
+        ],
+    ) {
+        args.insert(key, Value::String(id.to_string()));
+        return true;
+    }
+    if let Some(key) = find_key(
+        props,
+        &["task_ids", "taskIds", "ids", "tasks", "item_ids", "itemIds"],
+    ) {
+        if props[&key].get("type").and_then(|t| t.as_str()) == Some("array") {
+            args.insert(key, Value::Array(vec![Value::String(id.to_string())]));
+            return true;
+        }
+    }
+    false
+}
+
+/// The inputs for putting task `id` just before `before` (or after `after`,
+/// or at the top when neither is given) in its column.
+pub fn reorder_args(
+    tool: &Tool,
+    id: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> Result<Value, String> {
+    let props = properties(tool);
+    let mut args = Map::new();
+    if !put_task_id(&mut args, &props, id) {
+        return Err("Blitzit's reorder action doesn't say which task".into());
+    }
+    let key_with = |word: &str| {
+        props
+            .keys()
+            .find(|k| {
+                let w = words(k);
+                has(&w, &[word]) && !w.iter().any(|x| x == "position")
+            })
+            .cloned()
+    };
+    let placed = match (before, after) {
+        (Some(before), _) if key_with("before").is_some() => {
+            args.insert(
+                key_with("before").unwrap_or_default(),
+                Value::String(before.into()),
+            );
+            true
+        }
+        (_, Some(after)) if key_with("after").is_some() => {
+            args.insert(
+                key_with("after").unwrap_or_default(),
+                Value::String(after.into()),
+            );
+            true
+        }
+        _ => false,
+    };
+    if !placed {
+        let key = find_key(&props, &["position"]).ok_or("Blitzit can't place the task there")?;
+        let values = enum_values(&props[&key]);
+        let wanted = if after.is_some() { "bottom" } else { "top" };
+        let value = values
+            .iter()
+            .find(|v| v.eq_ignore_ascii_case(wanted))
+            .cloned()
+            .ok_or("Blitzit can't place the task there")?;
+        args.insert(key, Value::String(value));
     }
     check_required(&tool.schema, &args)?;
     Ok(Value::Object(args))
@@ -607,14 +783,9 @@ pub fn move_args(
 ) -> Result<Value, String> {
     let props = properties(tool);
     let mut args = Map::new();
-    let id_key = find_key(
-        &props,
-        &[
-            "task_id", "taskId", "id", "task", "taskID", "item_id", "itemId",
-        ],
-    )
-    .ok_or("Blitzit's move action doesn't say which task")?;
-    args.insert(id_key, Value::String(id.to_string()));
+    if !put_task_id(&mut args, &props, id) {
+        return Err("Blitzit's move action doesn't say which task".into());
+    }
     put_list(&mut args, &props, list);
     if let Some((key, value)) = action_value(&props, &["move", "update", "edit", "change", "set"]) {
         args.insert(key, Value::String(value));
@@ -673,6 +844,13 @@ pub struct Item {
     /// Its colour, when the answer says (a list's, in Blitzit).
     #[serde(default)]
     pub color: String,
+    /// Its emoji, when it has one instead of a colour (a list's, in Blitzit).
+    #[serde(default)]
+    pub emoji: String,
+    /// Its place in its column, when the answer says (sorts as text or as a
+    /// number, whichever it is).
+    #[serde(default)]
+    pub order: String,
 }
 
 const ID_KEYS: &[&str] = &[
@@ -733,6 +911,7 @@ fn as_item(object: &Map<String, Value>, parent_key: &str) -> Option<Item> {
             "column",
             "column_name",
             "columnName",
+            "board",
             "section",
             "bucket",
             "when",
@@ -740,12 +919,41 @@ fn as_item(object: &Map<String, Value>, parent_key: &str) -> Option<Item> {
     )
     .or_else(|| (!status.is_empty() && !done).then(|| status.clone()))
     .unwrap_or_else(|| parent_key.to_string());
+    // On the Done board means done.
+    let done =
+        done || ["done", "completed", "complete", "finished"].contains(&squash(&column).as_str());
+    let order = string_field(
+        object,
+        &[
+            "position",
+            "order",
+            "rank",
+            "sortOrder",
+            "sort_order",
+            "sortIndex",
+            "index",
+        ],
+    )
+    .unwrap_or_default();
+    // A list's mark: `avatar: {type: "color" | "emoji", value}`.
+    let avatar = object
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("avatar"))
+        .and_then(|(_, v)| v.as_object());
+    let avatar_of = |kind: &str| {
+        avatar
+            .filter(|a| a.get("type").and_then(|t| t.as_str()) == Some(kind))
+            .and_then(|a| a.get("value").and_then(|v| v.as_str()))
+            .map(str::to_string)
+    };
+    let emoji = avatar_of("emoji").unwrap_or_default();
     let list = string_field(
         object,
         &["list_name", "listName", "list", "list_id", "listId"],
     )
     .unwrap_or_default();
-    let color = string_field(object, &["color", "colour", "hex", "color_hex", "colorHex"])
+    let color = avatar_of("color")
+        .or_else(|| string_field(object, &["color", "colour", "hex", "color_hex", "colorHex"]))
         .filter(|c| c.len() <= 32)
         .unwrap_or_default();
     Some(Item {
@@ -755,6 +963,8 @@ fn as_item(object: &Map<String, Value>, parent_key: &str) -> Option<Item> {
         column,
         list,
         color,
+        emoji,
+        order,
     })
 }
 
@@ -839,6 +1049,93 @@ mod tests {
             description: description.into(),
             schema,
         }
+    }
+
+    /// Blitzit's own actions, as its connection lists them (Blitzit 3.0).
+    fn blitzit_tools() -> Vec<Tool> {
+        let raw: Vec<Value> =
+            serde_json::from_str(include_str!("testdata/blitzit-tools.json")).unwrap();
+        raw.into_iter()
+            .map(|t| Tool {
+                name: t["name"].as_str().unwrap().into(),
+                description: t["description"].as_str().unwrap_or_default().into(),
+                schema: t["inputSchema"].clone(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn blitzits_own_actions_are_picked_and_filled_in() {
+        let tools = blitzit_tools();
+        let name = |kind| pick(&tools, kind, None).map(|t| t.name.clone());
+        assert_eq!(name(Kind::CreateTask).as_deref(), Some("create_task"));
+        assert_eq!(name(Kind::Lists).as_deref(), Some("list_lists"));
+        assert_eq!(name(Kind::Tasks).as_deref(), Some("list_tasks"));
+        assert_eq!(name(Kind::CompleteTask).as_deref(), Some("complete_task"));
+        assert_eq!(name(Kind::MoveTask).as_deref(), Some("move_tasks_to_board"));
+        assert_eq!(name(Kind::ReorderTask).as_deref(), Some("reorder_task"));
+
+        let list = ListRef {
+            id: "L1".into(),
+            name: "test list".into(),
+        };
+        let create = pick(&tools, Kind::CreateTask, None).unwrap();
+        assert_eq!(
+            column_choices(create),
+            vec!["backlog".to_string(), "today".into(), "this-week".into()]
+        );
+        assert_eq!(
+            create_args(create, "Gym", Some(&list), Some("this-week")).unwrap(),
+            json!({"title": "Gym", "listId": "L1", "board": "this-week"})
+        );
+        let read = pick(&tools, Kind::Tasks, None).unwrap();
+        assert_eq!(
+            tasks_page_args(read, Some(&list), Some("c2")).unwrap(),
+            json!({"listId": "L1", "includeCompleted": true, "limit": 100, "cursor": "c2"})
+        );
+        let mover = pick(&tools, Kind::MoveTask, None).unwrap();
+        assert_eq!(
+            move_args(mover, "T1", Some(&list), "This Week").unwrap(),
+            json!({"taskIds": ["T1"], "board": "this-week"})
+        );
+        // Done is a board too: ticking off needs no revision that way.
+        assert_eq!(
+            move_args(mover, "T1", None, "done").unwrap(),
+            json!({"taskIds": ["T1"], "board": "done"})
+        );
+        let reorder = pick(&tools, Kind::ReorderTask, None).unwrap();
+        assert_eq!(
+            reorder_args(reorder, "T1", Some("T2"), None).unwrap(),
+            json!({"taskId": "T1", "beforeTaskId": "T2"})
+        );
+        assert_eq!(
+            reorder_args(reorder, "T1", None, Some("T3")).unwrap(),
+            json!({"taskId": "T1", "afterTaskId": "T3"})
+        );
+        assert_eq!(
+            reorder_args(reorder, "T1", None, None).unwrap(),
+            json!({"taskId": "T1", "position": "top"})
+        );
+    }
+
+    #[test]
+    fn blitzit_tasks_and_lists_read_right() {
+        let answer = json!({"tasks": [
+            {"id": "T1", "title": "Gym", "board": "today", "position": "a2"},
+            {"id": "T2", "title": "Done one", "board": "done", "position": "a1"}
+        ], "nextCursor": "c2"});
+        let found = items(&answer);
+        assert_eq!(found[0].column, "today");
+        assert!(!found[0].done);
+        assert!(found[1].done);
+        assert_eq!(found[0].order, "a2");
+        assert_eq!(next_cursor(&answer).as_deref(), Some("c2"));
+        let lists = items(&json!({"lists": [
+            {"id": "L1", "name": "test list", "avatar": {"type": "color", "value": "#22c55e"}},
+            {"id": "L2", "name": "Work", "avatar": {"type": "emoji", "value": "💼"}}
+        ]}));
+        assert_eq!(lists[0].color, "#22c55e");
+        assert_eq!(lists[1].emoji, "💼");
     }
 
     #[test]

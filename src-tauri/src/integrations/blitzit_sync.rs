@@ -36,6 +36,9 @@ pub struct BoardList {
     /// Its colour in Blitzit, when Blitzit says.
     #[serde(default)]
     pub color: String,
+    /// Its emoji in Blitzit, when it has one instead of a colour.
+    #[serde(default)]
+    pub emoji: String,
     /// Its open tasks, as far as this PC knows (for the board's list of lists).
     #[serde(default)]
     pub open: usize,
@@ -52,6 +55,8 @@ struct Caps {
     tasks: bool,
     complete: bool,
     moving: bool,
+    #[serde(default)]
+    reorder: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -79,6 +84,8 @@ enum OpKind {
     Add,
     Complete,
     Move,
+    /// A new place in its column: before `before` (or after `after`).
+    Reorder,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -102,6 +109,11 @@ struct Op {
     /// Times it was sent already (it may have reached Blitzit).
     #[serde(default)]
     tries: u32,
+    /// For a reorder: the task it goes before, or after.
+    #[serde(default)]
+    before: Option<String>,
+    #[serde(default)]
+    after: Option<String>,
     #[serde(default)]
     at: i64,
 }
@@ -255,6 +267,7 @@ pub struct Board {
     can_add: bool,
     can_complete: bool,
     can_move: bool,
+    can_reorder: bool,
     /// Blitzit couldn't be reached: this is the copy saved on this PC.
     offline: bool,
     /// Something else went wrong.
@@ -334,6 +347,14 @@ fn board(app: &AppHandle, list_id: Option<String>, problem: Option<String>) -> B
                 OpKind::Move => {
                     if let Some(task) = tasks.iter_mut().find(|t| target(t)) {
                         task.column = op.column.clone().unwrap_or_default();
+                        // Out of Done is back on the board.
+                        task.done = false;
+                        task.pending = true;
+                    }
+                }
+                OpKind::Reorder => {
+                    place(&mut tasks, |t| target(t), op, |t: &BoardTask| t.id.clone());
+                    if let Some(task) = tasks.iter_mut().find(|t| target(t)) {
                         task.pending = true;
                     }
                 }
@@ -366,6 +387,7 @@ fn board(app: &AppHandle, list_id: Option<String>, problem: Option<String>) -> B
             can_add: caps.is_none_or(|c| c.add),
             can_complete: caps.is_none_or(|c| c.complete),
             can_move: caps.is_none_or(|c| c.moving),
+            can_reorder: caps.is_none_or(|c| c.reorder),
             offline: OFFLINE.load(Ordering::Relaxed),
             problem,
             pending: store.queue.len(),
@@ -374,7 +396,41 @@ fn board(app: &AppHandle, list_id: Option<String>, problem: Option<String>) -> B
     })
 }
 
-/// Reads one list's tasks from Blitzit.
+/// Moves the task `is_it` finds to just before `op.before` (or after
+/// `op.after`, or to the top) among `tasks`.
+fn place<T>(tasks: &mut Vec<T>, is_it: impl Fn(&T) -> bool, op: &Op, id_of: impl Fn(&T) -> String) {
+    let Some(from) = tasks.iter().position(&is_it) else {
+        return;
+    };
+    let task = tasks.remove(from);
+    let at = if let Some(before) = &op.before {
+        tasks.iter().position(|t| &id_of(t) == before)
+    } else if let Some(after) = &op.after {
+        tasks.iter().position(|t| &id_of(t) == after).map(|i| i + 1)
+    } else {
+        Some(0)
+    };
+    let at = at.unwrap_or(from.min(tasks.len()));
+    tasks.insert(at.min(tasks.len()), task);
+}
+
+/// Places sort as numbers when they are numbers, else as text; tasks
+/// without one keep their place after the ones with one.
+fn by_place(a: &Item, b: &Item) -> std::cmp::Ordering {
+    use std::cmp::Ordering::*;
+    match (a.order.is_empty(), b.order.is_empty()) {
+        (true, true) => Equal,
+        (true, false) => Greater,
+        (false, true) => Less,
+        (false, false) => match (a.order.parse::<f64>(), b.order.parse::<f64>()) {
+            (Ok(x), Ok(y)) => x.partial_cmp(&y).unwrap_or(Equal),
+            _ => a.order.cmp(&b.order),
+        },
+    }
+}
+
+/// Reads one list's tasks from Blitzit (done ones too, every page), in
+/// their order on the board.
 fn read_tasks(
     app: &AppHandle,
     client: &mut super::mcp::Client,
@@ -383,9 +439,106 @@ fn read_tasks(
 ) -> Result<Vec<Item>, McpError> {
     let tool = blitzit::pick(app, client, Kind::Tasks)
         .ok_or_else(|| McpError::Failed("Blitzit doesn't share its tasks".into()))?;
-    let args = tools::tasks_args(&tool, list)?;
-    let answer = client.call(token, &tool.name, args)?;
-    Ok(tools::items(&answer))
+    let mut all: Vec<Item> = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..5 {
+        let args = tools::tasks_page_args(&tool, list, cursor.as_deref())?;
+        let answer = client.call(token, &tool.name, args)?;
+        for item in tools::items(&answer) {
+            if !all.iter().any(|i| i.id == item.id) {
+                all.push(item);
+            }
+        }
+        cursor = tools::next_cursor(&answer);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    all.sort_by(by_place);
+    Ok(all)
+}
+
+/// A task's current revision, for an action that asks for it (`_rev`).
+fn revision_of(
+    client: &mut super::mcp::Client,
+    token: &str,
+    id: &str,
+) -> Result<Option<String>, McpError> {
+    let Some(tool) = client
+        .tools
+        .iter()
+        .find(|t| {
+            let w = tools::words(&t.name);
+            w == ["get", "task"]
+        })
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let key = tool
+        .schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .and_then(|p| {
+            p.keys()
+                .find(|k| tools::words(k) == ["task", "id"])
+                .cloned()
+        })
+        .unwrap_or_else(|| "taskId".into());
+    let answer = client.call(token, &tool.name, serde_json::json!({ key: id }))?;
+    let find = |v: &serde_json::Value| {
+        ["_rev", "rev", "revision"]
+            .iter()
+            .find_map(|k| v.get(*k))
+            .and_then(|r| r.as_str().map(str::to_string))
+    };
+    Ok(find(&answer).or_else(|| {
+        answer.as_object().and_then(|o| {
+            o.values()
+                .find_map(|v| v.is_object().then(|| find(v)).flatten())
+        })
+    }))
+}
+
+/// Ticks a task off: by moving it to Done when Blitzit's move action has a
+/// Done column (no revision needed), else with its complete action.
+fn complete_in_blitzit(
+    app: &AppHandle,
+    client: &mut super::mcp::Client,
+    token: &str,
+    id: &str,
+    list: Option<&ListRef>,
+) -> Result<(), McpError> {
+    if let Some(tool) = blitzit::pick(app, client, Kind::MoveTask) {
+        if let Ok(args) = tools::move_args(&tool, id, list, "done") {
+            client.call(token, &tool.name, args)?;
+            return Ok(());
+        }
+    }
+    let tool = blitzit::pick(app, client, Kind::CompleteTask)
+        .ok_or_else(|| McpError::Failed("Blitzit can't tick tasks off from here".into()))?;
+    let args = match tools::complete_args(&tool, id, list) {
+        Ok(args) => args,
+        Err(why) if why.contains("_rev") => {
+            let rev =
+                revision_of(client, token, id)?.ok_or_else(|| McpError::Failed(why.clone()))?;
+            let mut args = serde_json::Map::new();
+            args.insert("_rev".into(), serde_json::Value::String(rev));
+            let props = tool.schema.get("properties").and_then(|p| p.as_object());
+            let id_key = props
+                .and_then(|p| {
+                    p.keys()
+                        .find(|k| tools::words(k) == ["task", "id"])
+                        .cloned()
+                })
+                .unwrap_or_else(|| "taskId".into());
+            args.insert(id_key, serde_json::Value::String(id.into()));
+            serde_json::Value::Object(args)
+        }
+        Err(why) => return Err(McpError::Failed(why)),
+    };
+    client.call(token, &tool.name, args)?;
+    Ok(())
 }
 
 /// Sends what's waiting, then reads the lists and the shown list's tasks
@@ -411,6 +564,7 @@ fn refresh(
             tasks: blitzit::pick(app, client, Kind::Tasks).is_some(),
             complete: blitzit::pick(app, client, Kind::CompleteTask).is_some(),
             moving: blitzit::pick(app, client, Kind::MoveTask).is_some(),
+            reorder: blitzit::pick(app, client, Kind::ReorderTask).is_some(),
         };
         let columns = blitzit::pick(app, client, Kind::CreateTask)
             .map(|t| tools::column_choices(&t))
@@ -427,6 +581,7 @@ fn refresh(
                         id: i.id,
                         name: i.name,
                         color: i.color,
+                        emoji: i.emoji,
                         open: 0,
                     })
                     .collect::<Vec<_>>(),
@@ -596,6 +751,8 @@ pub fn blitzit_add_task(
         list_id: list_id.clone(),
         list_name,
         tries: 0,
+        before: None,
+        after: None,
         at: crate::utils::get_now_ms(),
     };
     let task = BoardTask {
@@ -653,6 +810,8 @@ pub fn blitzit_complete_task(
             list_id: list_id.filter(|l| !l.is_empty()),
             list_name,
             tries: 0,
+            before: None,
+            after: None,
             at: crate::utils::get_now_ms(),
         },
     );
@@ -715,6 +874,62 @@ pub fn blitzit_move_task(
             list_id,
             list_name,
             tries: 0,
+            before: None,
+            after: None,
+            at: crate::utils::get_now_ms(),
+        },
+    );
+    Ok(())
+}
+
+/// Puts a task just before `before` (or after `after`; at the top when
+/// neither) in its column.
+#[tauri::command]
+pub fn blitzit_reorder_task(
+    app: AppHandle,
+    task_id: String,
+    list_id: Option<String>,
+    list_name: Option<String>,
+    before: Option<String>,
+    after: Option<String>,
+) -> Result<(), String> {
+    if with_store(&app, |s| s.cache.caps.is_some_and(|c| !c.reorder)) {
+        return Err("Blitzit's connection doesn't let Bloom reorder tasks".into());
+    }
+    let list_id = list_id.filter(|l| !l.is_empty());
+    // A reorder still waiting is changed rather than sent twice.
+    let merged = with_store(&app, |store| {
+        let found = store
+            .queue
+            .iter_mut()
+            .find(|op| op.kind == OpKind::Reorder && op.task_id == task_id && op.tries == 0);
+        if let Some(op) = found {
+            op.before = before.clone();
+            op.after = after.clone();
+            save_queue(&app, store);
+            true
+        } else {
+            false
+        }
+    });
+    if merged {
+        kick();
+        return Ok(());
+    }
+    queue(
+        &app,
+        Op {
+            id: new_local_id(),
+            kind: OpKind::Reorder,
+            title: String::new(),
+            task_id,
+            column: None,
+            done: false,
+            list_id,
+            list_name,
+            tries: 0,
+            before,
+            after,
             at: crate::utils::get_now_ms(),
         },
     );
@@ -781,25 +996,26 @@ fn send(app: &AppHandle, op: &Op) -> Result<Option<String>, Fail> {
                     ));
                 }
                 if let Some(id) = id.clone().filter(|_| op.done) {
-                    let tool = blitzit::pick(app, client, Kind::CompleteTask).ok_or_else(|| {
-                        McpError::Failed("Blitzit can't tick tasks off from here".into())
-                    })?;
-                    let args = tools::complete_args(&tool, &id, list.as_ref())?;
-                    client.call(token, &tool.name, args)?;
+                    complete_in_blitzit(app, client, token, &id, list.as_ref())?;
                 }
                 Ok(id)
             })
         }
-        OpKind::Complete | OpKind::Move => {
+        OpKind::Complete | OpKind::Move | OpKind::Reorder => {
             let id = real_id(app, &op.task_id).ok_or_else(|| {
                 Fail::Other("Blitzit didn't say which task the new one is".into())
             })?;
+            let neighbour = |other: &Option<String>| other.as_deref().and_then(|o| real_id(app, o));
+            let (before, after) = (neighbour(&op.before), neighbour(&op.after));
             blitzit::with_client_ex(app, |client, token| {
                 if op.kind == OpKind::Complete {
-                    let tool = blitzit::pick(app, client, Kind::CompleteTask).ok_or_else(|| {
-                        McpError::Failed("Blitzit can't tick tasks off from here".into())
+                    complete_in_blitzit(app, client, token, &id, list.as_ref())?;
+                } else if op.kind == OpKind::Reorder {
+                    let tool = blitzit::pick(app, client, Kind::ReorderTask).ok_or_else(|| {
+                        McpError::Failed("Blitzit can't reorder tasks from here".into())
                     })?;
-                    let args = tools::complete_args(&tool, &id, list.as_ref())?;
+                    let args =
+                        tools::reorder_args(&tool, &id, before.as_deref(), after.as_deref())?;
                     client.call(token, &tool.name, args)?;
                 } else {
                     let tool = blitzit::pick(app, client, Kind::MoveTask).ok_or_else(|| {
@@ -829,6 +1045,8 @@ fn apply(cache: &mut Cache, op: &Op, made: Option<String>) {
                     column: op.column.clone().unwrap_or_default(),
                     list: op.list_name.clone().unwrap_or_default(),
                     color: String::new(),
+                    emoji: String::new(),
+                    order: String::new(),
                 });
             }
             if let Some(real) = made {
@@ -852,8 +1070,28 @@ fn apply(cache: &mut Cache, op: &Op, made: Option<String>) {
                     task.done = true;
                 } else {
                     task.column = op.column.clone().unwrap_or_default();
+                    task.done = false;
                 }
             }
+        }
+        OpKind::Reorder => {
+            let real = cache.made.get(&op.task_id).cloned();
+            let made = cache.made.clone();
+            let resolve = |id: &Option<String>| {
+                id.as_ref()
+                    .map(|i| made.get(i).cloned().unwrap_or_else(|| i.clone()))
+            };
+            let resolved = Op {
+                before: resolve(&op.before),
+                after: resolve(&op.after),
+                ..op.clone()
+            };
+            place(
+                tasks,
+                |t: &Item| t.id == op.task_id || real.as_ref() == Some(&t.id),
+                &resolved,
+                |t: &Item| t.id.clone(),
+            );
         }
     }
 }
@@ -863,6 +1101,7 @@ fn describe(op: &Op, why: &str) -> String {
         OpKind::Add => format!("Couldn't add \"{}\" to Blitzit: {why}", op.title),
         OpKind::Complete => format!("Couldn't tick a task off in Blitzit: {why}"),
         OpKind::Move => format!("Couldn't move a task in Blitzit: {why}"),
+        OpKind::Reorder => format!("Couldn't reorder a task in Blitzit: {why}"),
     }
 }
 
@@ -994,6 +1233,8 @@ mod tests {
             list_id: Some("L1".into()),
             list_name: Some("Work".into()),
             tries: 0,
+            before: None,
+            after: None,
             at: 0,
         }
     }

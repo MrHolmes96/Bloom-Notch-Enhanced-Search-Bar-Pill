@@ -2290,12 +2290,9 @@ static MOUSE_HOOK_LAST_EVENT_MS: AtomicI64 = AtomicI64::new(0);
 /// like `MOUSE_HOOK_CURSOR`), for the cursor worker to check.
 static MOUSE_HOOK_PRESS: AtomicI64 = AtomicI64::new(0);
 static MOUSE_HOOK_PRESS_PENDING: AtomicBool = AtomicBool::new(false);
-/// Right-button presses and releases for the desktop's menu
-/// (`desktop_menu`): where, and whether one is waiting to be looked at.
-static MOUSE_HOOK_RIGHT_DOWN: AtomicI64 = AtomicI64::new(0);
-static MOUSE_HOOK_RIGHT_DOWN_PENDING: AtomicBool = AtomicBool::new(false);
-static MOUSE_HOOK_RIGHT_UP: AtomicI64 = AtomicI64::new(0);
-static MOUSE_HOOK_RIGHT_UP_PENDING: AtomicBool = AtomicBool::new(false);
+/// A right click on the desktop beside the dock, taken over (`desktop_menu`)
+/// and waiting for the cursor worker.
+static MOUSE_HOOK_DESKTOP_MENU_PENDING: AtomicBool = AtomicBool::new(false);
 /// Held while deciding whether the notch, the dock or the overlay takes
 /// clicks. The cursor worker, the edge watchdogs and the input guard all
 /// decide; one at a time, so two can never leave a window taking clicks
@@ -2568,15 +2565,8 @@ pub fn setup_mouse_hook(app_handle: AppHandle) {
                             let press = unpack_cursor(MOUSE_HOOK_PRESS.load(Ordering::Relaxed));
                             close_dock_menu_if_outside(&app_handle, press);
                         }
-                        if MOUSE_HOOK_RIGHT_DOWN_PENDING.swap(false, Ordering::Relaxed) {
-                            crate::desktop_menu::right_pressed(unpack_cursor(
-                                MOUSE_HOOK_RIGHT_DOWN.load(Ordering::Relaxed),
-                            ));
-                        }
-                        if MOUSE_HOOK_RIGHT_UP_PENDING.swap(false, Ordering::Relaxed) {
-                            crate::desktop_menu::right_released(unpack_cursor(
-                                MOUSE_HOOK_RIGHT_UP.load(Ordering::Relaxed),
-                            ));
+                        if MOUSE_HOOK_DESKTOP_MENU_PENDING.swap(false, Ordering::Relaxed) {
+                            crate::desktop_menu::open_menu_pending();
                         }
                         last_processed = Instant::now();
                     }
@@ -3349,17 +3339,26 @@ unsafe extern "system" fn mouse_hook_proc(
     const WM_RBUTTONUP: usize = 0x0205;
     const WM_MBUTTONDOWN: usize = 0x0207;
     if code >= 0 && !SHUTTING_DOWN.load(Ordering::Relaxed) {
-        // Noted only, for the cursor worker (this callback must return at once).
-        if wparam.0 == WM_RBUTTONDOWN {
-            let cursor = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;
-            MOUSE_HOOK_RIGHT_DOWN.store(pack_cursor(cursor), Ordering::Relaxed);
-            MOUSE_HOOK_RIGHT_DOWN_PENDING.store(true, Ordering::Relaxed);
-            queue_cursor(cursor);
-        } else if wparam.0 == WM_RBUTTONUP {
-            let cursor = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;
-            MOUSE_HOOK_RIGHT_UP.store(pack_cursor(cursor), Ordering::Relaxed);
-            MOUSE_HOOK_RIGHT_UP_PENDING.store(true, Ordering::Relaxed);
-            queue_cursor(cursor);
+        // A right click on the desktop beside the dock is Bloom's to open the
+        // desktop's menu for (at the pointer): held back from Windows here,
+        // given again by the cursor worker (this callback must return at once).
+        if wparam.0 == WM_RBUTTONDOWN || wparam.0 == WM_RBUTTONUP {
+            let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+            // LLMHF_INJECTED: Bloom's own click, given again.
+            let injected = info.flags & 0x1 != 0;
+            let held = if wparam.0 == WM_RBUTTONDOWN {
+                crate::desktop_menu::hold_back_press(info.pt, injected)
+            } else {
+                let held = crate::desktop_menu::hold_back_release(info.pt, injected);
+                if held {
+                    MOUSE_HOOK_DESKTOP_MENU_PENDING.store(true, Ordering::Relaxed);
+                    queue_cursor(info.pt);
+                }
+                held
+            };
+            if held {
+                return windows::Win32::Foundation::LRESULT(1);
+            }
         }
         if wparam.0 == WM_MOUSEMOVE as usize {
             let cursor = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;

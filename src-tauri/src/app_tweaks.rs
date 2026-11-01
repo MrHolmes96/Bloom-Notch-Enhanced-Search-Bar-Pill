@@ -447,6 +447,7 @@ pub fn start_portals_after_sign_in(app: &tauri::AppHandle) {
                 return;
             }
             if portals_running() {
+                log("Starting Portals: it was running already (started by itself, before Bloom)");
                 return;
             }
             if let Some(dir) = exe.parent() {

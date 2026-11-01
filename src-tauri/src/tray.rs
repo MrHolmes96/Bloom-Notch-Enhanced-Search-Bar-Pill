@@ -2048,7 +2048,7 @@ pub(crate) fn interact_in_explorer(key: &str, context_menu: bool) -> Result<(), 
         let mut clicked_at = POINT::default();
         let _ = GetCursorPos(&mut clicked_at);
         let excluded = crate::tray_host::bloom_processes();
-        let menus_before = crate::tray_host::open_menus(clicked_at, &excluded);
+        let menus_before = crate::tray_host::visible_top_windows();
         let watch = || {
             crate::tray_host::watch_interaction(
                 key.to_string(),

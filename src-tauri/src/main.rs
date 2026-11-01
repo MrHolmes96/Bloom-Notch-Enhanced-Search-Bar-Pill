@@ -354,6 +354,7 @@ fn main() {
             integrations::blitzit_sync::blitzit_add_task,
             integrations::blitzit_sync::blitzit_complete_task,
             integrations::blitzit_sync::blitzit_move_task,
+            integrations::blitzit_sync::blitzit_reorder_task,
             keyboard_layouts::keyboard_layouts,
             keyboard_layouts::switch_keyboard_layout,
             integrations::blitzit::blitzit_start,

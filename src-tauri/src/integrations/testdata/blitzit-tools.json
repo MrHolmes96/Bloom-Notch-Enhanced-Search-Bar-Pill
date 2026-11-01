@@ -1,0 +1,2119 @@
+[
+  {
+    "description": "Create a task in a list.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "allowTimeBlockConflict": {
+          "description": "Escape hatch for the blocked-time check. Scheduling a task inside one of the user's time-block (\"blocked time\") ranges is refused and nothing is written. Set this true ONLY after you have told the user about the clash and they said to schedule it anyway. Never set it pre-emptively and never to silence the check. If YOU chose the time, move the task to a free slot instead.",
+          "type": "boolean"
+        },
+        "assignees": {
+          "description": "Current shared-list member user IDs to assign. Call get_list_members first; omit to assign the creator.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "board": {
+          "description": "Rough placement for a task with NO scheduleTime: \"add it to today\" means board:\"today\" and no scheduleTime. When you set scheduleTime, the DATE decides the column (today / this week / backlog); do not also send board, it is ignored in favour of the date.",
+          "enum": [
+            "backlog",
+            "today",
+            "this-week"
+          ],
+          "type": "string"
+        },
+        "deadlineReminders": {
+          "description": "Lead times to remind the user before the deadline (or \"at_time\" for the moment it hits). Up to 5. Only meaningful together with deadlineTime.",
+          "items": {
+            "enum": [
+              "at_time",
+              "5m",
+              "15m",
+              "30m",
+              "1h",
+              "2h",
+              "1d",
+              "2d",
+              "1w"
+            ],
+            "type": "string"
+          },
+          "maxItems": 5,
+          "type": "array"
+        },
+        "deadlineTime": {
+          "description": "When the task is DUE, completely independent of scheduleTime (\"when I plan to do it\"). Setting or changing this never moves the board and never touches scheduleTime or the Scheduled / Reminder only mode. Same wall-clock rule as scheduleTime: write it as the user's LOCAL time with no timezone suffix (\"2026-08-15T17:00\" for 5pm where they live), and call get_current_time first (freshly, not an earlier result) rather than deriving a date yourself. For a date with no time-of-day (\"due Friday\", \"by the 15th\") send that day's midnight (\"2026-08-15T00:00\") AND set deadlineTimeEnabled to false. Unlike scheduleTime, a date-only deadline resolves to the END of that local day (23:59:59), not midnight, because \"due Friday\" means by the end of Friday, not the first instant of it. Omitting deadlineTimeEnabled (or sending true) means the instant is taken literally.",
+          "type": "string"
+        },
+        "deadlineTimeEnabled": {
+          "description": "false = date-only deadline (resolves to local end-of-day). Only meaningful together with deadlineTime; see its description.",
+          "type": "boolean"
+        },
+        "description": {
+          "description": "Task description / notes",
+          "type": "string"
+        },
+        "estimatedMinutes": {
+          "description": "Estimated time in minutes",
+          "type": "number"
+        },
+        "listId": {
+          "description": "List ID to create the task in",
+          "type": "string"
+        },
+        "matrixQuadrant": {
+          "description": "Explicit matrix placement. This is task metadata, never a tag. These ids do NOT carry their classic Eisenhower meanings: do = Do ASAP, meaning front of the queue today with no calendar slot. schedule = Do Later Today, meaning it stays on Today and gets a specific time slot later in the day. delegate = Do Mid Week, meaning it moves to This Week. It has nothing to do with delegating work to another person. drop = Leave Till End, meaning it moves to the bottom of Backlog. It does NOT delete or discard the task. Setting one also moves the task to the matching board column and reconciles its schedule, so do not send a conflicting board.",
+          "enum": [
+            "do",
+            "schedule",
+            "delegate",
+            "drop"
+          ],
+          "type": "string"
+        },
+        "priority": {
+          "description": "Task priority",
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high"
+          ],
+          "type": "string"
+        },
+        "recurrence": {
+          "description": "Make this a recurring task. scheduleTime is REQUIRED with it and is the FIRST occurrence. Get the date from get_current_time (its upcomingDays list already pairs each weekday with its date) and never count days yourself: \"push day every Monday\" set up on a Friday means the NEXT Monday, and picking a date that is not actually that weekday is the single most common way this goes wrong. Say the weekday in rrule too (FREQ=WEEKLY;BYDAY=MO) so the intent survives a wrong date. Sending recurrence without scheduleTime is rejected. The task itself becomes the recurring manager and Blitzit generates the occurrences from it, so do not create them yourself: for a 7-day split that is 7 recurring tasks, one per weekday, NOT one task per date.",
+          "properties": {
+            "rrule": {
+              "description": "RRULE string. Required for type=custom, and strongly recommended for type=weekly/monthly because it states the day explicitly: FREQ=WEEKLY;BYDAY=MO for every Monday, FREQ=MONTHLY;BYMONTHDAY=15 for the 15th. BYDAY is authoritative, so if it and scheduleTime disagree the rule wins and the anchor is moved onto the named day.",
+              "type": "string"
+            },
+            "type": {
+              "description": "Recurrence frequency",
+              "enum": [
+                "none",
+                "daily",
+                "weekday",
+                "weekly",
+                "monthly",
+                "custom"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        "reminderOnly": {
+          "description": "Mode of the do-date (scheduleTime), the same choice the app offers as \"Scheduled\" vs \"Reminder only\". Omit it for the default, Scheduled: planned work the user will actually do (Blitz) at that time. A Scheduled task is anchored to its date: it moves to Today when due and stays in place. true = Reminder only: just a nudge at that moment, not a work block, e.g. \"remind me to call mom at 6\", \"ping me to take my meds at 9\", \"nudge me Friday to check the invoice\". It still notifies, but stays freely movable and its date is soft. Use true only when the user is asking to be reminded of something rather than planning to work on it. Needs a do-date (scheduleTime now, or one already on the task); not allowed on a time-block. Each returned task carries schedule.reminderOnly so you can tell the user which mode it is in.",
+          "type": "boolean"
+        },
+        "scheduleTime": {
+          "description": "When to schedule the task. WRITE IT AS THE USER'S LOCAL WALL CLOCK with NO timezone suffix. \"2026-08-15T15:00\" means 3pm where the user lives, and the server applies their profile timezone. Do NOT convert to UTC and do NOT append \"Z\": that requires guessing their offset, which is exactly what puts tasks on the wrong day. (An explicit offset is still accepted when you genuinely have one.) Call get_current_time first: it returns the user's local \"today\" and \"tomorrow\" already resolved, so you never have to derive a date yourself. Call it again for THIS request even if you called it earlier in the session. A session can idle for hours between messages without anything showing that, so a relative time computed from an earlier answer, or from a time you previously stated, can land in the past. Set this ONLY when the user actually indicated timing: an explicit time (\"at 5pm\"), a part of day (\"this evening\", \"tomorrow morning\"), or something inherently a moment (meeting, call, appointment, deadline hour). \"Today\" and \"this week\" are BOARDS, not times: use the board field and omit this. For a day with no time-of-day (\"tomorrow\", \"on Friday\") send that day at midnight (\"2026-08-15T00:00\") with scheduleTimeEnabled false: a whole-day do-date with no clock time, overdue only once that day has ended. Only when the user actually means midnight (\"at 12am\", \"at midnight\") send T00:00 with scheduleTimeEnabled true. Never invent an hour.",
+          "type": "string"
+        },
+        "scheduleTimeEnabled": {
+          "description": "false = whole-day do-date (no clock time; overdue only after the day ends). true = the exact time in scheduleTime, including a genuine 12 AM. Omitted, a midnight scheduleTime is read as a whole day. Only meaningful together with scheduleTime.",
+          "type": "boolean"
+        },
+        "subtasks": {
+          "description": "Subtasks/checklist to create together with the task",
+          "items": {
+            "properties": {
+              "completed": {
+                "description": "Initial completion state",
+                "type": "boolean"
+              },
+              "dueDate": {
+                "description": "Due date as YYYY-MM-DD (date only). `null` clears it; omit to leave unchanged.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "notes": {
+                "anyOf": [
+                  {
+                    "maxLength": 8192,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Free-text notes. `null` or \"\" clears them; omit to leave unchanged."
+              },
+              "title": {
+                "description": "Subtask title",
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "tags": {
+          "description": "Tags/labels as objects. For a new tag pass {name}. To reuse a tag returned by list_tasks/get_task, pass that complete tag object unchanged so its id and integration provenance remain stable. Keep minimal, 0 to 2, only when genuinely useful; do not create near-duplicates. Omit rather than add noise.",
+          "items": {
+            "properties": {
+              "id": {
+                "description": "Stable Blitzit tag identity.",
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "integration": {
+                "properties": {
+                  "externalId": {
+                    "description": "Provider-native label/tag/option identifier, when the provider exposes one.",
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "integrationId": {
+                    "description": "Connected integration account ID.",
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "Integration provider/plugin identifier.",
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "integrationId"
+                ],
+                "type": "object"
+              },
+              "name": {
+                "description": "User-visible tag name.",
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "origin": {
+                "description": "Whether Blitzit or an external integration originated this tag.",
+                "enum": [
+                  "blitzit",
+                  "integration"
+                ],
+                "type": "string"
+              },
+              "slug": {
+                "description": "Normalized matching key; the server derives it from name when omitted.",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Task title",
+          "type": "string"
+        },
+        "type": {
+          "description": "Task type. Defaults to 'normal'. Use 'normal' for anything the user intends to DO, including work that happens at a fixed time (a study session, a focused block, writing a report at 3pm). A scheduled task is still a normal task.\n'time-block' means the OPPOSITE: time the user is NOT available, reserved by something outside Blitzit (a meeting, a lecture, a commute, an appointment). It is not a unit of work. It is locked on the calendar, excluded from prioritization, and every later scheduling call is refused inside it, including the user's own. Only use it when the user is describing unavailability. Do NOT pick it merely because the user said \"block\", or because the task has a clock time. When used, it REQUIRES scheduleTime and estimatedMinutes (the block's duration).",
+          "enum": [
+            "normal",
+            "time-block"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "listId"
+      ],
+      "type": "object"
+    },
+    "name": "create_task"
+  },
+  {
+    "description": "List tasks with optional filters and pagination.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "board": {
+          "description": "Filter by board (backlog, today, this-week, done)",
+          "type": "string"
+        },
+        "cursor": {
+          "description": "Pagination cursor from previous response",
+          "type": "string"
+        },
+        "includeCompleted": {
+          "description": "Include completed tasks",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "Max results per page (default 50)",
+          "type": "number"
+        },
+        "listId": {
+          "description": "Filter by list ID",
+          "type": "string"
+        },
+        "onlyDeleted": {
+          "description": "Return ONLY recently deleted (recoverable) tasks, the trash. Use this to find tasks the user wants to restore, then call restore_tasks with their ids.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_tasks"
+  },
+  {
+    "description": "Get a task by ID.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "taskId": {
+          "description": "Task ID from a previous create_task or search_tasks result",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "type": "object"
+    },
+    "name": "get_task"
+  },
+  {
+    "description": "Update fields on a task.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "_rev": {
+          "description": "Optional. Leave unset, updates apply to the latest version. Do not fetch it.",
+          "type": "string"
+        },
+        "allowTimeBlockConflict": {
+          "description": "Escape hatch for the blocked-time check. Scheduling a task inside one of the user's time-block (\"blocked time\") ranges is refused and nothing is written. Set this true ONLY after you have told the user about the clash and they said to schedule it anyway. Never set it pre-emptively and never to silence the check. If YOU chose the time, move the task to a free slot instead.",
+          "type": "boolean"
+        },
+        "assignees": {
+          "description": "Replace the full assignee set with current member user IDs. Call get_task and get_list_members first when adding/removing people; pass [] to unassign everyone.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "board": {
+          "description": "Move to board. \"Move it to today\" is this field alone, not a new scheduleTime.",
+          "enum": [
+            "backlog",
+            "today",
+            "this-week",
+            "done"
+          ],
+          "type": "string"
+        },
+        "deadlineReminders": {
+          "description": "Replace the reminder lead times (up to 5). Can be sent alone, without deadlineTime, to change just the task's existing deadline reminders.",
+          "items": {
+            "enum": [
+              "at_time",
+              "5m",
+              "15m",
+              "30m",
+              "1h",
+              "2h",
+              "1d",
+              "2d",
+              "1w"
+            ],
+            "type": "string"
+          },
+          "maxItems": 5,
+          "type": "array"
+        },
+        "deadlineTime": {
+          "description": "When the task is DUE, completely independent of scheduleTime (\"when I plan to do it\"). Setting or changing this never moves the board and never touches scheduleTime or the Scheduled / Reminder only mode. Same wall-clock rule as scheduleTime: write it as the user's LOCAL time with no timezone suffix (\"2026-08-15T17:00\" for 5pm where they live), and call get_current_time first (freshly, not an earlier result) rather than deriving a date yourself. For a date with no time-of-day (\"due Friday\", \"by the 15th\") send that day's midnight (\"2026-08-15T00:00\") AND set deadlineTimeEnabled to false. Unlike scheduleTime, a date-only deadline resolves to the END of that local day (23:59:59), not midnight, because \"due Friday\" means by the end of Friday, not the first instant of it. Omitting deadlineTimeEnabled (or sending true) means the instant is taken literally. Pass null to remove the deadline entirely. Omit (while sending deadlineTimeEnabled and/or deadlineReminders alone) to change only those on the existing deadline without touching its date.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deadlineTimeEnabled": {
+          "description": "false = date-only deadline (resolves to local end-of-day). Can be sent alone, without deadlineTime, to change just this on the task's existing deadline.",
+          "type": "boolean"
+        },
+        "description": {
+          "description": "New description (null to clear)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "estimatedMinutes": {
+          "description": "Estimated minutes (null to clear)",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "matrixQuadrant": {
+          "anyOf": [
+            {
+              "enum": [
+                "do",
+                "schedule",
+                "delegate",
+                "drop"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Explicit matrix placement. This is task metadata, never a tag. These ids do NOT carry their classic Eisenhower meanings: do = Do ASAP, meaning front of the queue today with no calendar slot. schedule = Do Later Today, meaning it stays on Today and gets a specific time slot later in the day. delegate = Do Mid Week, meaning it moves to This Week. It has nothing to do with delegating work to another person. drop = Leave Till End, meaning it moves to the bottom of Backlog. It does NOT delete or discard the task. Setting one also moves the task to the matching board column and reconciles its schedule, so do not send a conflicting board. Pass null to return the task to unsorted."
+        },
+        "recurrence": {
+          "anyOf": [
+            {
+              "properties": {
+                "rrule": {
+                  "description": "RRULE string, required for type=custom",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Recurrence frequency",
+                  "enum": [
+                    "none",
+                    "daily",
+                    "weekday",
+                    "weekly",
+                    "monthly",
+                    "custom"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set/update recurrence (null to clear). Making a task recurring requires an anchor date: send scheduleTime alongside it unless the task already has one, since that date is the first occurrence and, for type=weekly, the weekday that repeats."
+        },
+        "reminderOnly": {
+          "description": "Mode of the do-date (scheduleTime), the same choice the app offers as \"Scheduled\" vs \"Reminder only\". Omit it for the default, Scheduled: planned work the user will actually do (Blitz) at that time. A Scheduled task is anchored to its date: it moves to Today when due and stays in place. true = Reminder only: just a nudge at that moment, not a work block, e.g. \"remind me to call mom at 6\", \"ping me to take my meds at 9\", \"nudge me Friday to check the invoice\". It still notifies, but stays freely movable and its date is soft. Use true only when the user is asking to be reminded of something rather than planning to work on it. Needs a do-date (scheduleTime now, or one already on the task); not allowed on a time-block. Each returned task carries schedule.reminderOnly so you can tell the user which mode it is in. On update, omit it to keep the task's current mode (a task getting its first do-date becomes Scheduled); send it only when the user is changing the mode. It can be sent alone to switch the mode of the do-date already on the task.",
+          "type": "boolean"
+        },
+        "scheduleTime": {
+          "description": "When to schedule the task. WRITE IT AS THE USER'S LOCAL WALL CLOCK with NO timezone suffix. \"2026-08-15T15:00\" means 3pm where the user lives, and the server applies their profile timezone. Do NOT convert to UTC and do NOT append \"Z\": that requires guessing their offset, which is exactly what puts tasks on the wrong day. (An explicit offset is still accepted when you genuinely have one.) Call get_current_time first: it returns the user's local \"today\" and \"tomorrow\" already resolved, so you never have to derive a date yourself. Call it again for THIS request even if you called it earlier in the session. A session can idle for hours between messages without anything showing that, so a relative time computed from an earlier answer, or from a time you previously stated, can land in the past. Set this ONLY when the user actually indicated timing: an explicit time (\"at 5pm\"), a part of day (\"this evening\", \"tomorrow morning\"), or something inherently a moment (meeting, call, appointment, deadline hour). \"Today\" and \"this week\" are BOARDS, not times: use the board field and omit this. For a day with no time-of-day (\"tomorrow\", \"on Friday\") send that day at midnight (\"2026-08-15T00:00\") with scheduleTimeEnabled false: a whole-day do-date with no clock time, overdue only once that day has ended. Only when the user actually means midnight (\"at 12am\", \"at midnight\") send T00:00 with scheduleTimeEnabled true. Never invent an hour. Pass null to clear the schedule.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scheduleTimeEnabled": {
+          "description": "false = whole-day do-date (no clock time; overdue only after the day ends). true = the exact time in scheduleTime, including a genuine 12 AM. Omitted, a midnight scheduleTime is read as a whole day. Only meaningful together with scheduleTime.",
+          "type": "boolean"
+        },
+        "subtasks": {
+          "description": "Replace the full subtask list (include existing subtasks by id to keep them)",
+          "items": {
+            "properties": {
+              "completed": {
+                "description": "Completion state",
+                "type": "boolean"
+              },
+              "dueDate": {
+                "description": "Due date as YYYY-MM-DD (date only). `null` clears it; omit to leave unchanged.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "Existing subtask id (omit to add a new one)",
+                "type": "string"
+              },
+              "notes": {
+                "anyOf": [
+                  {
+                    "maxLength": 8192,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Free-text notes. `null` or \"\" clears them; omit to leave unchanged."
+              },
+              "title": {
+                "description": "Subtask title",
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "tags": {
+          "description": "Replace the task tags/labels with tag objects. Preserve an existing tag by passing the complete object returned by get_task/list_tasks (including id and integration metadata); use {name} only for a genuinely new native tag. Keep to 0 to 2.",
+          "items": {
+            "properties": {
+              "id": {
+                "description": "Stable Blitzit tag identity.",
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "integration": {
+                "properties": {
+                  "externalId": {
+                    "description": "Provider-native label/tag/option identifier, when the provider exposes one.",
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "integrationId": {
+                    "description": "Connected integration account ID.",
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "Integration provider/plugin identifier.",
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "integrationId"
+                ],
+                "type": "object"
+              },
+              "name": {
+                "description": "User-visible tag name.",
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "origin": {
+                "description": "Whether Blitzit or an external integration originated this tag.",
+                "enum": [
+                  "blitzit",
+                  "integration"
+                ],
+                "type": "string"
+              },
+              "slug": {
+                "description": "Normalized matching key; the server derives it from name when omitted.",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "taskId": {
+          "description": "Task ID",
+          "type": "string"
+        },
+        "title": {
+          "description": "New title",
+          "type": "string"
+        },
+        "type": {
+          "description": "Change task type. 'normal' is work the user intends to do, even at a fixed time; 'time-block' means the user is NOT available then (a meeting, lecture, appointment) and is locked, excluded from prioritization, and closed to further scheduling. Switching to 'time-block' requires the task to have (or receive in this call) scheduleTime and estimatedMinutes; clearing either on a time-block fails.",
+          "enum": [
+            "normal",
+            "time-block"
+          ],
+          "type": "string"
+        },
+        "updateExistingTasks": {
+          "description": "Recurring tasks only: the \"this and future\" vs \"all occurrences\" choice. When the user edits a repeating task (its schedule or rule, or its title, description, estimate or subtasks), false/omitted (the default) changes only FUTURE occurrences, while true also applies the edit to the unfinished occurrences already created: schedule/rule changes reconcile them, and content changes are applied as a diff that keeps each occurrence's own edits and checked-off subtasks. Ask which they mean when it is ambiguous and the task already has occurrences on the board; ignored for non-repeating tasks.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "type": "object"
+    },
+    "name": "update_task"
+  },
+  {
+    "description": "Update fields on multiple tasks.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "updates": {
+          "description": "Per-task updates (1 to 100). If the same taskId appears twice, the later wins.",
+          "items": {
+            "properties": {
+              "_rev": {
+                "description": "Optional. Leave unset; the update applies to the latest version.",
+                "type": "string"
+              },
+              "board": {
+                "description": "Move to board. \"Move it to today\" is this field, not a schedule change.",
+                "enum": [
+                  "backlog",
+                  "today",
+                  "this-week",
+                  "done"
+                ],
+                "type": "string"
+              },
+              "estimatedMinutes": {
+                "description": "Estimated minutes (null to clear).",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "matrixQuadrant": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "do",
+                      "schedule",
+                      "delegate",
+                      "drop"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Explicit matrix placement. This is task metadata, never a tag. These ids do NOT carry their classic Eisenhower meanings: do = Do ASAP, meaning front of the queue today with no calendar slot. schedule = Do Later Today, meaning it stays on Today and gets a specific time slot later in the day. delegate = Do Mid Week, meaning it moves to This Week. It has nothing to do with delegating work to another person. drop = Leave Till End, meaning it moves to the bottom of Backlog. It does NOT delete or discard the task. Setting one also moves the task to the matching board column and reconciles its schedule, so do not send a conflicting board. Pass null to return the task to unsorted."
+              },
+              "taskId": {
+                "description": "Task to update.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "taskId"
+            ],
+            "type": "object"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "updates"
+      ],
+      "type": "object"
+    },
+    "name": "update_tasks"
+  },
+  {
+    "description": "Soft-delete a task.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "taskId": {
+          "description": "Task ID to delete",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "type": "object"
+    },
+    "name": "delete_task"
+  },
+  {
+    "description": "Soft-delete multiple tasks.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "filter": {
+          "description": "Server-resolved selection. Use for \"all of X\" instead of listing ids.",
+          "properties": {
+            "board": {
+              "description": "Only tasks on this board (backlog, today, this-week, done)",
+              "type": "string"
+            },
+            "includeCompleted": {
+              "description": "Include completed (done) tasks. Defaults false; set true for \"delete everything\".",
+              "type": "boolean"
+            },
+            "listId": {
+              "description": "Only tasks in this list",
+              "type": "string"
+            },
+            "olderThan": {
+              "description": "Only tasks created before this ISO 8601 date/time",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "taskIds": {
+          "description": "Specific task ids to delete (1 to 100; duplicates collapsed). Omit when using filter.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "name": "delete_tasks"
+  },
+  {
+    "description": "Move multiple tasks to a list.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "listId": {
+          "description": "Destination list id (use list_lists to find it)",
+          "type": "string"
+        },
+        "taskIds": {
+          "description": "Task ids to move (1 to 100; duplicates are collapsed)",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "taskIds",
+        "listId"
+      ],
+      "type": "object"
+    },
+    "name": "move_tasks_to_list"
+  },
+  {
+    "description": "Restore a soft-deleted task.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "taskId": {
+          "description": "Id of a deleted task (from list_tasks with onlyDeleted: true)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "type": "object"
+    },
+    "name": "restore_task"
+  },
+  {
+    "description": "Restore multiple soft-deleted tasks.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "taskIds": {
+          "description": "Ids of deleted tasks to restore (from list_tasks with onlyDeleted: true)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "taskIds"
+      ],
+      "type": "object"
+    },
+    "name": "restore_tasks"
+  },
+  {
+    "description": "Mark a task as complete.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "_rev": {
+          "description": "Current task revision from get_task or another fresh task result in the current conversation",
+          "type": "string"
+        },
+        "taskId": {
+          "description": "Task ID from a previous list_tasks, search_tasks, get_task, or create_task result in the current conversation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "_rev"
+      ],
+      "type": "object"
+    },
+    "name": "complete_task"
+  },
+  {
+    "description": "Move a completed task to an active board.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "_rev": {
+          "description": "Current revision",
+          "type": "string"
+        },
+        "targetBoard": {
+          "description": "Board to move to (default: today)",
+          "enum": [
+            "backlog",
+            "today",
+            "this-week"
+          ],
+          "type": "string"
+        },
+        "taskId": {
+          "description": "Task ID",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "_rev"
+      ],
+      "type": "object"
+    },
+    "name": "uncomplete_task"
+  },
+  {
+    "description": "Move tasks to a board.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "board": {
+          "description": "Target board",
+          "enum": [
+            "backlog",
+            "today",
+            "this-week",
+            "done"
+          ],
+          "type": "string"
+        },
+        "taskIds": {
+          "description": "Task IDs to move",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "taskIds",
+        "board"
+      ],
+      "type": "object"
+    },
+    "name": "move_tasks_to_board"
+  },
+  {
+    "description": "Search tasks with optional filters.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "board": {
+          "description": "Filter by board",
+          "type": "string"
+        },
+        "includeCompleted": {
+          "description": "Include completed tasks",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "Max results",
+          "type": "number"
+        },
+        "listId": {
+          "description": "Filter by list",
+          "type": "string"
+        },
+        "query": {
+          "description": "Text to search for in task titles",
+          "type": "string"
+        },
+        "scheduledAfter": {
+          "description": "ISO 8601 datetime. Only tasks with schedule.time >= this value",
+          "type": "string"
+        },
+        "scheduledBefore": {
+          "description": "ISO 8601 datetime. Only tasks with schedule.time <= this value",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "search_tasks"
+  },
+  {
+    "description": "Change a task's position within its board.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "afterTaskId": {
+          "description": "Place after this task",
+          "type": "string"
+        },
+        "beforeTaskId": {
+          "description": "Place before this task",
+          "type": "string"
+        },
+        "position": {
+          "description": "Move to top or bottom",
+          "enum": [
+            "top",
+            "bottom"
+          ],
+          "type": "string"
+        },
+        "taskId": {
+          "description": "Task ID to reorder",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "type": "object"
+    },
+    "name": "reorder_task"
+  },
+  {
+    "description": "Move a task to a list.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "_rev": {
+          "description": "Current revision",
+          "type": "string"
+        },
+        "targetListId": {
+          "description": "Target list ID",
+          "type": "string"
+        },
+        "taskId": {
+          "description": "Task ID",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "targetListId",
+        "_rev"
+      ],
+      "type": "object"
+    },
+    "name": "move_task_to_list"
+  },
+  {
+    "description": "Duplicate a task.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "board": {
+          "description": "Target board",
+          "enum": [
+            "backlog",
+            "today",
+            "this-week"
+          ],
+          "type": "string"
+        },
+        "listId": {
+          "description": "Target list (defaults to same list)",
+          "type": "string"
+        },
+        "taskId": {
+          "description": "Task ID to duplicate",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "type": "object"
+    },
+    "name": "duplicate_task"
+  },
+  {
+    "description": "Get task counts by board.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "listId": {
+          "description": "Filter by list ID (omit for all lists)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "get_task_counts"
+  },
+  {
+    "description": "Add a subtask to a task.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "_rev": {
+          "description": "Current revision",
+          "type": "string"
+        },
+        "completed": {
+          "description": "Initial completion state",
+          "type": "boolean"
+        },
+        "dueDate": {
+          "description": "Due date as YYYY-MM-DD (date only). `null` clears it; omit to leave unchanged.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "maxLength": 8192,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Free-text notes. `null` or \"\" clears them; omit to leave unchanged."
+        },
+        "taskId": {
+          "description": "Parent task ID",
+          "type": "string"
+        },
+        "title": {
+          "description": "Subtask title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "_rev",
+        "title"
+      ],
+      "type": "object"
+    },
+    "name": "add_subtask"
+  },
+  {
+    "description": "Add multiple subtasks to a task.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "_rev": {
+          "description": "Current revision",
+          "type": "string"
+        },
+        "subtasks": {
+          "description": "List of subtasks to add",
+          "items": {
+            "properties": {
+              "completed": {
+                "description": "Initial completion state",
+                "type": "boolean"
+              },
+              "dueDate": {
+                "description": "Due date as YYYY-MM-DD (date only). `null` clears it; omit to leave unchanged.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "notes": {
+                "anyOf": [
+                  {
+                    "maxLength": 8192,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Free-text notes. `null` or \"\" clears them; omit to leave unchanged."
+              },
+              "title": {
+                "description": "Subtask title",
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "taskId": {
+          "description": "Parent task ID",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "_rev",
+        "subtasks"
+      ],
+      "type": "object"
+    },
+    "name": "add_subtasks"
+  },
+  {
+    "description": "Toggle a subtask's completion state.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "_rev": {
+          "description": "Current revision",
+          "type": "string"
+        },
+        "subtaskId": {
+          "description": "Subtask ID",
+          "type": "string"
+        },
+        "taskId": {
+          "description": "Parent task ID",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "subtaskId",
+        "_rev"
+      ],
+      "type": "object"
+    },
+    "name": "toggle_subtask"
+  },
+  {
+    "description": "Remove a subtask from a task.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "_rev": {
+          "description": "Current parent task revision from a previous get_task or other fresh task result in the current conversation",
+          "type": "string"
+        },
+        "subtaskId": {
+          "description": "Subtask ID from a previous get_task or other fresh task result in the current conversation",
+          "type": "string"
+        },
+        "taskId": {
+          "description": "Parent task ID from a previous get_task or other fresh task result in the current conversation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId",
+        "subtaskId",
+        "_rev"
+      ],
+      "type": "object"
+    },
+    "name": "remove_subtask"
+  },
+  {
+    "description": "List accessible lists.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "includeArchived": {
+          "description": "Include archived lists",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_lists"
+  },
+  {
+    "description": "Get a list by ID.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "listId": {
+          "description": "List ID",
+          "type": "string"
+        }
+      },
+      "required": [
+        "listId"
+      ],
+      "type": "object"
+    },
+    "name": "get_list"
+  },
+  {
+    "description": "List members of a shared list.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "listId": {
+          "description": "Shared list ID",
+          "type": "string"
+        }
+      },
+      "required": [
+        "listId"
+      ],
+      "type": "object"
+    },
+    "name": "get_list_members"
+  },
+  {
+    "description": "List reusable tags.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "list_tags"
+  },
+  {
+    "description": "Create a reusable tag.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "color": {
+          "description": "Optional CSS color token or hex color.",
+          "maxLength": 32,
+          "minLength": 1,
+          "type": "string"
+        },
+        "emoji": {
+          "description": "Optional emoji displayed with this tag.",
+          "maxLength": 32,
+          "minLength": 1,
+          "type": "string"
+        },
+        "name": {
+          "description": "Distinct global tag name.",
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "create_tag"
+  },
+  {
+    "description": "Update a reusable tag.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "_rev": {
+          "description": "Optional. Leave unset; the update applies to the latest version.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "color": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Replacement color, or null to clear it."
+        },
+        "emoji": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Replacement emoji, or null to clear it."
+        },
+        "name": {
+          "description": "Replacement tag name.",
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "tagId": {
+          "description": "Global tag ID from list_tags.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tagId"
+      ],
+      "type": "object"
+    },
+    "name": "update_tag"
+  },
+  {
+    "description": "Create a list.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "defaultBoard": {
+          "description": "Default board for new tasks",
+          "enum": [
+            "backlog",
+            "today",
+            "this-week"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "description": "List name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "create_list"
+  },
+  {
+    "description": "List projects, each with the lists filed in it.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "list_projects"
+  },
+  {
+    "description": "Create a project to group lists under.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "name": {
+          "description": "Project name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "create_project"
+  },
+  {
+    "description": "Rename or reposition a project.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "_rev": {
+          "description": "Revision from the last read, for optimistic concurrency",
+          "type": "string"
+        },
+        "name": {
+          "description": "New name",
+          "type": "string"
+        },
+        "position": {
+          "description": "Fractional sidebar key",
+          "type": "string"
+        },
+        "projectId": {
+          "description": "Project id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectId",
+        "_rev"
+      ],
+      "type": "object"
+    },
+    "name": "update_project"
+  },
+  {
+    "description": "Delete a project. Its lists move out of the project; no list or task is deleted.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "projectId": {
+          "description": "Project id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectId"
+      ],
+      "type": "object"
+    },
+    "name": "delete_project"
+  },
+  {
+    "description": "Update a list.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "_rev": {
+          "description": "Optional. Leave unset, updates apply to the latest version. Do not fetch it.",
+          "type": "string"
+        },
+        "avatar": {
+          "description": "The list's colour or emoji, as shown in the sidebar",
+          "properties": {
+            "type": {
+              "description": "Avatar kind",
+              "enum": [
+                "color",
+                "emoji",
+                "image"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "description": "Hex colour (#6366f1), a single emoji, or an image URL, matching type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        "isArchived": {
+          "description": "Archive/unarchive",
+          "type": "boolean"
+        },
+        "listId": {
+          "description": "List ID",
+          "type": "string"
+        },
+        "name": {
+          "description": "New name",
+          "type": "string"
+        },
+        "settings": {
+          "properties": {
+            "autoArchiveDays": {
+              "description": "Auto-archive completed tasks after N days (0 disables)",
+              "maximum": 365,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "defaultBoard": {
+              "description": "Board new tasks in this list land on",
+              "enum": [
+                "backlog",
+                "today",
+                "this-week"
+              ],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "listId"
+      ],
+      "type": "object"
+    },
+    "name": "update_list"
+  },
+  {
+    "description": "Restore a soft-deleted list and its tasks.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "listId": {
+          "description": "Id of the deleted list to restore",
+          "type": "string"
+        }
+      },
+      "required": [
+        "listId"
+      ],
+      "type": "object"
+    },
+    "name": "restore_list"
+  },
+  {
+    "description": "List change history.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cursor": {
+          "description": "nextCursor from a previous page",
+          "type": "string"
+        },
+        "entityId": {
+          "description": "A task or list id. Returns just that item's change timeline",
+          "type": "string"
+        },
+        "from": {
+          "description": "ISO 8601 instant. Only changes at or after this (e.g. start of today)",
+          "type": "string"
+        },
+        "limit": {
+          "description": "How many to return (default 20, max 100)",
+          "type": "number"
+        },
+        "madeBy": {
+          "description": "Only changes from this source. \"you\" is the user acting in the app, \"blitzy\" is the in-app assistant, \"mcp\" is an agent like you, \"integration\" is an inbound provider sync.",
+          "enum": [
+            "you",
+            "blitzy",
+            "mcp",
+            "api",
+            "integration",
+            "system"
+          ],
+          "type": "string"
+        },
+        "state": {
+          "description": "applied = currently in effect; undone = already reverted (and redoable)",
+          "enum": [
+            "applied",
+            "undone"
+          ],
+          "type": "string"
+        },
+        "to": {
+          "description": "ISO 8601 instant. Only changes at or before this",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_change_history"
+  },
+  {
+    "description": "Get details for a change.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "changeId": {
+          "description": "Change id from list_change_history",
+          "type": "string"
+        },
+        "verbose": {
+          "description": "Include per-field before/after values, not just the field names",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "changeId"
+      ],
+      "type": "object"
+    },
+    "name": "get_change_details"
+  },
+  {
+    "description": "Revert changes after a history entry.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "changeId": {
+          "description": "The change to return to, from list_change_history",
+          "type": "string"
+        }
+      },
+      "required": [
+        "changeId"
+      ],
+      "type": "object"
+    },
+    "name": "revert_to_change"
+  },
+  {
+    "description": "Restore the state at a history entry.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "changeId": {
+          "description": "The change to restore that item to, from list_change_history(entityId)",
+          "type": "string"
+        },
+        "entityId": {
+          "description": "The task or list id to rewind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entityId",
+        "changeId"
+      ],
+      "type": "object"
+    },
+    "name": "restore_to_change"
+  },
+  {
+    "description": "Undo the most recent change.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "steps": {
+          "description": "How many actions to step back (default 1, max 25).",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "name": "undo"
+  },
+  {
+    "description": "Redo the most recently undone change.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "steps": {
+          "description": "How many actions to step forward (default 1, max 25).",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "name": "redo"
+  },
+  {
+    "description": "Get today's tasks.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "get_todays_tasks"
+  },
+  {
+    "description": "Get this week's tasks.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "get_this_weeks_tasks"
+  },
+  {
+    "description": "Get tasks with a clock time in a date range.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "from": {
+          "description": "Start of the range: a date (YYYY-MM-DD, the start of that day in the user's timezone) or an ISO 8601 datetime (no offset = user local time)",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Max results",
+          "type": "number"
+        },
+        "to": {
+          "description": "End of the range, inclusive: a date (YYYY-MM-DD, the END of that day in the user's timezone) or an ISO 8601 datetime (no offset = user local time)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "get_scheduled_tasks"
+  },
+  {
+    "description": "Get completed tasks in a date range.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "from": {
+          "description": "Start of the range: a date (YYYY-MM-DD, the start of that day in the user's timezone) or an ISO 8601 datetime (no offset = user local time)",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Max results",
+          "type": "number"
+        },
+        "listId": {
+          "description": "Filter by list",
+          "type": "string"
+        },
+        "to": {
+          "description": "End of the range, inclusive: a date (YYYY-MM-DD, the END of that day in the user's timezone) or an ISO 8601 datetime (no offset = user local time)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "get_completed_tasks"
+  },
+  {
+    "description": "Get the current time and user-local calendar context (today/tomorrow/this week already resolved in the user's timezone). This is a snapshot of the moment you call it, not a standing fact: a session can sit idle for hours between messages, and neither the transcript nor your own earlier answers show that time passed. Call it again immediately before computing ANY relative time (\"in 5 minutes\", \"later today\", \"tomorrow\") rather than reusing an earlier result or a time you previously stated. A stale anchor is what puts a task hours in the past.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "get_current_time"
+  },
+  {
+    "description": "Get the user timezone.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "get_user_timezone"
+  },
+  {
+    "description": "Get the user profile.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "get_user_profile"
+  },
+  {
+    "description": "List available integration types. A service without one connects through a custom webhook, which is set up in the Blitzit app (Integrations → Webhooks), or by Blitzy there.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "list_integrations"
+  },
+  {
+    "description": "List connected integrations.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {},
+      "type": "object"
+    },
+    "name": "get_my_integrations"
+  },
+  {
+    "description": "Get an integration connection status.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "pluginId": {
+          "description": "Integration ID (plugin slug) exactly as returned by list_integrations (e.g. \"notion\", \"todoist\", \"google-tasks\")",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId"
+      ],
+      "type": "object"
+    },
+    "name": "get_integration_status"
+  },
+  {
+    "description": "Enable or disable an integration.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "enabled": {
+          "description": "True resumes syncing this integration, false pauses it everywhere.",
+          "type": "boolean"
+        },
+        "pluginId": {
+          "description": "Integration ID (plugin slug) exactly as returned by list_integrations (e.g. \"notion\", \"todoist\", \"google-tasks\"). The integration to pause or resume",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId",
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "name": "set_integration_enabled"
+  },
+  {
+    "description": "Start an integration connection.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connectionType": {
+          "description": "\"new\" to add another account of this provider; \"update\" to re-authorize the account named by integrationId. Omit to let the tool choose.",
+          "enum": [
+            "new",
+            "update"
+          ],
+          "type": "string"
+        },
+        "integrationId": {
+          "description": "With connectionType \"update\": the account to re-authorize, from get_my_integrations.",
+          "type": "string"
+        },
+        "pluginId": {
+          "description": "Integration ID (plugin slug) exactly as returned by list_integrations (e.g. \"notion\", \"todoist\", \"google-tasks\")",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId"
+      ],
+      "type": "object"
+    },
+    "name": "connect_integration"
+  },
+  {
+    "description": "Disconnect an integration.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "integrationId": {
+          "description": "The account to disconnect, from get_my_integrations. Required when there are several.",
+          "type": "string"
+        },
+        "pluginId": {
+          "description": "Integration ID (plugin slug) exactly as returned by list_integrations (e.g. \"notion\", \"todoist\", \"google-tasks\"). The integration to disconnect",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId"
+      ],
+      "type": "object"
+    },
+    "name": "disconnect_integration"
+  },
+  {
+    "description": "List collections available from an integration.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "collectionType": {
+          "description": "The provider's collection level to browse, from collectionTypes in list_integrations (e.g. ClickUp: workspace, space, folder, list, folderless_list). Omit for the top level. A level the provider does not have is an error that lists the valid ones.",
+          "type": "string"
+        },
+        "integrationId": {
+          "description": "Which connected account to browse, from get_my_integrations, when the user has more than one for this provider. Omit to use the first connected.",
+          "type": "string"
+        },
+        "parentId": {
+          "description": "Id of the parent collection (from the level above) to drill into",
+          "type": "string"
+        },
+        "pluginId": {
+          "description": "Integration ID (plugin slug) exactly as returned by list_integrations (e.g. \"notion\", \"todoist\", \"google-tasks\")",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId"
+      ],
+      "type": "object"
+    },
+    "name": "browse_integration_collections"
+  },
+  {
+    "description": "Update integration configuration.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "collectionId": {
+          "description": "The external collection these settings apply to (from browse_integration_collections). Pass this for anything that affects how one linked project/board/calendar syncs.",
+          "type": "string"
+        },
+        "integrationId": {
+          "description": "Which connected account, from get_my_integrations (id), when the user has more than one for this provider. Omit with a single account; with several, the target collection or list picks the account when it belongs to exactly one, otherwise the call asks for this.",
+          "type": "string"
+        },
+        "pluginId": {
+          "description": "Integration ID (plugin slug) exactly as returned by list_integrations (e.g. \"notion\", \"todoist\", \"google-tasks\")",
+          "type": "string"
+        },
+        "settings": {
+          "additionalProperties": {},
+          "description": "Settings to update (key-value pairs), merged into what is already stored. Supported per-collection keys: enableAutoSync (false pauses inbound sync for that collection), enableDeleteSync (false keeps the Blitzit task when the provider item is deleted), enableMeMode (only sync items assigned to the user), enableSubtaskSync, linkedListId (set to null to unlink, though prefer unlink_collection_from_list), projectRouting (Notion only: { relationPropertyId, listByPageId } sends pages to lists by their project relation; null turns it off). Not every plugin reads every key; unknown keys are stored and ignored.",
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "pluginId",
+        "settings"
+      ],
+      "type": "object"
+    },
+    "name": "configure_integration"
+  },
+  {
+    "description": "Link an integration collection to a list.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "collectionId": {
+          "description": "External collection id (from browse_integration_collections)",
+          "type": "string"
+        },
+        "integrationId": {
+          "description": "Which connected account, from get_my_integrations (id), when the user has more than one for this provider. Omit with a single account; with several, the target collection or list picks the account when it belongs to exactly one, otherwise the call asks for this.",
+          "type": "string"
+        },
+        "listId": {
+          "description": "Blitzit list id to link (from list_lists)",
+          "type": "string"
+        },
+        "pluginId": {
+          "description": "Integration id, e.g. notion, asana, trello, google-calendar",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId",
+        "collectionId",
+        "listId"
+      ],
+      "type": "object"
+    },
+    "name": "link_collection_to_list"
+  },
+  {
+    "description": "Unlink an integration collection from a list.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "collectionId": {
+          "description": "External collection id to unlink",
+          "type": "string"
+        },
+        "integrationId": {
+          "description": "Which connected account, from get_my_integrations (id), when the user has more than one for this provider. Omit with a single account; with several, the target collection or list picks the account when it belongs to exactly one, otherwise the call asks for this.",
+          "type": "string"
+        },
+        "pluginId": {
+          "description": "Integration id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId",
+        "collectionId"
+      ],
+      "type": "object"
+    },
+    "name": "unlink_collection_from_list"
+  },
+  {
+    "description": "Detach a list from a connected integration account.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "integrationId": {
+          "description": "Which connected account, from get_my_integrations (id), when the user has more than one for this provider. Omit with a single account; with several, the target collection or list picks the account when it belongs to exactly one, otherwise the call asks for this.",
+          "type": "string"
+        },
+        "listId": {
+          "description": "Blitzit list to detach from this integration",
+          "type": "string"
+        },
+        "pluginId": {
+          "description": "Integration id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId",
+        "listId"
+      ],
+      "type": "object"
+    },
+    "name": "unlink_list_from_integration"
+  },
+  {
+    "description": "Import items from a linked integration collection.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "collectionId": {
+          "description": "External collection id to pull from",
+          "type": "string"
+        },
+        "integrationId": {
+          "description": "Which connected account, from get_my_integrations (id), when the user has more than one for this provider. Omit with a single account; with several, the target collection or list picks the account when it belongs to exactly one, otherwise the call asks for this.",
+          "type": "string"
+        },
+        "itemIds": {
+          "description": "Optional external item ids to import selectively (from list_collection_items)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "listId": {
+          "description": "Optional Blitzit list override for this pull",
+          "type": "string"
+        },
+        "mode": {
+          "description": "\"import\" (default) imports items; \"sync\" refreshes imported tasks and adds only new items. \"sync\" cannot take itemIds.",
+          "enum": [
+            "import",
+            "sync"
+          ],
+          "type": "string"
+        },
+        "pluginId": {
+          "description": "Integration id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId",
+        "collectionId"
+      ],
+      "type": "object"
+    },
+    "name": "sync_integration_collection"
+  },
+  {
+    "description": "List items in an integration collection.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "collectionId": {
+          "description": "External collection id",
+          "type": "string"
+        },
+        "integrationId": {
+          "description": "Which connected account, from get_my_integrations (id), when the user has more than one for this provider. Omit with a single account; with several, the target collection or list picks the account when it belongs to exactly one, otherwise the call asks for this.",
+          "type": "string"
+        },
+        "pluginId": {
+          "description": "Integration id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId",
+        "collectionId"
+      ],
+      "type": "object"
+    },
+    "name": "list_collection_items"
+  },
+  {
+    "description": "Push a task to an integration.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "collectionId": {
+          "description": "Provider collection ID selected from collections linked to the task list. Required when several destinations are linked.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "pluginId": {
+          "description": "Integration ID (plugin slug) exactly as returned by list_integrations (e.g. \"notion\", \"todoist\", \"google-tasks\")",
+          "type": "string"
+        },
+        "taskId": {
+          "description": "Blitzit task id to create in the provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId",
+        "taskId"
+      ],
+      "type": "object"
+    },
+    "name": "push_task_to_integration"
+  },
+  {
+    "description": "Synchronize a task with its integration.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "pluginId": {
+          "description": "Integration ID (plugin slug) exactly as returned by list_integrations (e.g. \"notion\", \"todoist\", \"google-tasks\")",
+          "type": "string"
+        },
+        "taskId": {
+          "description": "Blitzit task id to re-sync (must already be linked)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId",
+        "taskId"
+      ],
+      "type": "object"
+    },
+    "name": "sync_task_with_integration"
+  },
+  {
+    "description": "Get time recorded for a task.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "from": {
+          "description": "ISO 8601. Only sessions that STARTED at or after this instant",
+          "type": "string"
+        },
+        "taskId": {
+          "description": "Blitzit task id to report time for",
+          "type": "string"
+        },
+        "to": {
+          "description": "ISO 8601. Only sessions that STARTED at or before this instant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "type": "object"
+    },
+    "name": "get_task_time"
+  }
+]

@@ -8,6 +8,8 @@ export interface List {
 	name: string;
 	/** Its colour in Blitzit, when Blitzit says. */
 	color?: string;
+	/** Its emoji in Blitzit, when it has one instead of a colour. */
+	emoji?: string;
 	/** Its open tasks, as far as this PC knows. */
 	open?: number;
 }
@@ -32,6 +34,7 @@ export interface Board {
 	can_add: boolean;
 	can_complete: boolean;
 	can_move: boolean;
+	can_reorder?: boolean;
 	offline: boolean;
 	problem: string | null;
 	pending: number;
@@ -105,6 +108,17 @@ export function inColumn(task: Task, column: Column, columns: Column[]) {
 	if (column.done) return task.done;
 	if (task.done) return false;
 	return columnFor(columns, task.column) === column;
+}
+
+/**
+ * Where a task shows on the board: its own column, done or not (as in
+ * Blitzit, a column keeps what was done in it); Done for the ones Blitzit
+ * keeps on its Done board.
+ */
+export function boardColumnOf(task: Task, columns: Column[]) {
+	const own = columnFor(columns, task.column);
+	if (own && !(task.done && !task.column)) return own;
+	return task.done ? columns.find((c) => c.done) : own;
 }
 
 export function isToday(column: Column) {

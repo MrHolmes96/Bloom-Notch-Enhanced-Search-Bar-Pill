@@ -217,8 +217,9 @@ pub struct BlitzitStatus {
     can_move: bool,
     /// Columns a new task can go in, when Blitzit says.
     columns: Vec<String>,
-    /// Which of Blitzit's tools Bloom uses for adding, lists, tasks, done, moving.
-    using: [Option<String>; 5],
+    /// Which of Blitzit's tools Bloom uses for adding, lists, tasks, done,
+    /// moving, reordering.
+    using: [Option<String>; 6],
     /// Each of Blitzit's tools and what it says it does.
     tool_details: Vec<(String, String)>,
     /// Why Blitzit couldn't be reached or used, when it couldn't.

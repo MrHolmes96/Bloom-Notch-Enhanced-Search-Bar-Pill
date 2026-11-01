@@ -15,8 +15,9 @@ import {
 } from "lucide-react";
 import {
 	ALL_LISTS,
-	columnFor,
+	boardColumnOf,
 	columnsOf,
+	DONE_KEY,
 	isToday,
 	listColor,
 	listLetter,
@@ -44,6 +45,8 @@ interface DragState {
 	grabX: number;
 	grabY: number;
 	over: string | null;
+	/** Where in that column it would land (among the other cards there). */
+	index: number;
 }
 
 const COLLAPSED_KEY = "bloom-blitzit-collapsed";
@@ -68,6 +71,7 @@ export function BlitzitBoard({
 	onAdd,
 	onComplete,
 	onMove,
+	onReorder,
 	onSync,
 	onList,
 	onOpen,
@@ -84,6 +88,7 @@ export function BlitzitBoard({
 	onAdd: (title: string, column: Column | null) => Promise<boolean>;
 	onComplete: (task: Task) => void;
 	onMove: (task: Task, column: Column) => void;
+	onReorder: (task: Task, before: Task | null, after: Task | null) => void;
 	onSync: () => void;
 	onList: () => void;
 	onOpen: () => void;
@@ -99,7 +104,8 @@ export function BlitzitBoard({
 	const columnsRef = useRef<HTMLDivElement | null>(null);
 	const pressRef = useRef<{ task: Task; x: number; y: number; card: HTMLElement } | null>(null);
 
-	const columns = columnsOf(board, false);
+	const columns = columnsOf(board, true);
+	const keyOf = (column: Column) => (column.done ? DONE_KEY : column.key);
 	const tasks = board?.tasks ?? [];
 	const lists = board?.lists ?? [];
 	const all = list?.id === ALL_LISTS;
@@ -108,8 +114,9 @@ export function BlitzitBoard({
 	const markOf = (l: List | null) => (l?.id === ALL_LISTS ? (lists[0] ?? l) : l);
 
 	const tasksIn = (column: Column) => {
-		const here = tasks.filter((t) => columnFor(columns, t.column) === column);
-		// Open tasks first, then the ones done.
+		const here = tasks.filter((t) => boardColumnOf(t, columns) === column);
+		if (column.done) return here;
+		// Open tasks first (in Blitzit's order), then the ones done.
 		return [...here.filter((t) => !t.done), ...here.filter((t) => t.done)];
 	};
 
@@ -139,9 +146,22 @@ export function BlitzitBoard({
 		return el.getBoundingClientRect().width / el.offsetWidth;
 	};
 
-	const columnAt = (x: number, y: number) => {
+	/** The column under the pointer, and where among its cards it is. */
+	const dropAt = (x: number, y: number, dragged: Task) => {
 		const el = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-column]");
-		return el?.dataset.column ?? null;
+		if (!el) return { over: null, index: 0 };
+		const cards = Array.from(el.querySelectorAll<HTMLElement>("[data-task]")).filter(
+			(c) => c.dataset.task !== dragged.id
+		);
+		let index = cards.length;
+		for (let i = 0; i < cards.length; i++) {
+			const r = cards[i].getBoundingClientRect();
+			if (y < r.top + r.height / 2) {
+				index = i;
+				break;
+			}
+		}
+		return { over: el.dataset.column ?? null, index };
 	};
 
 	const position = (clientX: number, clientY: number) => {
@@ -156,7 +176,7 @@ export function BlitzitBoard({
 	};
 
 	const onCardDown = (e: React.PointerEvent<HTMLElement>, task: Task) => {
-		if (e.button !== 0 || task.done || !board?.can_move) return;
+		if (e.button !== 0 || !(board?.can_move || board?.can_reorder)) return;
 		if ((e.target as HTMLElement).closest("button")) return;
 		pressRef.current = { task, x: e.clientX, y: e.clientY, card: e.currentTarget };
 		e.currentTarget.setPointerCapture(e.pointerId);
@@ -176,11 +196,15 @@ export function BlitzitBoard({
 				width: card.width / k,
 				grabX: (press.x - card.left) / k,
 				grabY: (press.y - card.top) / k,
-				over: columnAt(e.clientX, e.clientY)
+				...dropAt(e.clientX, e.clientY, press.task)
 			};
 			onPinChange(true);
 		} else {
-			next = { ...dragRef.current, ...position(e.clientX, e.clientY), over: columnAt(e.clientX, e.clientY) };
+			next = {
+				...dragRef.current,
+				...position(e.clientX, e.clientY),
+				...dropAt(e.clientX, e.clientY, press.task)
+			};
 		}
 		dragRef.current = next;
 		setDrag(next);
@@ -194,8 +218,27 @@ export function BlitzitBoard({
 		if (!current) return;
 		onPinChange(false);
 		if (!drop || current.over === null) return;
-		const target = columns.find((c) => c.key === current.over);
-		if (target && columnFor(columns, current.task.column) !== target) onMove(current.task, target);
+		const target = columns.find((c) => keyOf(c) === current.over);
+		if (!target) return;
+		const task = current.task;
+		const from = boardColumnOf(task, columns);
+		const others = tasksIn(target).filter((t) => t.id !== task.id);
+		const before = others[current.index] ?? null;
+		const after = current.index > 0 ? (others[current.index - 1] ?? null) : null;
+		if (target.done) {
+			if (!task.done) onComplete(task);
+			return;
+		}
+		if (from !== target || task.done) {
+			if (!board?.can_move) return;
+			onMove(task, target);
+		} else {
+			// Same column: only a new place in it.
+			const now = tasksIn(target).findIndex((t) => t.id === task.id);
+			if (now === current.index) return;
+		}
+		// Placed where it was dropped (Blitzit keeps each column's order).
+		if (board?.can_reorder && (before || after)) onReorder(task, before, after);
 	};
 
 	// ---------------------------------------------------------------- parts
@@ -203,8 +246,11 @@ export function BlitzitBoard({
 	const avatar = (l: List | null, big = false) => {
 		const mark = markOf(l);
 		return (
-			<span className={`bz-avatar${big ? " is-big" : ""}`} style={{ background: listColor(mark) }}>
-				{listLetter(mark)}
+			<span
+				className={`bz-avatar${big ? " is-big" : ""}${mark?.emoji ? " is-emoji" : ""}`}
+				style={mark?.emoji ? undefined : { background: listColor(mark) }}
+			>
+				{mark?.emoji || listLetter(mark)}
 			</span>
 		);
 	};
@@ -212,7 +258,8 @@ export function BlitzitBoard({
 	const card = (task: Task) => (
 		<div
 			key={task.id}
-			className={`bz-card${task.done ? " is-done" : ""}${drag?.task.id === task.id ? " is-lifted" : ""}${board?.can_move && !task.done ? " can-drag" : ""}`}
+			data-task={task.id}
+			className={`bz-card${task.done ? " is-done" : ""}${drag?.task.id === task.id ? " is-lifted" : ""}${board?.can_move || board?.can_reorder ? " can-drag" : ""}`}
 			onPointerDown={(e) => onCardDown(e, task)}
 			onPointerMove={onCardMove}
 			onPointerUp={() => endDrag(true)}
@@ -355,20 +402,25 @@ export function BlitzitBoard({
 
 				<div className="bz-columns" ref={columnsRef}>
 					{columns.map((column) => {
+						const id = keyOf(column);
 						const here = tasksIn(column);
 						const done = here.filter((t) => t.done).length;
-						const folded = collapsed.includes(column.key);
+						const folded = collapsed.includes(id);
 						const today = isToday(column);
-						const progress = !/backlog/i.test(column.key);
+						const progress = !column.done && !/backlog/i.test(column.key);
+						const canAdd = !column.done && board?.can_add;
+						// Where a dragged card would land.
+						const shown = drag ? here.filter((t) => t.id !== drag.task.id) : here;
+						const lineAt = drag?.over === id ? drag.index : -1;
 						return (
 							<section
-								key={column.key || "none"}
-								data-column={column.key}
-								className={`bz-col${today ? " is-today" : ""}${folded ? " is-folded" : ""}${drag?.over === column.key ? " is-over" : ""}`}
+								key={id || "none"}
+								data-column={id}
+								className={`bz-col${today ? " is-today" : ""}${column.done ? " is-done" : ""}${folded ? " is-folded" : ""}${drag?.over === id ? " is-over" : ""}`}
 							>
 								<div className="bz-col-head">
 									<h3>{column.label}</h3>
-									{!folded && board?.can_add && (
+									{!folded && canAdd && (
 										<button
 											type="button"
 											className="bz-icon"
@@ -385,7 +437,7 @@ export function BlitzitBoard({
 										type="button"
 										className="bz-icon"
 										title={folded ? "Expand" : "Collapse"}
-										onClick={() => toggleCollapsed(column.key)}
+										onClick={() => toggleCollapsed(id)}
 									>
 										{folded ? <Maximize2 /> : <Minimize2 />}
 									</button>
@@ -405,8 +457,17 @@ export function BlitzitBoard({
 												</span>
 											</div>
 										)}
-										{board?.can_add && addRow(column)}
-										<div className="bz-cards">{here.map(card)}</div>
+										{canAdd && addRow(column)}
+										<div className="bz-cards">
+											{(drag ? [...shown.slice(0, Math.max(lineAt, 0)), null, ...shown.slice(Math.max(lineAt, 0))] : here).map(
+												(task, i) =>
+													task ? (
+														card(task)
+													) : lineAt >= 0 ? (
+														<div key={`line-${i}`} className="bz-drop-line" />
+													) : null
+											)}
+										</div>
 									</>
 								)}
 							</section>

@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
 	ArrowLeftRight,
+	ArrowUpDown,
 	CheckSquare,
 	ClipboardCopy,
 	Link2,
@@ -36,7 +37,8 @@ const ACTIONS = [
 	{ id: "lists", label: "Your Lists", icon: ListTodo },
 	{ id: "tasks", label: "A List's Tasks", icon: ListChecks },
 	{ id: "complete", label: "Tick a Task Off", icon: CheckSquare },
-	{ id: "move", label: "Move a Task to Another Column", icon: ArrowLeftRight }
+	{ id: "move", label: "Move a Task to Another Column", icon: ArrowLeftRight },
+	{ id: "reorder", label: "Reorder a Task in Its Column", icon: ArrowUpDown }
 ] as const;
 
 function parseChoices(raw: string): Record<string, string> {

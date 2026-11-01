@@ -613,3 +613,20 @@
 	width: 16px;
 	height: 16px;
 }
+
+.bz-avatar.is-emoji {
+	background: transparent;
+	font-size: 15px;
+}
+
+.bz-avatar.is-big.is-emoji {
+	font-size: 24px;
+}
+
+.bz-drop-line {
+	flex: none;
+	height: 3px;
+	margin: -2px 4px;
+	border-radius: 999px;
+	background: linear-gradient(90deg, #a855f7, #2dd4bf);
+}

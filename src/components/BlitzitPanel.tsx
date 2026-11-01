@@ -380,11 +380,36 @@ export function BlitzitPanel({
 		}
 		setBoard((prev) =>
 			prev
-				? { ...prev, tasks: prev.tasks.map((t) => (t.id === task.id ? { ...t, column: column.key } : t)) }
+				? { ...prev, tasks: prev.tasks.map((t) => (t.id === task.id ? { ...t, column: column.key, done: false } : t)) }
 				: prev
 		);
 		try {
 			await invoke("blitzit_move_task", { taskId: task.id, ...listOf(task), column: column.key });
+		} catch (e) {
+			setMessage(String(e));
+		}
+		void loadSaved();
+	};
+
+	/** Puts a task before `before` (or after `after`) in its column. */
+	const reorder = async (task: Task, before: Task | null, after: Task | null) => {
+		setBoard((prev) => {
+			if (!prev) return prev;
+			const rest = prev.tasks.filter((t) => t.id !== task.id);
+			const anchor = before ?? after;
+			let at = anchor ? rest.findIndex((t) => t.id === anchor.id) : 0;
+			if (at < 0) at = rest.length;
+			else if (!before && after) at += 1;
+			const moved = prev.tasks.find((t) => t.id === task.id) ?? task;
+			return { ...prev, tasks: [...rest.slice(0, at), moved, ...rest.slice(at)] };
+		});
+		try {
+			await invoke("blitzit_reorder_task", {
+				taskId: task.id,
+				...listOf(task),
+				before: before?.id ?? null,
+				after: before ? null : (after?.id ?? null)
+			});
 		} catch (e) {
 			setMessage(String(e));
 		}
@@ -593,6 +618,7 @@ export function BlitzitPanel({
 				onAdd={addTask}
 				onComplete={(task) => void complete(task)}
 				onMove={(task, column) => void move(task, column)}
+				onReorder={(task, before, after) => void reorder(task, before, after)}
 				onSync={() => void loadFresh(true)}
 				onList={() => setView("list")}
 				onOpen={() => void invoke("blitzit_open").catch((e) => setMessage(String(e)))}
