@@ -8,6 +8,8 @@ import {
 	Loader2,
 	Maximize2,
 	Minimize2,
+	PanelLeftClose,
+	PanelLeftOpen,
 	Plus,
 	RefreshCw,
 	Rocket,
@@ -50,6 +52,15 @@ interface DragState {
 }
 
 const COLLAPSED_KEY = "bloom-blitzit-collapsed";
+const SIDEBAR_KEY = "bloom-blitzit-sidebar-folded";
+
+function readSidebarFolded() {
+	try {
+		return localStorage.getItem(SIDEBAR_KEY) === "true";
+	} catch {
+		return false;
+	}
+}
 
 function readCollapsed(): string[] {
 	try {
@@ -99,6 +110,19 @@ export function BlitzitBoard({
 	const [addingIn, setAddingIn] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
 	const [collapsed, setCollapsed] = useState<string[]>(readCollapsed);
+	// The list sidebar folded to a narrow strip of list marks, giving the
+	// columns the room (Blitzit's own sidebar folds the same way).
+	const [sideFolded, setSideFolded] = useState(readSidebarFolded);
+	const toggleSide = () => {
+		setSideFolded((prev) => {
+			try {
+				localStorage.setItem(SIDEBAR_KEY, String(!prev));
+			} catch {
+				/* only remembered while Bloom runs */
+			}
+			return !prev;
+		});
+	};
 	const [drag, setDrag] = useState<DragState | null>(null);
 	const dragRef = useRef<DragState | null>(null);
 	const columnsRef = useRef<HTMLDivElement | null>(null);
@@ -331,13 +355,24 @@ export function BlitzitBoard({
 
 	return (
 		<div className={`bz${drag ? " is-dragging" : ""}`} onClick={(e) => e.stopPropagation()}>
-			<aside className="bz-side">
-				<div className="bz-side-label">Lists</div>
+			<aside className={`bz-side${sideFolded ? " is-folded" : ""}`}>
+				<div className="bz-side-top">
+					{!sideFolded && <div className="bz-side-label">Lists</div>}
+					<button
+						type="button"
+						className="bz-icon"
+						title={sideFolded ? "Show the lists" : "Fold the lists away"}
+						onClick={toggleSide}
+					>
+						{sideFolded ? <PanelLeftOpen /> : <PanelLeftClose />}
+					</button>
+				</div>
 				<div className="bz-side-lists">
 					{lists.length > 0 && (
 						<button
 							type="button"
 							className={`bz-side-list${all ? " is-on" : ""}`}
+							title={sideFolded ? `All Lists (${allTotal})` : undefined}
 							onClick={() => onChooseList({ id: ALL_LISTS, name: "All Lists" })}
 						>
 							{avatar({ id: ALL_LISTS, name: "All Lists" })}
@@ -350,6 +385,7 @@ export function BlitzitBoard({
 							key={l.id}
 							type="button"
 							className={`bz-side-list${l.id === list?.id ? " is-on" : ""}`}
+							title={sideFolded ? `${l.name} (${l.open ?? 0})` : undefined}
 							onClick={() => onChooseList(l)}
 						>
 							{avatar(l)}

@@ -87,8 +87,14 @@
 	min-height: 0;
 }
 
+.bz-side-top {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0 0 6px 8px;
+}
+
 .bz-side-label {
-	padding: 0 8px 8px;
 	font-size: 11px;
 	font-weight: 500;
 	letter-spacing: 0.08em;
@@ -303,7 +309,7 @@
 
 .bz-col {
 	flex: 1 1 0;
-	min-width: 200px;
+	min-width: 168px;
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
@@ -629,4 +635,35 @@
 	margin: -2px 4px;
 	border-radius: 999px;
 	background: linear-gradient(90deg, #a855f7, #2dd4bf);
+}
+
+/* The sidebar folded: just the list marks, the columns get the room. */
+.bz-side {
+	transition: width 0.18s ease;
+}
+
+.bz-side.is-folded {
+	width: 52px;
+	padding: 10px 6px 8px;
+}
+
+.bz-side.is-folded .bz-side-top {
+	justify-content: center;
+	padding: 0 0 8px;
+}
+
+.bz-side.is-folded .bz-side-list {
+	justify-content: center;
+	padding: 0;
+}
+
+.bz-side.is-folded .bz-side-name,
+.bz-side.is-folded .bz-side-count,
+.bz-side.is-folded .bz-side-sync span {
+	display: none;
+}
+
+.bz-side.is-folded .bz-side-sync {
+	justify-content: center;
+	padding: 8px 0;
 }
