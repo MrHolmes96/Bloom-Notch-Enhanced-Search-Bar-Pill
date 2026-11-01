@@ -330,6 +330,53 @@ struct NewItem {
     /// "Folder", or the file's extension (".txt").
     kind: String,
     name: String,
+    /// Its icon as Windows shows it (the type's small icon), a PNG data URL.
+    icon: Option<String>,
+}
+
+/// A file type's (or a folder's) small icon, as Explorer's New shows it.
+fn type_icon(kind: &str) -> Option<String> {
+    use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
+    use windows::Win32::UI::Shell::{
+        SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_SMALLICON, SHGFI_USEFILEATTRIBUTES,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
+    static CACHE: std::sync::Mutex<Vec<(String, Option<String>)>> =
+        std::sync::Mutex::new(Vec::new());
+    if let Some(found) = CACHE
+        .lock()
+        .ok()
+        .and_then(|c| c.iter().find(|(k, _)| k == kind).map(|(_, v)| v.clone()))
+    {
+        return found;
+    }
+    let folder = kind.eq_ignore_ascii_case("folder");
+    let name = wide(if folder { "folder" } else { kind });
+    let icon = unsafe {
+        let mut info = SHFILEINFOW::default();
+        let found = SHGetFileInfoW(
+            windows::core::PCWSTR(name.as_ptr()),
+            if folder {
+                FILE_ATTRIBUTE_DIRECTORY
+            } else {
+                FILE_ATTRIBUTE_NORMAL
+            },
+            Some(&mut info),
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES,
+        );
+        if found == 0 || info.hIcon.is_invalid() {
+            None
+        } else {
+            let png = crate::utils::icon_to_base64(info.hIcon);
+            let _ = DestroyIcon(info.hIcon);
+            png
+        }
+    };
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.push((kind.to_string(), icon.clone()));
+    }
+    icon
 }
 
 fn wide(text: &str) -> Vec<u16> {
@@ -438,6 +485,7 @@ fn new_items() -> Vec<NewItem> {
         .filter(|k| k.eq_ignore_ascii_case("folder") || k.starts_with('.'))
         .map(|kind| NewItem {
             name: friendly_name(&kind),
+            icon: None,
             kind,
         })
         .collect();
@@ -690,7 +738,17 @@ fn show(app: &tauri::AppHandle, point: POINT) -> Result<(), String> {
     use tauri::{Emitter, Manager};
     let view = on_shell_thread(|| unsafe { desktop_view().map(|v| view_state(&v)) })
         .ok_or("the shell thread stopped")??;
-    let new = new_items();
+    // Icons are read on a shell thread (Windows' icon reading needs one).
+    let new = on_shell_thread(|| {
+        new_items()
+            .into_iter()
+            .map(|item| NewItem {
+                icon: type_icon(&item.kind),
+                ..item
+            })
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
     let dock = app
         .get_webview_window("dock")
         .ok_or("the dock isn't there")?;

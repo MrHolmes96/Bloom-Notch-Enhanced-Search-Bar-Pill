@@ -1,20 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { ChevronRight } from "lucide-react";
 import {
-	ArrowDownUp,
-	Brush,
-	ChevronRight,
-	CirclePlus,
-	File,
-	Folder,
-	LayoutGrid,
-	Link,
-	MonitorCog,
-	RotateCw,
-	SquareArrowOutUpRight,
-	SquareTerminal
-} from "lucide-react";
+	DisplayIcon,
+	FileIcon,
+	FolderIcon,
+	MoreIcon,
+	NewIcon,
+	PersonaliseIcon,
+	RefreshIcon,
+	SortIcon,
+	TerminalIcon,
+	ViewIcon
+} from "./DesktopMenuIcons";
 import "./DesktopMenu.css";
 
 /**
@@ -34,6 +33,8 @@ interface ViewState {
 interface NewItem {
 	kind: string;
 	name: string;
+	/** Windows' own small icon for the type (a PNG data URL). */
+	icon: string | null;
 }
 
 interface Payload {
@@ -239,12 +240,12 @@ export function DesktopMenu() {
 						{item(
 							n.kind,
 							n.name,
-							n.kind.toLowerCase() === "folder" ? (
-								<Folder className="dm-folder" />
-							) : n.kind.toLowerCase() === ".lnk" ? (
-								<Link />
+							n.icon ? (
+								<img className="dm-type-icon" src={n.icon} alt="" />
+							) : n.kind.toLowerCase() === "folder" ? (
+								<FolderIcon />
 							) : (
-								<File />
+								<FileIcon />
 							),
 							`new:${i}`
 						)}
@@ -270,22 +271,22 @@ export function DesktopMenu() {
 					if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current);
 				}}
 			>
-				{item("view", "View", <LayoutGrid />, null, "view")}
-				{item("sort", "Sort by", <ArrowDownUp className="dm-accent" />, null, "sort")}
-				{item("refresh", "Refresh", <RotateCw />, "refresh")}
+				{item("view", "View", <ViewIcon />, null, "view")}
+				{item("sort", "Sort by", <SortIcon />, null, "sort")}
+				{item("refresh", "Refresh", <RefreshIcon />, "refresh")}
 				<div className="dm-sep" />
-				{item("new", "New", <CirclePlus className="dm-accent" />, null, "new")}
+				{item("new", "New", <NewIcon />, null, "new")}
 				<div className="dm-sep" />
-				{item("display", "Display settings", <MonitorCog className="dm-accent" />, "display")}
-				{item("personalise", "Personalise", <Brush className="dm-accent" />, "personalise")}
+				{item("display", "Display settings", <DisplayIcon />, "display")}
+				{item("personalise", "Personalise", <PersonaliseIcon />, "personalise")}
 				{menu.terminal && (
 					<>
 						<div className="dm-sep" />
-						{item("terminal", "Open in Terminal", <SquareTerminal />, "terminal")}
+						{item("terminal", "Open in Terminal", <TerminalIcon />, "terminal")}
 					</>
 				)}
 				<div className="dm-sep" />
-				{item("more", "Show more options", <SquareArrowOutUpRight />, "more")}
+				{item("more", "Show more options", <MoreIcon />, "more")}
 			</div>
 			{submenu && (
 				<div

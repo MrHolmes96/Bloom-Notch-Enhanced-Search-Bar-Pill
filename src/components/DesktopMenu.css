@@ -2,7 +2,8 @@
 .dm-menu {
 	position: fixed;
 	z-index: 10000;
-	min-width: 268px;
+	/* As wide as its longest item, as Windows' is. */
+	width: max-content;
 	padding: 4px;
 	box-sizing: border-box;
 	border-radius: 8px;
@@ -21,7 +22,7 @@
 }
 
 .dm-sub {
-	min-width: 220px;
+	min-width: 150px;
 }
 
 @keyframes dm-in {
@@ -36,7 +37,7 @@
 	align-items: center;
 	gap: 12px;
 	height: 32px;
-	padding: 0 10px 0 12px;
+	padding: 0 11px 0 12px;
 	border-radius: 4px;
 	cursor: default;
 }
@@ -59,10 +60,10 @@
 	justify-content: center;
 }
 
-.dm-icon svg {
+.dm-icon svg,
+.dm-type-icon {
 	width: 16px;
 	height: 16px;
-	stroke-width: 1.6;
 }
 
 .dm-accent {
@@ -85,7 +86,9 @@
 	width: 14px;
 	height: 14px;
 	flex: none;
-	opacity: 0.8;
+	margin-left: 28px;
+	stroke-width: 1.5;
+	opacity: 0.85;
 }
 
 .dm-sep {
