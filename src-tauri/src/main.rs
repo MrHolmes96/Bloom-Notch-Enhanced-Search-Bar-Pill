@@ -9,6 +9,7 @@ mod bluetooth;
 mod brightness;
 mod commands;
 mod data_folders;
+mod desktop_menu;
 mod dock_extras;
 mod foreground;
 mod ghelper;

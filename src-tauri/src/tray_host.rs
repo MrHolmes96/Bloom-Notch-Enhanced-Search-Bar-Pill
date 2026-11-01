@@ -1147,78 +1147,175 @@ fn really_shown(hwnd: HWND) -> bool {
     }
 }
 
-/// The menus on screen that a tray click at `point` may have opened, by
-/// handle: Windows' own menus (`#32768`), and the menus apps draw themselves
-/// (a tool or top-most pop-up without a caption, of menu width, that takes
-/// clicks) opening at the pointer, in the app's process or a helper's
-/// (Steam's web helper). An app's window or panel opened elsewhere is not a
-/// menu, so it never holds the notch open.
-pub(crate) fn open_menus(point: POINT, excluded: &[u32]) -> Vec<isize> {
+/// A window on screen that looks like a menu: Windows' own menus (`#32768`),
+/// and the menus apps draw themselves (a tool or top-most pop-up without a
+/// caption that takes clicks). Gives its process and where it is.
+struct MenuLike {
+    hwnd: isize,
+    pid: u32,
+    rect: windows::Win32::Foundation::RECT,
+    system_menu: bool,
+}
+
+fn menu_like_windows() -> Vec<MenuLike> {
     use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetWindowLongW, GetWindowRect, GWL_EXSTYLE, GWL_STYLE,
         WS_CAPTION, WS_EX_TRANSPARENT,
     };
-    struct Search<'a> {
-        point: POINT,
-        excluded: &'a [u32],
-        found: Vec<isize>,
-    }
     unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> windows::core::BOOL {
-        let search = &mut *(param.0 as *mut Search);
+        let found = &mut *(param.0 as *mut Vec<MenuLike>);
         if !really_shown(hwnd) {
             return true.into();
         }
         let mut class = [0u16; 16];
         let length = GetClassNameW(hwnd, &mut class) as usize;
-        if &class[..length.min(class.len())]
-            == "#32768".encode_utf16().collect::<Vec<_>>().as_slice()
-        {
-            search.found.push(hwnd.0 as isize);
-            return true.into();
+        let system_menu = &class[..length.min(class.len())]
+            == "#32768".encode_utf16().collect::<Vec<_>>().as_slice();
+        if !system_menu {
+            let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+            let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            if style & WS_POPUP.0 == 0
+                || style & WS_CAPTION.0 == WS_CAPTION.0
+                || ex_style & WS_EX_TRANSPARENT.0 != 0
+                || ex_style & (WS_EX_TOOLWINDOW.0 | WS_EX_TOPMOST.0) == 0
+            {
+                return true.into();
+            }
         }
-        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
-        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-        if style & WS_POPUP.0 == 0
-            || style & WS_CAPTION.0 == WS_CAPTION.0
-            || ex_style & WS_EX_TRANSPARENT.0 != 0
-            || ex_style & (WS_EX_TOOLWINDOW.0 | WS_EX_TOPMOST.0) == 0
-        {
-            return true.into();
-        }
-        let mut owner = 0u32;
-        GetWindowThreadProcessId(hwnd, Some(&mut owner));
-        if search.excluded.contains(&owner) {
-            return true.into();
-        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
         let mut rect = RECT::default();
         if GetWindowRect(hwnd, &mut rect).is_err() {
             return true.into();
         }
-        let dpi = GetDpiForWindow(hwnd).max(96) as i32;
-        let width = rect.right - rect.left;
-        let height = rect.bottom - rect.top;
-        let reach = 32 * dpi / 96;
-        let menu_sized = width > 8 && height > 8 && width <= 720 * dpi / 96;
-        let at_pointer = search.point.x >= rect.left - reach
-            && search.point.x <= rect.right + reach
-            && search.point.y >= rect.top - reach
-            && search.point.y <= rect.bottom + reach;
-        if menu_sized && at_pointer {
-            search.found.push(hwnd.0 as isize);
-        }
+        found.push(MenuLike {
+            hwnd: hwnd.0 as isize,
+            pid,
+            rect,
+            system_menu,
+        });
         true.into()
     }
-    let mut search = Search {
-        point,
-        excluded,
-        found: Vec::new(),
-    };
+    let mut found: Vec<MenuLike> = Vec::new();
     unsafe {
-        let _ = EnumWindows(Some(visit), LPARAM(&mut search as *mut Search as isize));
+        let _ = EnumWindows(
+            Some(visit),
+            LPARAM(&mut found as *mut Vec<MenuLike> as isize),
+        );
     }
-    search.found
+    found
+}
+
+/// The menus on screen that a tray click at `point` may have opened, by
+/// handle: Windows' own menus, and the menus apps draw themselves (of menu
+/// width) opening at the pointer, in the app's process or a helper's (Steam's
+/// web helper). An app's window or panel opened elsewhere is not a menu, so
+/// it never holds the notch open.
+pub(crate) fn open_menus(point: POINT, excluded: &[u32]) -> Vec<isize> {
+    use windows::Win32::UI::HiDpi::GetDpiForWindow;
+    menu_like_windows()
+        .into_iter()
+        .filter(|menu| {
+            if menu.system_menu {
+                return true;
+            }
+            if excluded.contains(&menu.pid) {
+                return false;
+            }
+            let dpi = unsafe { GetDpiForWindow(HWND(menu.hwnd as *mut _)) }.max(96) as i32;
+            let r = menu.rect;
+            let width = r.right - r.left;
+            let height = r.bottom - r.top;
+            let reach = 32 * dpi / 96;
+            let menu_sized = width > 8 && height > 8 && width <= 720 * dpi / 96;
+            let at_pointer = point.x >= r.left - reach
+                && point.x <= r.right + reach
+                && point.y >= r.top - reach
+                && point.y <= r.bottom + reach;
+            menu_sized && at_pointer
+        })
+        .map(|menu| menu.hwnd)
+        .collect()
+}
+
+fn menu_log(line: &str) {
+    use std::io::Write;
+    let Some(path) = crate::utils::data_file("tray-menus.log") else {
+        return;
+    };
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 48 * 1024) {
+        let _ = std::fs::remove_file(&path);
+    }
+    let time = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(
+            file,
+            "{:02}:{:02}:{:02}.{:03} {line}",
+            time.wHour, time.wMinute, time.wSecond, time.wMilliseconds
+        );
+    }
+}
+
+fn describe_window(hwnd: isize) -> String {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindowRect};
+    let window = HWND(hwnd as *mut _);
+    let mut class = [0u16; 128];
+    let length = unsafe { GetClassNameW(window, &mut class) } as usize;
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+    let exe = unsafe { crate::commands::process_image_path(pid) }
+        .and_then(|p| {
+            std::path::Path::new(&p)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+        })
+        .unwrap_or_default();
+    let mut rect = RECT::default();
+    let _ = unsafe { GetWindowRect(window, &mut rect) };
+    format!(
+        "{hwnd:#x} {} ({exe}) at {},{} {}x{}",
+        String::from_utf16_lossy(&class[..length.min(class.len())]),
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top
+    )
+}
+
+/// Explorer's process (the desktop's).
+fn shell_pid() -> u32 {
+    use windows::Win32::UI::WindowsAndMessaging::GetShellWindow;
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(GetShellWindow(), Some(&mut pid)) };
+    pid
+}
+
+/// Whether the pointer is on a window of one of `processes` (a menu's own
+/// app, or its helper drawing it).
+fn pointer_on_process(processes: &[u32]) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetAncestor, GetCursorPos, WindowFromPoint, GA_ROOT,
+    };
+    let mut cursor = POINT::default();
+    if unsafe { GetCursorPos(&mut cursor) }.is_err() {
+        return false;
+    }
+    let under = unsafe { WindowFromPoint(cursor) };
+    if under.0.is_null() {
+        return false;
+    }
+    let root = unsafe { GetAncestor(under, GA_ROOT) };
+    let mut pid = 0u32;
+    unsafe {
+        GetWindowThreadProcessId(if root.0.is_null() { under } else { root }, Some(&mut pid))
+    };
+    processes.contains(&pid)
 }
 
 /// The tray menus open right now, per click being watched, so Bloom keeps
@@ -1327,33 +1424,68 @@ pub(crate) fn watch_interaction(
         let started = std::time::Instant::now();
         let mut seen = false;
         let mut announced = false;
+        // The menus this click opened, followed by their handles from the
+        // moment they appear, wherever they move or however they resize
+        // (a long menu, or one an app lays out again while it is used), and
+        // the processes drawing them (their sub-menus count too).
+        let mut tracked: Vec<isize> = Vec::new();
+        let mut processes: Vec<u32> = Vec::new();
+        // Ticks in a row with none of them on screen: a menu an app hides
+        // for a moment while it redraws is not a closed menu.
+        let mut gone_ticks = 0u32;
         // When the pointer was last on one of the menus. A menu nobody has
         // pointed at for a while lets the notch go: it may be one an app keeps
         // around after closing it in a way that can't be told from open.
         let mut last_on_menu = std::time::Instant::now();
+        let reason;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            let opened: Vec<isize> = open_menus(point, &excluded)
-                .into_iter()
-                .filter(|hwnd| !before.contains(hwnd))
-                .collect();
-            let open = !opened.is_empty();
-            if open && pointer_on_any(&opened) {
+            for hwnd in open_menus(point, &excluded) {
+                if !before.contains(&hwnd) && !tracked.contains(&hwnd) {
+                    menu_log(&format!("{id}: menu {}", describe_window(hwnd)));
+                    let mut pid = 0u32;
+                    unsafe { GetWindowThreadProcessId(HWND(hwnd as *mut _), Some(&mut pid)) };
+                    // Explorer draws the desktop and much else: only its
+                    // menus themselves count, not everything it shows.
+                    if pid != shell_pid() && !processes.contains(&pid) {
+                        processes.push(pid);
+                    }
+                    tracked.push(hwnd);
+                }
+            }
+            if !processes.is_empty() {
+                for menu in menu_like_windows() {
+                    if processes.contains(&menu.pid)
+                        && !before.contains(&menu.hwnd)
+                        && !tracked.contains(&menu.hwnd)
+                    {
+                        menu_log(&format!("{id}: with it {}", describe_window(menu.hwnd)));
+                        tracked.push(menu.hwnd);
+                    }
+                }
+            }
+            tracked.retain(|&hwnd| {
+                let window = HWND(hwnd as *mut _);
+                unsafe { IsWindow(Some(window)) }.as_bool() && really_shown(window)
+            });
+            let open = !tracked.is_empty();
+            if open && (pointer_on_any(&tracked) || pointer_on_process(&processes)) {
                 last_on_menu = std::time::Instant::now();
             }
             if open && last_on_menu.elapsed().as_secs() >= 8 {
+                reason = "not pointed at for 8 s";
                 break;
             }
             // In front of the notch, from the moment it appears.
-            for &menu in &opened {
+            for &menu in &tracked {
                 if !seen || bloom_in_front_of(menu) {
                     raise_menu(menu);
                 }
             }
             if let Ok(mut menus) = OPEN_MENUS.lock() {
                 menus.retain(|(watch, _)| *watch != serial);
-                if open {
-                    menus.push((serial, opened));
+                if open || (seen && gone_ticks < 3) {
+                    menus.push((serial, tracked.clone()));
                 }
             }
             if open && !seen && !pinned {
@@ -1363,15 +1495,23 @@ pub(crate) fn watch_interaction(
                 announced = true;
             }
             seen |= open;
+            gone_ticks = if open { 0 } else { gone_ticks + 1 };
             let elapsed = started.elapsed();
+            if !open && seen && gone_ticks >= 3 {
+                reason = "closed";
+                break;
+            }
             // No menu at all: the click did something else.
-            if !open && (seen || elapsed.as_millis() > 1500) {
+            if !seen && elapsed.as_millis() > 1500 {
+                reason = "no menu appeared";
                 break;
             }
             if elapsed.as_secs() > 600 {
+                reason = "open for 10 min";
                 break;
             }
         }
+        menu_log(&format!("{id}: let go ({reason})"));
         if let Ok(mut menus) = OPEN_MENUS.lock() {
             menus.retain(|(watch, _)| *watch != serial);
         }
