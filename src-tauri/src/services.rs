@@ -2566,7 +2566,7 @@ pub fn setup_mouse_hook(app_handle: AppHandle) {
                             close_dock_menu_if_outside(&app_handle, press);
                         }
                         if MOUSE_HOOK_DESKTOP_MENU_PENDING.swap(false, Ordering::Relaxed) {
-                            crate::desktop_menu::open_menu_pending();
+                            crate::desktop_menu::open_menu_pending(&app_handle);
                         }
                         last_processed = Instant::now();
                     }

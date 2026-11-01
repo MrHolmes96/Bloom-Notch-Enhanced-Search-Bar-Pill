@@ -1,3 +1,4 @@
+import { DesktopMenu, isDesktopMenuOpen } from "./components/DesktopMenu";
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, memo } from "react";
 import { readScale, scaleSyncHandlers } from "./uiScale";
 import { motion, AnimatePresence, Reorder } from "framer-motion";
@@ -1073,7 +1074,7 @@ const Dock = memo(function Dock() {
 		setActiveSubmenu(null);
 		jumpListRequestRef.current++;
 		setJumpList([]);
-		invoke("set_menu_open", { open: false, rect: null }).catch(() => {});
+		if (!isDesktopMenuOpen()) invoke("set_menu_open", { open: false, rect: null }).catch(() => {});
 	};
 
 	const closePopup = () => {
@@ -1105,6 +1106,8 @@ const Dock = memo(function Dock() {
 			open = true;
 		}
 
+		// The desktop's menu has the click area while it's open.
+		if (!open && isDesktopMenuOpen()) return;
 		invoke("set_menu_open", { open, rect }).catch(() => {});
 	}, [contextMenu, menuPos, showAddPopup, pinnedApps, activeApps, activeSubmenu, scale, jumpList]);
 
@@ -1974,6 +1977,8 @@ const Dock = memo(function Dock() {
 					</AnimatePresence>
 				</motion.div>
 			</div>
+
+			<DesktopMenu />
 
 			{contextMenu && (
 				<div
