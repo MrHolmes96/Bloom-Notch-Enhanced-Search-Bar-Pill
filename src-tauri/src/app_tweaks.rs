@@ -13,6 +13,7 @@
 //! title. What it did goes into app-tweaks.log (Export Diagnostics).
 
 use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::Mutex;
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Accessibility::{UnhookWinEvent, HWINEVENTHOOK};
@@ -485,10 +486,198 @@ pub fn start_portals_after_sign_in(app: &tauri::AppHandle) {
         });
 }
 
+// ---------------------------------------------------------------- Portals' scheduled tasks
+
+/// The scheduled tasks Bloom switched off so Bloom starts Portals instead
+/// (by their path in Task Scheduler), to switch back on later.
+const SWITCHED_OFF_FILE: &str = "portals-tasks-switched-off.txt";
+
+/// The last problem switching a task, for Settings.
+static TASK_PROBLEM: Mutex<Option<String>> = Mutex::new(None);
+
+/// Every scheduled task whose program is Portals, with whether it's on.
+unsafe fn portals_tasks(
+    service: &windows::Win32::System::TaskScheduler::ITaskService,
+) -> Vec<(String, bool)> {
+    use windows::core::{Interface, BSTR};
+    use windows::Win32::System::TaskScheduler::{
+        IExecAction, ITaskFolder, TASK_ACTION_EXEC, TASK_ENUM_HIDDEN,
+    };
+    use windows::Win32::System::Variant::VARIANT;
+    fn walk(folder: &ITaskFolder, found: &mut Vec<(String, bool)>, depth: u32) {
+        unsafe {
+            if let Ok(tasks) = folder.GetTasks(TASK_ENUM_HIDDEN.0) {
+                let count = tasks.Count().unwrap_or(0);
+                for i in 1..=count {
+                    let Ok(task) = tasks.get_Item(&VARIANT::from(i)) else {
+                        continue;
+                    };
+                    let Ok(actions) = task.Definition().and_then(|d| d.Actions()) else {
+                        continue;
+                    };
+                    let mut runs_portals = false;
+                    let mut count = 0i32;
+                    let _ = actions.Count(&mut count);
+                    for a in 1..=count {
+                        let Ok(action) = actions.get_Item(a) else {
+                            continue;
+                        };
+                        let mut kind = TASK_ACTION_EXEC;
+                        if action.Type(&mut kind).is_err() || kind != TASK_ACTION_EXEC {
+                            continue;
+                        }
+                        let Ok(exec) = action.cast::<IExecAction>() else {
+                            continue;
+                        };
+                        let mut path = BSTR::new();
+                        if exec.Path(&mut path).is_ok()
+                            && path.to_string().to_lowercase().contains("portals.exe")
+                        {
+                            runs_portals = true;
+                        }
+                    }
+                    if runs_portals {
+                        let path = task.Path().map(|p| p.to_string()).unwrap_or_default();
+                        let enabled = task.Enabled().map(|e| e.as_bool()).unwrap_or(false);
+                        if !path.is_empty() {
+                            found.push((path, enabled));
+                        }
+                    }
+                }
+            }
+            if depth >= 6 {
+                return;
+            }
+            if let Ok(folders) = folder.GetFolders(0) {
+                for i in 1..=folders.Count().unwrap_or(0) {
+                    if let Ok(inner) = folders.get_Item(&VARIANT::from(i)) {
+                        walk(&inner, found, depth + 1);
+                    }
+                }
+            }
+        }
+    }
+    let mut found = Vec::new();
+    if let Ok(root) = service.GetFolder(&BSTR::from("\\")) {
+        walk(&root, &mut found, 0);
+    }
+    found
+}
+
+fn switched_off() -> Vec<String> {
+    crate::utils::data_file(SWITCHED_OFF_FILE)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| {
+            t.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn save_switched_off(paths: &[String]) {
+    if let Some(path) = crate::utils::data_file(SWITCHED_OFF_FILE) {
+        if paths.is_empty() {
+            let _ = std::fs::remove_file(path);
+        } else {
+            let _ = std::fs::write(path, paths.join("\n"));
+        }
+    }
+}
+
+/// While "Start Portals with Bloom" is on, Bloom starts Portals itself, right
+/// after it's on screen: a scheduled task that starts Portals at sign-in
+/// would start it before Bloom can keep its loading pop-up out of sight, so
+/// it's switched off (not deleted). Turning the option off switches back on
+/// the ones Bloom switched off.
+pub fn sync_portals_tasks(app: &tauri::AppHandle) {
+    let wanted = crate::utils::get_setting_str(app, START_PORTALS_KEY).as_deref() == Some("true");
+    let _ = std::thread::Builder::new()
+        .name("bloom-portals-tasks".into())
+        .spawn(move || unsafe {
+            use windows::core::BSTR;
+            use windows::Win32::Foundation::{VARIANT_FALSE, VARIANT_TRUE};
+            use windows::Win32::System::Com::{
+                CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+            };
+            use windows::Win32::System::TaskScheduler::{ITaskService, TaskScheduler};
+            use windows::Win32::System::Variant::VARIANT;
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let Ok(service) =
+                CoCreateInstance::<_, ITaskService>(&TaskScheduler, None, CLSCTX_INPROC_SERVER)
+            else {
+                return;
+            };
+            let none = VARIANT::default();
+            if service.Connect(&none, &none, &none, &none).is_err() {
+                return;
+            }
+            let Ok(root) = service.GetFolder(&BSTR::from("\\")) else {
+                return;
+            };
+            let mut off = switched_off();
+            let mut problem = None;
+            if wanted {
+                for (path, enabled) in portals_tasks(&service) {
+                    if !enabled {
+                        continue;
+                    }
+                    match root
+                        .GetTask(&BSTR::from(path.as_str()))
+                        .and_then(|t| t.SetEnabled(VARIANT_FALSE))
+                    {
+                        Ok(()) => {
+                            log(&format!(
+                                "Scheduled task \"{path}\" starts Portals: switched off, Bloom starts Portals now"
+                            ));
+                            if !off.contains(&path) {
+                                off.push(path);
+                            }
+                        }
+                        Err(e) => {
+                            log(&format!("Couldn't switch off scheduled task \"{path}\": {e}"));
+                            problem = Some(format!(
+                                "Your scheduled task \"{}\" starts Portals, and Windows didn't let Bloom switch it off ({}). Switch it off in Task Scheduler",
+                                path.trim_start_matches('\\'),
+                                e.message()
+                            ));
+                        }
+                    }
+                }
+            } else {
+                off.retain(|path| {
+                    match root
+                        .GetTask(&BSTR::from(path.as_str()))
+                        .and_then(|t| t.SetEnabled(VARIANT_TRUE))
+                    {
+                        Ok(()) => {
+                            log(&format!("Scheduled task \"{path}\" switched back on"));
+                            false
+                        }
+                        // Gone (deleted meanwhile): nothing to switch back on.
+                        Err(e) if e.code().0 as u32 == 0x8007_0002 => false,
+                        Err(e) => {
+                            log(&format!("Couldn't switch scheduled task \"{path}\" back on: {e}"));
+                            true
+                        }
+                    }
+                });
+            }
+            save_switched_off(&off);
+            if let Ok(mut slot) = TASK_PROBLEM.lock() {
+                *slot = problem;
+            }
+        });
+}
+
 #[derive(serde::Serialize)]
 pub struct PortalsStatus {
     installed: bool,
     starts_itself: bool,
+    /// A scheduled task starting Portals that Bloom couldn't switch off.
+    task_problem: Option<String>,
 }
 
 #[tauri::command]
@@ -496,10 +685,12 @@ pub async fn portals_status() -> PortalsStatus {
     tauri::async_runtime::spawn_blocking(|| PortalsStatus {
         installed: portals_exe().is_some(),
         starts_itself: portals_starts_itself(),
+        task_problem: TASK_PROBLEM.lock().ok().and_then(|p| p.clone()),
     })
     .await
     .unwrap_or(PortalsStatus {
         installed: false,
         starts_itself: false,
+        task_problem: None,
     })
 }

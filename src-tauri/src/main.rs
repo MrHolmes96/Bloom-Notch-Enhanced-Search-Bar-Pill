@@ -544,6 +544,7 @@ fn main() {
             window_memory::start(app.handle().clone());
             shell_probe::start();
             app_tweaks::start();
+            app_tweaks::sync_portals_tasks(app.handle());
             integrations::blitzit_sync::start(app.handle().clone());
             if autostart {
                 app_tweaks::start_portals_after_sign_in(app.handle());

@@ -11,17 +11,27 @@ import type { BlitzitStatus } from "../components/BlitzitPanel";
  * tab under Integrations in the sidebar, and its own page in the notch.
  */
 
+interface PortalsStatus {
+	installed: boolean;
+	starts_itself: boolean;
+	/** A scheduled task starting Portals that Bloom couldn't switch off. */
+	task_problem: string | null;
+}
+
 export function IntegrationsTab({ openTab }: { openTab: (tab: string) => void }) {
 	const [blitzit, setBlitzit] = useState<BlitzitStatus | null>(null);
-	const [portals, setPortals] = useState<{ installed: boolean; starts_itself: boolean } | null>(
-		null
-	);
+	const [portals, setPortals] = useState<PortalsStatus | null>(null);
 	const [startPortals, setStartPortals] = useStoredFlag("bloom-start-portals", false);
 
 	useEffect(() => {
-		void invoke<{ installed: boolean; starts_itself: boolean }>("portals_status")
-			.then(setPortals)
-			.catch(() => {});
+		const load = () =>
+			void invoke<PortalsStatus>("portals_status")
+				.then(setPortals)
+				.catch(() => {});
+		load();
+		// Switching Portals' scheduled tasks takes a moment: check again.
+		const timer = window.setTimeout(load, 1500);
+		return () => window.clearTimeout(timer);
 	}, [startPortals]);
 
 	useEffect(() => {
@@ -84,7 +94,8 @@ export function IntegrationsTab({ openTab }: { openTab: (tab: string) => void })
 								<span className="setting-label">Start Portals with Bloom</span>
 								<span className="setting-desc">
 									Bloom starts Portals a few seconds after you sign in, so its loading pop-up can
-									be kept out of sight
+									be kept out of sight. A scheduled task that starts Portals is switched off
+									meanwhile (and back on if you turn this off)
 								</span>
 							</div>
 							<label className="toggle-switch">
@@ -97,6 +108,9 @@ export function IntegrationsTab({ openTab }: { openTab: (tab: string) => void })
 							</label>
 						</div>
 					</div>
+					{startPortals && portals.task_problem && (
+						<div className="setting-group-note">{portals.task_problem}.</div>
+					)}
 					{startPortals && portals.starts_itself && (
 						<div className="setting-group-note">
 							Portals still starts itself: turn off Launch on Startup in Portals' App Settings, so
