@@ -33,7 +33,16 @@ use super::tools::{self, Item, Kind, ListRef};
 pub struct BoardList {
     pub id: String,
     pub name: String,
+    /// Its colour in Blitzit, when Blitzit says.
+    #[serde(default)]
+    pub color: String,
+    /// Its open tasks, as far as this PC knows (for the board's list of lists).
+    #[serde(default)]
+    pub open: usize,
 }
+
+/// Every list's tasks together, as Blitzit's own "All Lists".
+pub const ALL_LISTS: &str = "__all__";
 
 /// What Blitzit's connection lets Bloom do, as last seen.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
@@ -228,6 +237,8 @@ pub struct BoardTask {
     name: String,
     done: bool,
     column: String,
+    /// The list it's in (what changes to it are sent with).
+    list_id: String,
     /// Not in Blitzit yet (waiting for a connection, or being sent).
     pending: bool,
 }
@@ -258,33 +269,51 @@ fn board(app: &AppHandle, list_id: Option<String>, problem: Option<String>) -> B
     with_store(app, |store| {
         let cache = &store.cache;
         let list = match list_id.filter(|id| !id.is_empty()) {
+            Some(id) if id == ALL_LISTS => Some(BoardList {
+                id,
+                name: "All Lists".into(),
+                ..Default::default()
+            }),
             Some(id) => Some(cache.lists.iter().find(|l| l.id == id).cloned().unwrap_or(
                 BoardList {
                     name: id.clone(),
                     id,
+                    ..Default::default()
                 },
             )),
             None => cache.lists.first().cloned(),
         };
         let key = list.as_ref().map(|l| l.id.clone()).unwrap_or_default();
-        let mut tasks: Vec<BoardTask> = cache
-            .tasks
-            .get(&key)
-            .map(|items| {
-                items
-                    .iter()
-                    .map(|i| BoardTask {
+        let all = key == ALL_LISTS;
+        let keys: Vec<String> = if all {
+            let mut keys: Vec<String> = cache.lists.iter().map(|l| l.id.clone()).collect();
+            if keys.is_empty() {
+                keys = cache.tasks.keys().cloned().collect();
+            }
+            keys
+        } else {
+            vec![key.clone()]
+        };
+        let mut tasks: Vec<BoardTask> = keys
+            .iter()
+            .flat_map(|k| {
+                cache
+                    .tasks
+                    .get(k)
+                    .into_iter()
+                    .flatten()
+                    .map(move |i| BoardTask {
                         id: i.id.clone(),
                         name: i.name.clone(),
                         done: i.done,
                         column: i.column.clone(),
+                        list_id: k.clone(),
                         pending: false,
                     })
-                    .collect()
             })
-            .unwrap_or_default();
+            .collect();
         // What's waiting to reach Blitzit, shown as it will be.
-        for op in store.queue.iter().filter(|op| op.list_key() == key) {
+        for op in store.queue.iter().filter(|op| all || op.list_key() == key) {
             let real = cache.made.get(&op.task_id).cloned();
             let target = |t: &BoardTask| t.id == op.task_id || real.as_ref() == Some(&t.id);
             match op.kind {
@@ -293,6 +322,7 @@ fn board(app: &AppHandle, list_id: Option<String>, problem: Option<String>) -> B
                     name: op.title.clone(),
                     done: op.done,
                     column: op.column.clone().unwrap_or_default(),
+                    list_id: op.list_key(),
                     pending: true,
                 }),
                 OpKind::Complete => {
@@ -310,9 +340,26 @@ fn board(app: &AppHandle, list_id: Option<String>, problem: Option<String>) -> B
             }
         }
         let caps = cache.caps;
+        // Each list's open tasks, waiting new ones included.
+        let lists = cache
+            .lists
+            .iter()
+            .map(|l| BoardList {
+                open: cache
+                    .tasks
+                    .get(&l.id)
+                    .map_or(0, |t| t.iter().filter(|i| !i.done).count())
+                    + store
+                        .queue
+                        .iter()
+                        .filter(|op| op.kind == OpKind::Add && !op.done && op.list_key() == l.id)
+                        .count(),
+                ..l.clone()
+            })
+            .collect();
         Board {
             connected,
-            lists: cache.lists.clone(),
+            lists,
             list,
             tasks,
             columns: cache.columns.clone(),
@@ -379,6 +426,8 @@ fn refresh(
                     .map(|i| BoardList {
                         id: i.id,
                         name: i.name,
+                        color: i.color,
+                        open: 0,
                     })
                     .collect::<Vec<_>>(),
             )
@@ -388,7 +437,10 @@ fn refresh(
         let all = lists.clone().unwrap_or_else(|| known_lists.clone());
         let chosen = list_id
             .clone()
-            .filter(|id| !id.is_empty() && (all.is_empty() || all.iter().any(|l| &l.id == id)))
+            .filter(|id| {
+                !id.is_empty()
+                    && (id == ALL_LISTS || all.is_empty() || all.iter().any(|l| &l.id == id))
+            })
             .or_else(|| all.first().map(|l| l.id.clone()));
         let list = chosen.as_ref().map(|id| ListRef {
             id: id.clone(),
@@ -398,11 +450,24 @@ fn refresh(
                 .map(|l| l.name.clone())
                 .unwrap_or_else(|| id.clone()),
         });
-        let tasks = if caps.tasks {
-            Some(read_tasks(app, client, token, list.as_ref())?)
-        } else {
-            None
-        };
+        // By list: "All Lists" reads each of them.
+        let mut tasks: Vec<(String, Vec<Item>)> = Vec::new();
+        if caps.tasks {
+            if chosen.as_deref() == Some(ALL_LISTS) {
+                for l in &all {
+                    let one = ListRef {
+                        id: l.id.clone(),
+                        name: l.name.clone(),
+                    };
+                    tasks.push((l.id.clone(), read_tasks(app, client, token, Some(&one))?));
+                }
+            } else {
+                tasks.push((
+                    chosen.clone().unwrap_or_default(),
+                    read_tasks(app, client, token, list.as_ref())?,
+                ));
+            }
+        }
         Ok((caps, columns, lists, chosen, tasks))
     });
     match result {
@@ -415,10 +480,8 @@ fn refresh(
                 if let Some(lists) = lists {
                     cache.lists = lists;
                 }
-                if let Some(tasks) = tasks {
-                    cache
-                        .tasks
-                        .insert(chosen.clone().unwrap_or_default(), tasks);
+                for (key, items) in tasks {
+                    cache.tasks.insert(key, items);
                 }
                 // Lists that are gone take their tasks with them.
                 let ids: Vec<String> = cache.lists.iter().map(|l| l.id.clone()).collect();
@@ -510,6 +573,19 @@ pub fn blitzit_add_task(
         return Err("Blitzit can't add tasks from here".into());
     }
     let column = column.filter(|c| !c.is_empty());
+    // "All Lists" isn't a list of its own: a task added there goes in the
+    // first list, as in Blitzit.
+    let (list_id, list_name) = if list_id.as_deref() == Some(ALL_LISTS) {
+        with_store(&app, |s| {
+            s.cache
+                .lists
+                .first()
+                .map(|l| (Some(l.id.clone()), Some(l.name.clone())))
+                .unwrap_or((None, None))
+        })
+    } else {
+        (list_id.filter(|l| !l.is_empty()), list_name)
+    };
     let op = Op {
         id: new_local_id(),
         kind: OpKind::Add,
@@ -517,7 +593,7 @@ pub fn blitzit_add_task(
         task_id: String::new(),
         column: column.clone(),
         done: false,
-        list_id: list_id.filter(|l| !l.is_empty()),
+        list_id: list_id.clone(),
         list_name,
         tries: 0,
         at: crate::utils::get_now_ms(),
@@ -527,6 +603,7 @@ pub fn blitzit_add_task(
         name: title,
         done: false,
         column: column.unwrap_or_default(),
+        list_id: list_id.unwrap_or_default(),
         pending: true,
     };
     queue(&app, op);
@@ -751,6 +828,7 @@ fn apply(cache: &mut Cache, op: &Op, made: Option<String>) {
                     done: op.done,
                     column: op.column.clone().unwrap_or_default(),
                     list: op.list_name.clone().unwrap_or_default(),
+                    color: String::new(),
                 });
             }
             if let Some(real) = made {

@@ -670,6 +670,9 @@ pub struct Item {
     pub column: String,
     /// The list it belongs to, when the answer says.
     pub list: String,
+    /// Its colour, when the answer says (a list's, in Blitzit).
+    #[serde(default)]
+    pub color: String,
 }
 
 const ID_KEYS: &[&str] = &[
@@ -742,12 +745,16 @@ fn as_item(object: &Map<String, Value>, parent_key: &str) -> Option<Item> {
         &["list_name", "listName", "list", "list_id", "listId"],
     )
     .unwrap_or_default();
+    let color = string_field(object, &["color", "colour", "hex", "color_hex", "colorHex"])
+        .filter(|c| c.len() <= 32)
+        .unwrap_or_default();
     Some(Item {
         id,
         name,
         done,
         column,
         list,
+        color,
     })
 }
 

@@ -15,6 +15,18 @@ import {
 	Rocket,
 	Zap
 } from "lucide-react";
+import { BlitzitBoard } from "./BlitzitBoard";
+import {
+	columnFor,
+	columnsOf,
+	inColumn,
+	squash,
+	syncedText,
+	type Board,
+	type Column,
+	type List,
+	type Task
+} from "./blitzitModel";
 import "./BlitzitPanel.css";
 
 /**
@@ -52,48 +64,11 @@ export interface BlitzitStatus {
 	app_found: boolean;
 }
 
-interface List {
-	id: string;
-	name: string;
-}
-
-interface Task {
-	id: string;
-	name: string;
-	done: boolean;
-	column: string;
-	/** Not in Blitzit yet. */
-	pending: boolean;
-}
-
-interface Board {
-	connected: boolean;
-	lists: List[];
-	list: List | null;
-	tasks: Task[];
-	columns: string[];
-	can_add: boolean;
-	can_complete: boolean;
-	can_move: boolean;
-	offline: boolean;
-	problem: string | null;
-	pending: number;
-	synced_at: number | null;
-}
-
-interface Column {
-	/** What Blitzit calls it ("THIS_WEEK"); "" for tasks with no column. */
-	key: string;
-	label: string;
-	done: boolean;
-}
-
 export type BlitzitView = "list" | "board";
 
 const LIST_KEY = "bloom-blitzit-list";
 const COLUMN_KEY = "bloom-blitzit-column";
 const VIEW_KEY = "bloom-blitzit-view";
-const DONE_KEY = "__done";
 const POLL_MS = 15_000;
 const VISIBLE_TASKS = 5;
 const TASK_ROW = 28;
@@ -101,61 +76,6 @@ const PICKER_ROWS = 7;
 /** The board's share of the screen (an open note is 68% × 63%). */
 const BOARD_WIDTH_SHARE = 0.58;
 const BOARD_HEIGHT_SHARE = 0.55;
-
-function squash(text: string) {
-	return text.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-/** "THIS_WEEK" → "This week". */
-function pretty(name: string) {
-	const words = name.replace(/[_-]+/g, " ").trim();
-	if (!words) return name;
-	const lower = words === words.toUpperCase() ? words.toLowerCase() : words;
-	return lower.charAt(0).toUpperCase() + lower.slice(1);
-}
-
-/** Blitzit's own order: Backlog, This week, Today, then anything else. */
-function rank(key: string) {
-	const k = squash(key);
-	if (k.includes("backlog") || k.includes("someday") || k.includes("later")) return 0;
-	if (k.includes("week")) return 1;
-	if (k.includes("today")) return 2;
-	return 1.5;
-}
-
-function isDoneName(key: string) {
-	return ["done", "completed", "complete", "finished"].includes(squash(key));
-}
-
-/** The list's columns: the ones Blitzit names, the ones its tasks are in, and Done. */
-function columnsOf(board: Board | null): Column[] {
-	if (!board) return [];
-	const found: Column[] = [];
-	const add = (key: string) => {
-		if (isDoneName(key) || found.some((c) => squash(c.key) === squash(key))) return;
-		found.push({ key, label: pretty(key), done: false });
-	};
-	board.columns.forEach(add);
-	board.tasks.filter((t) => !t.done && t.column).forEach((t) => add(t.column));
-	found.sort((a, b) => rank(a.key) - rank(b.key));
-	// Tasks in no column Blitzit names (or no columns at all) still get one.
-	if (!found.length || board.tasks.some((t) => !t.done && !columnFor(found, t.column))) {
-		found.push({ key: "", label: found.length ? "No column" : "Tasks", done: false });
-	}
-	found.push({ key: DONE_KEY, label: "Done", done: true });
-	return found;
-}
-
-function columnFor(columns: Column[], name: string) {
-	if (!name) return columns.find((c) => c.key === "" && !c.done);
-	return columns.find((c) => !c.done && squash(c.key) === squash(name));
-}
-
-function inColumn(task: Task, column: Column, columns: Column[]) {
-	if (column.done) return task.done;
-	if (task.done) return false;
-	return columnFor(columns, task.column) === column;
-}
 
 /** The notch's size with the board open, in the notch's own units. */
 export function blitzitBoardSize(scale: number) {
@@ -209,34 +129,6 @@ function saveStored(key: string, value: unknown) {
 	invoke("save_setting", { key, value: text }).catch(() => {});
 }
 
-function syncedText(board: Board | null) {
-	if (!board) return "";
-	if (board.offline) {
-		return board.pending > 0
-			? `Offline · ${board.pending} change${board.pending === 1 ? "" : "s"} will sync when you're back online`
-			: "Offline · showing your tasks as last synced";
-	}
-	if (board.pending > 0) return `Syncing ${board.pending} change${board.pending === 1 ? "" : "s"}…`;
-	if (!board.synced_at) return "Not synced yet";
-	const time = new Date(board.synced_at).toLocaleTimeString([], {
-		hour: "2-digit",
-		minute: "2-digit",
-		hour12: false
-	});
-	return `Synced with Blitzit at ${time}`;
-}
-
-interface DragState {
-	task: Task;
-	/** Where the card was picked up, in the board's own units. */
-	x: number;
-	y: number;
-	width: number;
-	grabX: number;
-	grabY: number;
-	over: string | null;
-}
-
 export function BlitzitPanel({
 	onPinChange,
 	onHeightChange,
@@ -258,18 +150,21 @@ export function BlitzitPanel({
 		readStored<BlitzitView>(VIEW_KEY, "list") === "board" ? "board" : "list"
 	);
 	const [draft, setDraft] = useState("");
-	/** The board column whose add row is open. */
-	const [addingIn, setAddingIn] = useState<string | null>(null);
 	const [picker, setPicker] = useState(false);
 	const [syncing, setSyncing] = useState(false);
 	const [busy, setBusy] = useState<string | null>(null);
 	const [message, setMessage] = useState<string | null>(null);
 	/** Ticked off just now: shown struck through for a moment. */
 	const [justDone, setJustDone] = useState<string[]>([]);
-	const [drag, setDrag] = useState<DragState | null>(null);
-	const dragRef = useRef<DragState | null>(null);
-	const boardRef = useRef<HTMLDivElement | null>(null);
-	const pressRef = useRef<{ task: Task; x: number; y: number; card: HTMLElement } | null>(null);
+	/** Something is being dragged or typed: the page isn't read again meanwhile. */
+	const holdRef = useRef(false);
+	const hold = useCallback(
+		(pinned: boolean) => {
+			holdRef.current = pinned;
+			onPinChange(pinned);
+		},
+		[onPinChange]
+	);
 	const freshInFlight = useRef(false);
 	/** Asked for again while a read was under way (another list was picked). */
 	const freshAgain = useRef(false);
@@ -278,7 +173,6 @@ export function BlitzitPanel({
 	const setView = (next: BlitzitView) => {
 		setViewState(next);
 		saveStored(VIEW_KEY, next);
-		setAddingIn(null);
 		setPicker(false);
 	};
 
@@ -336,7 +230,7 @@ export function BlitzitPanel({
 	useEffect(() => {
 		void loadSaved().then(() => loadFresh(true));
 		const timer = window.setInterval(() => {
-			if (document.visibilityState === "hidden" || dragRef.current) return;
+			if (document.visibilityState === "hidden" || holdRef.current) return;
 			ticks.current += 1;
 			void loadFresh(ticks.current % 4 === 0);
 		}, POLL_MS);
@@ -433,9 +327,15 @@ export function BlitzitPanel({
 		saveStored(COLUMN_KEY, key);
 	};
 
-	const add = async (column: Column | null) => {
-		const title = draft.trim();
-		if (!title || busy === "add") return;
+	/** The list a task is in (what a change to it is sent with). */
+	const listOf = (task: Task) => {
+		const id = task.list_id || list?.id || null;
+		return { listId: id, listName: board?.lists.find((l) => l.id === id)?.name ?? list?.name ?? null };
+	};
+
+	/** Adds a task; true once it's in (shown at once, synced when it can be). */
+	const addTask = async (title: string, column: Column | null) => {
+		if (!title.trim() || busy === "add") return false;
 		setBusy("add");
 		try {
 			const made = await invoke<Task>("blitzit_add_task", {
@@ -444,14 +344,19 @@ export function BlitzitPanel({
 				listName: list?.name ?? null,
 				column: column && !column.done && column.key ? column.key : null
 			});
-			setDraft("");
 			setBoard((prev) => (prev ? { ...prev, tasks: [...prev.tasks, made], pending: prev.pending + 1 } : prev));
 			void loadSaved();
+			return true;
 		} catch (e) {
 			setMessage(String(e));
+			return false;
 		} finally {
 			setBusy(null);
 		}
+	};
+
+	const add = async (column: Column | null) => {
+		if (await addTask(draft.trim(), column)) setDraft("");
 	};
 
 	const complete = async (task: Task) => {
@@ -461,11 +366,7 @@ export function BlitzitPanel({
 			prev ? { ...prev, tasks: prev.tasks.map((t) => (t.id === task.id ? { ...t, done: true } : t)) } : prev
 		);
 		try {
-			await invoke("blitzit_complete_task", {
-				taskId: task.id,
-				listId: list?.id ?? null,
-				listName: list?.name ?? null
-			});
+			await invoke("blitzit_complete_task", { taskId: task.id, ...listOf(task) });
 		} catch (e) {
 			setMessage(String(e));
 		}
@@ -483,12 +384,7 @@ export function BlitzitPanel({
 				: prev
 		);
 		try {
-			await invoke("blitzit_move_task", {
-				taskId: task.id,
-				listId: list?.id ?? null,
-				listName: list?.name ?? null,
-				column: column.key
-			});
+			await invoke("blitzit_move_task", { taskId: task.id, ...listOf(task), column: column.key });
 		} catch (e) {
 			setMessage(String(e));
 		}
@@ -505,76 +401,6 @@ export function BlitzitPanel({
 		} finally {
 			setBusy(null);
 		}
-	};
-
-	// ---------------------------------------------------------------- dragging on the board
-
-	/** The board's own units per screen pixel (the notch is zoomed). */
-	const boardScale = () => {
-		const el = boardRef.current;
-		if (!el || !el.offsetWidth) return 1;
-		return el.getBoundingClientRect().width / el.offsetWidth;
-	};
-
-	const columnAt = (x: number, y: number) => {
-		const el = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-column]");
-		return el?.dataset.column ?? null;
-	};
-
-	const onCardDown = (e: React.PointerEvent<HTMLElement>, task: Task) => {
-		if (e.button !== 0 || task.done || !board?.can_move) return;
-		if ((e.target as HTMLElement).closest("button")) return;
-		pressRef.current = { task, x: e.clientX, y: e.clientY, card: e.currentTarget };
-		e.currentTarget.setPointerCapture(e.pointerId);
-	};
-
-	const onCardMove = (e: React.PointerEvent<HTMLElement>) => {
-		const press = pressRef.current;
-		if (!press) return;
-		const k = boardScale();
-		const el = boardRef.current;
-		const root = el?.getBoundingClientRect();
-		if (!el || !root) return;
-		// Positions inside the board, which may be scrolled sideways.
-		const at = (clientX: number, clientY: number) => ({
-			x: (clientX - root.left) / k + el.scrollLeft,
-			y: (clientY - root.top) / k + el.scrollTop
-		});
-		if (!dragRef.current) {
-			if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < 5) return;
-			const card = press.card.getBoundingClientRect();
-			const next: DragState = {
-				task: press.task,
-				...at(e.clientX, e.clientY),
-				width: card.width / k,
-				grabX: (press.x - card.left) / k,
-				grabY: (press.y - card.top) / k,
-				over: columnAt(e.clientX, e.clientY)
-			};
-			dragRef.current = next;
-			setDrag(next);
-			onPinChange(true);
-			return;
-		}
-		const next = {
-			...dragRef.current,
-			...at(e.clientX, e.clientY),
-			over: columnAt(e.clientX, e.clientY)
-		};
-		dragRef.current = next;
-		setDrag(next);
-	};
-
-	const endDrag = (drop: boolean) => {
-		const current = dragRef.current;
-		pressRef.current = null;
-		dragRef.current = null;
-		setDrag(null);
-		if (!current) return;
-		onPinChange(false);
-		if (!drop || current.over === null) return;
-		const target = columns.find((c) => (c.done ? DONE_KEY : c.key) === current.over);
-		if (target && !inColumn(current.task, target, columns)) void move(current.task, target);
 	};
 
 	// ---------------------------------------------------------------- parts
@@ -757,81 +583,23 @@ export function BlitzitPanel({
 
 	if (view === "board") {
 		return (
-			<div
-				className={`blitzit-panel is-board${drag ? " is-dragging" : ""}`}
-				onClick={(e) => e.stopPropagation()}
-			>
-				{top}
-				{problemRow}
-				<div className="blitzit-board" ref={boardRef}>
-					{columns.map((column) => {
-						const id = column.done ? DONE_KEY : column.key;
-						const tasks = (board?.tasks ?? []).filter((t) => inColumn(t, column, columns));
-						return (
-							<div
-								key={id || "none"}
-								data-column={id}
-								className={`blitzit-column${drag?.over === id ? " is-over" : ""}${column.done ? " is-done" : ""}`}
-							>
-								<div className="blitzit-column-head">
-									<span>{column.label}</span>
-									<span className="blitzit-count">{tasks.length}</span>
-								</div>
-								<div className="blitzit-cards">
-									{tasks.map((task) => (
-										<div
-											key={task.id}
-											className={`blitzit-card${task.done ? " is-done" : ""}${drag?.task.id === task.id ? " is-lifted" : ""}${board?.can_move && !task.done ? " can-drag" : ""}`}
-											onPointerDown={(e) => onCardDown(e, task)}
-											onPointerMove={onCardMove}
-											onPointerUp={() => endDrag(true)}
-											onPointerCancel={() => endDrag(false)}
-										>
-											{checkButton(task)}
-											<span className="blitzit-card-name">{task.name}</span>
-											{pendingMark(task)}
-										</div>
-									))}
-									{tasks.length === 0 && !column.done && (
-										<div className="blitzit-empty">No tasks</div>
-									)}
-								</div>
-								{!column.done &&
-									board?.can_add &&
-									(addingIn === id ? (
-										addRow(column, true, () => setAddingIn(null))
-									) : (
-										<button
-											type="button"
-											className="blitzit-add-button"
-											onClick={() => {
-												setDraft("");
-												setAddingIn(id);
-											}}
-										>
-											<Plus /> Add task
-										</button>
-									))}
-							</div>
-						);
-					})}
-					{drag && (
-						<div
-							className="blitzit-card blitzit-ghost"
-							style={{
-								left: drag.x - drag.grabX,
-								top: drag.y - drag.grabY,
-								width: drag.width
-							}}
-						>
-							<span className="blitzit-check" />
-							<span className="blitzit-card-name">{drag.task.name}</span>
-						</div>
-					)}
-				</div>
-				{statusRow}
-				{pickerMenu}
-			</div>
+			<BlitzitBoard
+				board={board}
+				list={list}
+				syncing={syncing}
+				busy={busy}
+				message={message}
+				onChooseList={chooseList}
+				onAdd={addTask}
+				onComplete={(task) => void complete(task)}
+				onMove={(task, column) => void move(task, column)}
+				onSync={() => void loadFresh(true)}
+				onList={() => setView("list")}
+				onOpen={() => void invoke("blitzit_open").catch((e) => setMessage(String(e)))}
+				onStart={() => void start()}
+				onPinChange={hold}
+				onOpenSettings={onOpenSettings}
+			/>
 		);
 	}
 

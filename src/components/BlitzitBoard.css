@@ -1,0 +1,615 @@
+/* Blitzit's board in the notch, in Blitzit's own look (its dark theme):
+   a list sidebar, the list's name large at the top, rounded column panels
+   with "Add task" pills and a done bar, Today outlined in Blitzit's
+   purple-to-teal, and Blitz Now at the bottom. */
+.bz {
+	--bz-bg: #121212;
+	--bz-panel: #1a1a1a;
+	--bz-panel-border: #262626;
+	--bz-raised: #262626;
+	--bz-raised-hover: #303030;
+	--bz-text: #f4f4f5;
+	--bz-muted: #8e8e93;
+	--bz-track: #3a3a3c;
+	--bz-accent: #a78bfa;
+	position: absolute;
+	top: 36px;
+	left: 0;
+	width: 100%;
+	height: calc(100% - 36px);
+	box-sizing: border-box;
+	z-index: 2;
+	display: flex;
+	gap: 10px;
+	padding: 6px 12px 12px;
+	color: var(--bz-text);
+	font-size: 13px;
+	overflow: hidden;
+}
+
+.bz.is-dragging,
+.bz.is-dragging * {
+	cursor: grabbing !important;
+	user-select: none;
+}
+
+.bz button {
+	font-family: inherit;
+}
+
+.bz-spin {
+	animation: bz-spin 0.9s linear infinite;
+}
+
+@keyframes bz-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+.bz-icon {
+	width: 26px;
+	height: 26px;
+	flex: none;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: none;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--bz-muted);
+	cursor: pointer;
+}
+
+.bz-icon:hover {
+	background: var(--bz-raised);
+	color: var(--bz-text);
+}
+
+.bz-icon svg {
+	width: 15px;
+	height: 15px;
+}
+
+/* ---------------------------------------------------------------- sidebar */
+
+.bz-side {
+	width: 176px;
+	flex: none;
+	display: flex;
+	flex-direction: column;
+	padding: 12px 8px 8px;
+	box-sizing: border-box;
+	border-radius: 16px;
+	background: var(--bz-panel);
+	border: 1px solid var(--bz-panel-border);
+	min-height: 0;
+}
+
+.bz-side-label {
+	padding: 0 8px 8px;
+	font-size: 11px;
+	font-weight: 500;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--bz-muted);
+}
+
+.bz-side-lists {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: #333 transparent;
+}
+
+.bz-side-list {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	min-height: 38px;
+	padding: 0 10px 0 8px;
+	border: none;
+	border-radius: 10px;
+	background: transparent;
+	color: var(--bz-text);
+	font-size: 13.5px;
+	text-align: left;
+	cursor: pointer;
+}
+
+.bz-side-list:hover {
+	background: #222;
+}
+
+.bz-side-list.is-on {
+	background: #2a2a2a;
+}
+
+.bz-side-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.bz-side-count {
+	font-size: 12px;
+	color: var(--bz-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.bz-avatar {
+	width: 20px;
+	height: 20px;
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 6px;
+	color: rgba(255, 255, 255, 0.95);
+	font-size: 10.5px;
+	font-weight: 700;
+}
+
+.bz-avatar.is-big {
+	width: 30px;
+	height: 30px;
+	border-radius: 9px;
+	font-size: 13px;
+}
+
+.bz-side-sync {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 8px;
+	padding: 8px;
+	border: none;
+	border-radius: 10px;
+	background: transparent;
+	color: var(--bz-muted);
+	font-size: 11px;
+	line-height: 1.3;
+	text-align: left;
+	cursor: pointer;
+}
+
+.bz-side-sync:hover:not(:disabled) {
+	background: #222;
+	color: var(--bz-text);
+}
+
+.bz-side-sync.is-offline {
+	color: #ff9f0a;
+}
+
+.bz-side-sync svg {
+	width: 14px;
+	height: 14px;
+	flex: none;
+}
+
+/* ---------------------------------------------------------------- main */
+
+.bz-main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 14px 14px 12px;
+	box-sizing: border-box;
+	border-radius: 16px;
+	background: var(--bz-bg);
+	border: 1px solid var(--bz-panel-border);
+	position: relative;
+}
+
+.bz-head {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex: none;
+	height: 34px;
+}
+
+.bz-title {
+	margin: 0;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 24px;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+
+.bz-spacer {
+	flex: 1;
+}
+
+.bz-views {
+	display: flex;
+	flex: none;
+	padding: 4px;
+	gap: 2px;
+	border-radius: 12px;
+	background: var(--bz-panel);
+	border: 1px solid var(--bz-panel-border);
+}
+
+.bz-views button {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 28px;
+	padding: 0 12px;
+	border: none;
+	border-radius: 9px;
+	background: transparent;
+	color: var(--bz-muted);
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.bz-views button svg {
+	width: 14px;
+	height: 14px;
+}
+
+.bz-views button:hover {
+	color: var(--bz-text);
+}
+
+.bz-views button.is-on {
+	background: #2c2c2e;
+	color: var(--bz-text);
+	font-weight: 600;
+	cursor: default;
+}
+
+.bz-problem {
+	flex: none;
+	padding: 8px 12px;
+	border: none;
+	border-radius: 10px;
+	background: #2a2210;
+	color: #ffcf70;
+	font-size: 12px;
+	text-align: left;
+	cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- columns */
+
+.bz-columns {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	gap: 14px;
+	overflow-x: auto;
+	overflow-y: hidden;
+	scrollbar-width: thin;
+	scrollbar-color: #333 transparent;
+}
+
+.bz-col {
+	flex: 1 1 0;
+	min-width: 200px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 14px 14px 10px;
+	box-sizing: border-box;
+	border-radius: 16px;
+	background: var(--bz-panel);
+	border: 1px solid var(--bz-panel-border);
+	transition:
+		border-color 0.15s ease,
+		background 0.15s ease;
+}
+
+/* Today: Blitzit's purple-to-teal outline. */
+.bz-col.is-today {
+	border: 1px solid transparent;
+	background:
+		linear-gradient(var(--bz-panel), var(--bz-panel)) padding-box,
+		linear-gradient(160deg, #a855f7, #6366f1 45%, #2dd4bf) border-box;
+}
+
+.bz-col.is-over {
+	border-color: var(--bz-accent);
+	background: #1f1d26;
+}
+
+.bz-col.is-today.is-over {
+	background:
+		linear-gradient(#1f1d26, #1f1d26) padding-box,
+		linear-gradient(160deg, #a855f7, #6366f1 45%, #2dd4bf) border-box;
+}
+
+.bz-col.is-folded {
+	flex: 0 0 56px;
+	min-width: 56px;
+	padding: 12px 6px;
+	align-items: center;
+}
+
+.bz-col-head {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	flex: none;
+}
+
+.bz-col-head h3 {
+	flex: 1;
+	min-width: 0;
+	margin: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 16px;
+	font-weight: 700;
+}
+
+.bz-col.is-folded .bz-col-head {
+	flex-direction: column-reverse;
+	gap: 10px;
+}
+
+.bz-col.is-folded .bz-col-head h3 {
+	writing-mode: vertical-rl;
+	transform: rotate(180deg);
+	overflow: visible;
+}
+
+.bz-progress {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: none;
+	margin-top: -4px;
+	font-size: 11.5px;
+	color: var(--bz-muted);
+	white-space: nowrap;
+}
+
+.bz-progress-track {
+	flex: 1;
+	height: 6px;
+	border-radius: 999px;
+	background: var(--bz-track);
+	overflow: hidden;
+}
+
+.bz-progress-fill {
+	height: 100%;
+	border-radius: 999px;
+	background: linear-gradient(90deg, #a855f7, #2dd4bf);
+	transition: width 0.3s ease;
+}
+
+.bz-add {
+	display: inline-flex;
+	align-items: center;
+	align-self: flex-start;
+	gap: 8px;
+	flex: none;
+	height: 36px;
+	padding: 0 16px 0 14px;
+	border: none;
+	border-radius: 999px;
+	background: var(--bz-raised);
+	color: var(--bz-text);
+	font-size: 13.5px;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.bz-add:hover {
+	background: var(--bz-raised-hover);
+}
+
+.bz-add svg {
+	width: 15px;
+	height: 15px;
+}
+
+.bz-add-input {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: none;
+	height: 38px;
+	padding: 0 12px;
+	border-radius: 12px;
+	background: var(--bz-raised);
+	border: 1px solid #3a3a3c;
+}
+
+.bz-add-input input {
+	flex: 1;
+	min-width: 0;
+	border: none;
+	outline: none;
+	background: transparent;
+	color: var(--bz-text);
+	font-family: inherit;
+	font-size: 13px;
+}
+
+.bz-add-input input::placeholder {
+	color: var(--bz-muted);
+}
+
+.bz-add-input svg {
+	width: 14px;
+	height: 14px;
+	color: var(--bz-muted);
+}
+
+.bz-cards {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: #333 transparent;
+}
+
+.bz-card {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	flex: none;
+	padding: 12px;
+	box-sizing: border-box;
+	border-radius: 12px;
+	background: var(--bz-raised);
+	border: 1px solid #2f2f31;
+	font-size: 13px;
+	line-height: 18px;
+	/* A finger moving up or down scrolls the column; sideways drags the card. */
+	touch-action: pan-y;
+}
+
+.bz-card:hover {
+	background: var(--bz-raised-hover);
+}
+
+.bz-card.can-drag {
+	cursor: grab;
+}
+
+.bz-card.is-lifted {
+	opacity: 0.3;
+}
+
+.bz-card.is-done .bz-card-name {
+	color: var(--bz-muted);
+	text-decoration: line-through;
+}
+
+.bz-check {
+	width: 18px;
+	height: 18px;
+	flex: none;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 1.5px solid #6b6b70;
+	border-radius: 50%;
+	background: transparent;
+	color: #fff;
+	cursor: pointer;
+}
+
+.bz-check:hover:not(:disabled) {
+	border-color: var(--bz-accent);
+}
+
+.bz-check:disabled {
+	cursor: default;
+}
+
+.bz-card.is-done .bz-check {
+	border-color: transparent;
+	background: linear-gradient(135deg, #a855f7, #2dd4bf);
+}
+
+.bz-check svg {
+	width: 11px;
+	height: 11px;
+}
+
+.bz-card-name {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+.bz-pending {
+	display: flex;
+	flex: none;
+	color: var(--bz-muted);
+}
+
+.bz-pending svg {
+	width: 13px;
+	height: 13px;
+}
+
+.bz-card-list {
+	display: flex;
+	flex: none;
+}
+
+.bz-card-list .bz-avatar {
+	width: 16px;
+	height: 16px;
+	font-size: 9px;
+	border-radius: 5px;
+}
+
+.bz-ghost {
+	position: absolute;
+	z-index: 30;
+	pointer-events: none;
+	background: #2c2c2e;
+	border-color: var(--bz-accent);
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+	transform: rotate(1.5deg);
+}
+
+/* ---------------------------------------------------------------- bottom */
+
+.bz-foot {
+	display: flex;
+	justify-content: center;
+	flex: none;
+}
+
+.bz-blitz {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 40px;
+	padding: 0 22px;
+	border: 1px solid var(--bz-panel-border);
+	border-radius: 14px;
+	background: var(--bz-panel);
+	color: var(--bz-text);
+	font-size: 14px;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.bz-blitz:hover:not(:disabled) {
+	background: #222;
+}
+
+.bz-blitz:disabled {
+	opacity: 0.7;
+	cursor: default;
+}
+
+.bz-blitz svg {
+	width: 16px;
+	height: 16px;
+}
