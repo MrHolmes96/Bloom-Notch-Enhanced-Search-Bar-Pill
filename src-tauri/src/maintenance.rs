@@ -458,6 +458,16 @@ pub fn run_command(arg: &std::ffi::OsStr, rest: &[std::ffi::OsString]) -> bool {
             let done = crate::touchscreen::register_tasks(rest);
             std::process::exit(if done { 0 } else { 1 });
         }
+        // Run as administrator by Bloom's task: starts Portals.
+        arg if arg == crate::app_tweaks::PORTALS_LAUNCH_ARG => {
+            let done = crate::app_tweaks::launch_portals_as_admin();
+            std::process::exit(if done { 0 } else { 1 });
+        }
+        // Run as administrator once, to set up starting Portals.
+        arg if arg == crate::app_tweaks::PORTALS_SETUP_ARG => {
+            let done = crate::app_tweaks::set_up_portals_start(rest);
+            std::process::exit(if done { 0 } else { 1 });
+        }
         // Run as administrator by one of those tasks: the touchscreen off/on.
         arg if arg == crate::touchscreen::DEVICE_ARG => {
             let done = crate::touchscreen::set_devices(rest);

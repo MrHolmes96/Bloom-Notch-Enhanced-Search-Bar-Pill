@@ -214,6 +214,7 @@ fn main() {
             launch_new_instance,
             update_dock_rect,
             app_tweaks::portals_status,
+            app_tweaks::portals_set_up,
             set_dock_height,
             update_notch_rect,
             set_dock_hovered,
@@ -545,8 +546,10 @@ fn main() {
             window_memory::start(app.handle().clone());
             shell_probe::start();
             app_tweaks::start();
-            app_tweaks::sync_portals_tasks(app.handle());
             integrations::blitzit_sync::start(app.handle().clone());
+            if !autostart {
+                app_tweaks::set_up_portals_if_needed(app.handle());
+            }
             if autostart {
                 app_tweaks::start_portals_after_sign_in(app.handle());
             }

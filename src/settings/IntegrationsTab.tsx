@@ -14,25 +14,48 @@ import type { BlitzitStatus } from "../components/BlitzitPanel";
 interface PortalsStatus {
 	installed: boolean;
 	starts_itself: boolean;
-	/** A scheduled task starting Portals that Bloom couldn't switch off. */
+	/** What went wrong setting it up, when something did. */
 	task_problem: string | null;
+	/** Bloom's task that starts Portals as administrator is set up. */
+	task_ready: boolean;
+	/** Other scheduled tasks that start Portals at sign-in, still on. */
+	other_tasks: string[];
 }
 
 export function IntegrationsTab({ openTab }: { openTab: (tab: string) => void }) {
 	const [blitzit, setBlitzit] = useState<BlitzitStatus | null>(null);
 	const [portals, setPortals] = useState<PortalsStatus | null>(null);
 	const [startPortals, setStartPortals] = useStoredFlag("bloom-start-portals", false);
+	const [settingUp, setSettingUp] = useState(false);
+
+	const loadPortals = () =>
+		void invoke<PortalsStatus>("portals_status")
+			.then(setPortals)
+			.catch(() => {});
 
 	useEffect(() => {
-		const load = () =>
-			void invoke<PortalsStatus>("portals_status")
-				.then(setPortals)
-				.catch(() => {});
-		load();
-		// Switching Portals' scheduled tasks takes a moment: check again.
-		const timer = window.setTimeout(load, 1500);
-		return () => window.clearTimeout(timer);
+		loadPortals();
 	}, [startPortals]);
+
+	/** Makes (or removes) Bloom's task; Windows asks for permission once. */
+	const setUpPortals = async (on: boolean) => {
+		setSettingUp(true);
+		try {
+			await invoke("portals_set_up", { on });
+		} catch {
+			/* shown from the status */
+		} finally {
+			setSettingUp(false);
+			loadPortals();
+		}
+	};
+
+	const toggleStartPortals = () => {
+		const next = !startPortals;
+		setStartPortals(next);
+		if (next && !portals?.task_ready) void setUpPortals(true);
+		if (!next && portals?.task_ready) void setUpPortals(false);
+	};
 
 	useEffect(() => {
 		const load = () =>
@@ -93,21 +116,54 @@ export function IntegrationsTab({ openTab }: { openTab: (tab: string) => void })
 							<div className="setting-info">
 								<span className="setting-label">Start Portals with Bloom</span>
 								<span className="setting-desc">
-									Bloom starts Portals a few seconds after you sign in, so its loading pop-up can
-									be kept out of sight. A scheduled task that starts Portals is switched off
-									meanwhile (and back on if you turn this off)
+									Bloom starts Portals as administrator a few seconds after you sign in, so its
+									loading pop-up can be kept out of sight. Windows asks for permission once, to
+									set this up; your own scheduled task for Portals is switched off meanwhile (and
+									back on if you turn this off)
 								</span>
 							</div>
 							<label className="toggle-switch">
 								<input
 									type="checkbox"
 									checked={startPortals}
-									onChange={() => setStartPortals(!startPortals)}
+									disabled={settingUp}
+									onChange={toggleStartPortals}
 								/>
 								<span className="slider"></span>
 							</label>
 						</div>
 					</div>
+					{startPortals && portals.task_ready && portals.other_tasks.length === 0 && (
+						<div className="setting-group-note">
+							Set up: Bloom starts Portals as administrator after you sign in.
+						</div>
+					)}
+					{startPortals && !portals.task_ready && (
+						<div className="setting-group-note">
+							Not set up yet, so Portals would start without administrator rights.{" "}
+							<button
+								type="button"
+								className="settings-button"
+								disabled={settingUp}
+								onClick={() => void setUpPortals(true)}
+							>
+								{settingUp ? "Waiting for Windows…" : "Set up now"}
+							</button>
+						</div>
+					)}
+					{startPortals && portals.task_ready && portals.other_tasks.length > 0 && (
+						<div className="setting-group-note">
+							Still on in Task Scheduler, starting Portals before Bloom: {portals.other_tasks.join(", ")}.{" "}
+							<button
+								type="button"
+								className="settings-button"
+								disabled={settingUp}
+								onClick={() => void setUpPortals(true)}
+							>
+								Switch off
+							</button>
+						</div>
+					)}
 					{startPortals && portals.task_problem && (
 						<div className="setting-group-note">{portals.task_problem}.</div>
 					)}

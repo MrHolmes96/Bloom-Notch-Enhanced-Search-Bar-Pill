@@ -25,6 +25,8 @@ static MOVE_HOOK: AtomicIsize = AtomicIsize::new(0);
 
 /// Off the screen, where Windows itself parks minimized windows.
 const AWAY: i32 = -32000;
+/// Portals closed its loading pop-up (the launcher below may end).
+static SPLASH_CLOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn log(line: &str) {
     use std::io::Write;
@@ -126,6 +128,7 @@ unsafe extern "system" fn on_event(
         if hwnd.0 as isize == following {
             stop_following();
             log("Portals closed its loading pop-up");
+            SPLASH_CLOSED.store(true, Ordering::Relaxed);
         }
         return;
     }
@@ -269,6 +272,34 @@ fn portals_exe() -> Option<std::path::PathBuf> {
 
 /// Whether Portals starts itself with Windows: its own entry under Windows'
 /// "Run" startup entries, or a shortcut in the Startup folder (switched on).
+/// Whether a startup entry is on: Windows marks the ones switched off (in
+/// Task Manager or Settings > Apps > Startup) under `StartupApproved`, with
+/// an odd first byte.
+fn startup_entry_on(root: windows::Win32::System::Registry::HKEY, kind: &str, name: &str) -> bool {
+    use windows::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_BINARY};
+    let key: Vec<u16> =
+        format!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\{kind}")
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+    let value: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut data = [0u8; 16];
+    let mut size = data.len() as u32;
+    let read = unsafe {
+        RegGetValueW(
+            root,
+            windows::core::PCWSTR(key.as_ptr()),
+            windows::core::PCWSTR(value.as_ptr()),
+            RRF_RT_REG_BINARY,
+            None,
+            Some(data.as_mut_ptr() as *mut _),
+            Some(&mut size),
+        )
+    };
+    // No mark: on.
+    read.is_err() || size == 0 || data[0] & 1 == 0
+}
+
 fn portals_starts_itself() -> bool {
     use windows::Win32::System::Registry::{
         RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
@@ -315,7 +346,13 @@ fn portals_starts_itself() -> bool {
                     .map(|c| u16::from_le_bytes([c[0], c[1]]))
                     .collect();
                 let command = String::from_utf16_lossy(&units).to_lowercase();
-                if command.contains("portals.exe") {
+                // Switched off in Task Manager or Settings > Apps > Startup
+                // (the entry stays, marked off): it doesn't start then.
+                let value_name = String::from_utf16_lossy(&name[..name_len as usize]);
+                if command.contains("portals.exe") && startup_entry_on(root, "Run", &value_name) {
+                    log(&format!(
+                        "Portals' own startup entry \"{value_name}\" is on ({command})"
+                    ));
                     found = true;
                     break;
                 }
@@ -333,11 +370,13 @@ fn portals_starts_itself() -> bool {
         .and_then(|dir| std::fs::read_dir(dir).ok())
         .is_some_and(|entries| {
             entries.flatten().any(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .to_lowercase()
-                    .contains("portals")
+                let name = entry.file_name().to_string_lossy().to_string();
+                name.to_lowercase().contains("portals")
+                    && startup_entry_on(
+                        windows::Win32::System::Registry::HKEY_CURRENT_USER,
+                        "StartupFolder",
+                        &name,
+                    )
             })
         })
 }
@@ -444,8 +483,18 @@ pub fn start_portals_after_sign_in(app: &tauri::AppHandle) {
                 return;
             };
             if portals_starts_itself() {
-                log("Starting Portals: left to Portals, its own Launch on Startup is on");
-                return;
+                // Left to Portals, but made sure of: if it hasn't started in
+                // 20 s, Bloom starts it.
+                log("Starting Portals: its own Launch on Startup is on; Bloom checks it starts");
+                let since = std::time::Instant::now();
+                while since.elapsed() < std::time::Duration::from_secs(20) {
+                    if portals_running() {
+                        log("Portals started by itself");
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                log("Portals didn't start by itself in 20 s: Bloom starts it");
             }
             if portals_running() {
                 log("Starting Portals: it was running already (started by itself, before Bloom)");
@@ -471,18 +520,38 @@ pub fn start_portals_after_sign_in(app: &tauri::AppHandle) {
             if portals_running() {
                 return;
             }
-            let result = std::process::Command::new(&exe)
-                .current_dir(exe.parent().unwrap_or(std::path::Path::new(".")))
-                .spawn();
+            // As administrator, through Bloom's task (as Portals ran before);
+            // without the task (not set up yet), the usual way.
+            let how = match run_portals_task() {
+                Ok(()) => "as administrator (Bloom's task)".to_string(),
+                Err(why) => {
+                    let result = std::process::Command::new(&exe)
+                        .current_dir(exe.parent().unwrap_or(std::path::Path::new(".")))
+                        .spawn();
+                    match result {
+                        Ok(_) => format!("NOT as administrator ({why})"),
+                        Err(e) => format!("couldn't start it at all ({why}; {e})"),
+                    }
+                }
+            };
             log(&format!(
-                "Started Portals {:.1} s after Bloom (its files read in {:.1} s){}",
+                "Starting Portals {:.1} s after Bloom (its files read in {:.1} s): {how}",
                 started.elapsed().as_secs_f64(),
                 warmed.as_secs_f64(),
-                match result {
-                    Ok(_) => String::new(),
-                    Err(e) => format!(": couldn't ({e})"),
-                }
             ));
+            // Only said to have started once it runs.
+            let asked = std::time::Instant::now();
+            while asked.elapsed() < std::time::Duration::from_secs(20) {
+                if portals_running() {
+                    log(&format!(
+                        "Portals is running ({:.1} s after Bloom)",
+                        started.elapsed().as_secs_f64()
+                    ));
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            log("Portals did NOT start within 20 s");
         });
 }
 
@@ -587,97 +656,337 @@ fn save_switched_off(paths: &[String]) {
     }
 }
 
-/// While "Start Portals with Bloom" is on, Bloom starts Portals itself, right
-/// after it's on screen: a scheduled task that starts Portals at sign-in
-/// would start it before Bloom can keep its loading pop-up out of sight, so
-/// it's switched off (not deleted). Turning the option off switches back on
-/// the ones Bloom switched off.
-pub fn sync_portals_tasks(app: &tauri::AppHandle) {
-    let wanted = crate::utils::get_setting_str(app, START_PORTALS_KEY).as_deref() == Some("true");
-    let _ = std::thread::Builder::new()
-        .name("bloom-portals-tasks".into())
-        .spawn(move || unsafe {
-            use windows::core::BSTR;
-            use windows::Win32::Foundation::{VARIANT_FALSE, VARIANT_TRUE};
-            use windows::Win32::System::Com::{
-                CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
-            };
-            use windows::Win32::System::TaskScheduler::{ITaskService, TaskScheduler};
-            use windows::Win32::System::Variant::VARIANT;
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            let Ok(service) =
-                CoCreateInstance::<_, ITaskService>(&TaskScheduler, None, CLSCTX_INPROC_SERVER)
-            else {
-                return;
-            };
-            let none = VARIANT::default();
-            if service.Connect(&none, &none, &none, &none).is_err() {
-                return;
+/// Bloom's task that starts Portals as administrator, without asking: made
+/// once with Windows' permission (one prompt), and run by Bloom after
+/// sign-in. Bloom itself doesn't run as administrator.
+const PORTALS_TASK: &str = "Bloom Start Portals";
+/// `bloom.exe --set-up-portals-start on|off`, run as administrator.
+pub const PORTALS_SETUP_ARG: &str = "--set-up-portals-start";
+/// `bloom.exe --launch-portals`: what Bloom's task runs, as administrator.
+pub const PORTALS_LAUNCH_ARG: &str = "--launch-portals";
+
+/// Run as administrator by Bloom's task: starts Portals (so it runs as
+/// administrator, as it did from your own task) and keeps its loading
+/// pop-up off the screen. Bloom itself can't move that pop-up then: Windows
+/// doesn't let a program move the windows of one with more rights. Ends
+/// once the pop-up is gone (at most half a minute). Exit code 0 when
+/// Portals started.
+pub fn launch_portals_as_admin() -> bool {
+    let Some(exe) = portals_exe() else {
+        log("Launcher: Portals isn't installed where Bloom looks");
+        return false;
+    };
+    start();
+    // The hooks are in place before Portals makes its pop-up.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    let started = std::process::Command::new(&exe)
+        .current_dir(exe.parent().unwrap_or(std::path::Path::new(".")))
+        .spawn();
+    if let Err(e) = started {
+        log(&format!(
+            "Launcher: couldn't start Portals as administrator: {e}"
+        ));
+        return false;
+    }
+    log("Launcher: started Portals as administrator");
+    let since = std::time::Instant::now();
+    while since.elapsed() < std::time::Duration::from_secs(30)
+        && !SPLASH_CLOSED.load(Ordering::Relaxed)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    true
+}
+
+unsafe fn task_service() -> Result<windows::Win32::System::TaskScheduler::ITaskService, String> {
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    };
+    use windows::Win32::System::TaskScheduler::{ITaskService, TaskScheduler};
+    use windows::Win32::System::Variant::VARIANT;
+    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    let service: ITaskService = CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER)
+        .map_err(|e| format!("Task Scheduler: {e}"))?;
+    let none = VARIANT::default();
+    service
+        .Connect(&none, &none, &none, &none)
+        .map_err(|e| format!("Task Scheduler: {e}"))?;
+    Ok(service)
+}
+
+/// Whether Bloom's task is there (set up).
+fn portals_task_ready() -> bool {
+    unsafe {
+        task_service()
+            .and_then(|service| {
+                service
+                    .GetFolder(&windows::core::BSTR::from("\\"))
+                    .and_then(|root| root.GetTask(&windows::core::BSTR::from(PORTALS_TASK)))
+                    .map_err(|e| e.to_string())
+            })
+            .is_ok()
+    }
+}
+
+/// Starts Portals through Bloom's task (as administrator, no prompt).
+fn run_portals_task() -> Result<(), String> {
+    use windows::Win32::System::Variant::VARIANT;
+    unsafe {
+        let service = task_service()?;
+        let task = service
+            .GetFolder(&windows::core::BSTR::from("\\"))
+            .and_then(|root| root.GetTask(&windows::core::BSTR::from(PORTALS_TASK)))
+            .map_err(|_| "Bloom's Portals task isn't set up".to_string())?;
+        task.Run(&VARIANT::default())
+            .map(|_| ())
+            .map_err(|e| format!("Bloom's Portals task didn't run: {e}"))
+    }
+}
+
+/// As administrator: makes Bloom's task (on), or removes it (off). With it
+/// on, the other scheduled tasks that start Portals at sign-in are switched
+/// off (they'd start it before Bloom can keep its loading pop-up out of
+/// sight), and switched back on with it off. Exit code 0 when done.
+pub fn set_up_portals_start(rest: &[std::ffi::OsString]) -> bool {
+    let on = rest
+        .first()
+        .map(|a| a.to_string_lossy().to_string())
+        .as_deref()
+        != Some("off");
+    match unsafe { set_up(on) } {
+        Ok(()) => {
+            log(&format!(
+                "Set up as administrator: Bloom's Portals task {}",
+                if on { "made" } else { "removed" }
+            ));
+            true
+        }
+        Err(e) => {
+            log(&format!("Setting up Bloom's Portals task failed: {e}"));
+            false
+        }
+    }
+}
+
+unsafe fn set_up(on: bool) -> Result<(), String> {
+    use windows::core::{Interface, BSTR};
+    use windows::Win32::Foundation::{VARIANT_FALSE, VARIANT_TRUE};
+    use windows::Win32::System::TaskScheduler::{
+        IExecAction, TASK_ACTION_EXEC, TASK_CREATE_OR_UPDATE, TASK_INSTANCES_IGNORE_NEW,
+        TASK_LOGON_INTERACTIVE_TOKEN, TASK_RUNLEVEL_HIGHEST,
+    };
+    use windows::Win32::System::Variant::VARIANT;
+    let service = task_service()?;
+    let root = service
+        .GetFolder(&BSTR::from("\\"))
+        .map_err(|e| format!("root folder: {e}"))?;
+    let none = VARIANT::default();
+    let mut off = switched_off();
+    if on {
+        let exe = portals_exe().ok_or("Portals isn't installed where Bloom looks")?;
+        let sid = crate::ghelper::user_sid().ok_or("the Windows account couldn't be read")?;
+        let task = service.NewTask(0).map_err(|e| format!("new task: {e}"))?;
+        task.RegistrationInfo()
+            .and_then(|info| {
+                info.SetDescription(&BSTR::from(
+                    "Bloom: starts Portals as administrator once Bloom is on screen after sign-in (Settings > Integrations > Portals)",
+                ))
+            })
+            .map_err(|e| format!("description: {e}"))?;
+        let principal = task.Principal().map_err(|e| format!("principal: {e}"))?;
+        principal
+            .SetUserId(&BSTR::from(sid.as_str()))
+            .and_then(|_| principal.SetLogonType(TASK_LOGON_INTERACTIVE_TOKEN))
+            .and_then(|_| principal.SetRunLevel(TASK_RUNLEVEL_HIGHEST))
+            .map_err(|e| format!("account: {e}"))?;
+        let settings = task.Settings().map_err(|e| format!("settings: {e}"))?;
+        settings
+            .SetDisallowStartIfOnBatteries(VARIANT_FALSE)
+            .and_then(|_| settings.SetStopIfGoingOnBatteries(VARIANT_FALSE))
+            .and_then(|_| settings.SetAllowDemandStart(VARIANT_TRUE))
+            .and_then(|_| settings.SetExecutionTimeLimit(&BSTR::from("PT0S")))
+            .and_then(|_| settings.SetMultipleInstances(TASK_INSTANCES_IGNORE_NEW))
+            .map_err(|e| format!("settings: {e}"))?;
+        let action: IExecAction = task
+            .Actions()
+            .and_then(|actions| actions.Create(TASK_ACTION_EXEC))
+            .and_then(|action| action.cast())
+            .map_err(|e| format!("action: {e}"))?;
+        // Bloom, as administrator, starts Portals and keeps its pop-up away.
+        let bloom = std::env::current_exe().map_err(|e| format!("Bloom's own path: {e}"))?;
+        action
+            .SetPath(&BSTR::from(bloom.display().to_string()))
+            .and_then(|_| action.SetArguments(&BSTR::from(PORTALS_LAUNCH_ARG)))
+            .and_then(|_| {
+                action.SetWorkingDirectory(&BSTR::from(
+                    exe.parent()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                ))
+            })
+            .map_err(|e| format!("command: {e}"))?;
+        // Administrators and Windows keep full control; this account may
+        // read and run it, nothing more.
+        let access = VARIANT::from(BSTR::from(format!(
+            "D:(A;;FA;;;BA)(A;;FA;;;SY)(A;;GRGX;;;{sid})"
+        )));
+        root.RegisterTaskDefinition(
+            &BSTR::from(PORTALS_TASK),
+            &task,
+            TASK_CREATE_OR_UPDATE.0,
+            &none,
+            &none,
+            TASK_LOGON_INTERACTIVE_TOKEN,
+            &access,
+        )
+        .map_err(|e| format!("register: {e}"))?;
+        for (path, enabled) in portals_tasks(&service) {
+            if !enabled
+                || path
+                    .trim_start_matches('\\')
+                    .eq_ignore_ascii_case(PORTALS_TASK)
+            {
+                continue;
             }
-            let Ok(root) = service.GetFolder(&BSTR::from("\\")) else {
-                return;
-            };
-            let mut off = switched_off();
-            let mut problem = None;
-            if wanted {
-                for (path, enabled) in portals_tasks(&service) {
-                    if !enabled {
-                        continue;
-                    }
-                    match root
-                        .GetTask(&BSTR::from(path.as_str()))
-                        .and_then(|t| t.SetEnabled(VARIANT_FALSE))
-                    {
-                        Ok(()) => {
-                            log(&format!(
-                                "Scheduled task \"{path}\" starts Portals: switched off, Bloom starts Portals now"
-                            ));
-                            if !off.contains(&path) {
-                                off.push(path);
-                            }
-                        }
-                        Err(e) => {
-                            log(&format!("Couldn't switch off scheduled task \"{path}\": {e}"));
-                            problem = Some(format!(
-                                "Your scheduled task \"{}\" starts Portals, and Windows didn't let Bloom switch it off ({}). Switch it off in Task Scheduler",
-                                path.trim_start_matches('\\'),
-                                e.message()
-                            ));
-                        }
+            match root
+                .GetTask(&BSTR::from(path.as_str()))
+                .and_then(|t| t.SetEnabled(VARIANT_FALSE))
+            {
+                Ok(()) => {
+                    log(&format!(
+                        "Scheduled task \"{path}\" (starts Portals at sign-in) switched off"
+                    ));
+                    if !off.contains(&path) {
+                        off.push(path);
                     }
                 }
-            } else {
-                off.retain(|path| {
-                    match root
-                        .GetTask(&BSTR::from(path.as_str()))
-                        .and_then(|t| t.SetEnabled(VARIANT_TRUE))
-                    {
-                        Ok(()) => {
-                            log(&format!("Scheduled task \"{path}\" switched back on"));
-                            false
-                        }
-                        // Gone (deleted meanwhile): nothing to switch back on.
-                        Err(e) if e.code().0 as u32 == 0x8007_0002 => false,
-                        Err(e) => {
-                            log(&format!("Couldn't switch scheduled task \"{path}\" back on: {e}"));
-                            true
-                        }
-                    }
-                });
+                Err(e) => log(&format!(
+                    "Couldn't switch off scheduled task \"{path}\": {e}"
+                )),
             }
-            save_switched_off(&off);
-            if let Ok(mut slot) = TASK_PROBLEM.lock() {
-                *slot = problem;
+        }
+    } else {
+        let _ = root.DeleteTask(&BSTR::from(PORTALS_TASK), 0);
+        off.retain(|path| {
+            match root
+                .GetTask(&BSTR::from(path.as_str()))
+                .and_then(|t| t.SetEnabled(VARIANT_TRUE))
+            {
+                Ok(()) => {
+                    log(&format!("Scheduled task \"{path}\" switched back on"));
+                    false
+                }
+                Err(e) if e.code().0 as u32 == 0x8007_0002 => false,
+                Err(e) => {
+                    log(&format!(
+                        "Couldn't switch scheduled task \"{path}\" back on: {e}"
+                    ));
+                    true
+                }
             }
         });
+    }
+    save_switched_off(&off);
+    Ok(())
+}
+
+/// Runs the set-up as administrator (Windows asks once). Waits for it.
+fn set_up_as_admin(on: bool) -> Result<(), String> {
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+    use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let wide = |s: &str| {
+        s.encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+    let verb = wide("runas");
+    let file = wide(&exe.display().to_string());
+    let params = wide(&format!(
+        "{PORTALS_SETUP_ARG} {}",
+        if on { "on" } else { "off" }
+    ));
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: windows::core::PCWSTR(verb.as_ptr()),
+        lpFile: windows::core::PCWSTR(file.as_ptr()),
+        lpParameters: windows::core::PCWSTR(params.as_ptr()),
+        nShow: SW_HIDE.0,
+        ..Default::default()
+    };
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        ShellExecuteExW(&mut info).map_err(|_| {
+            log("Setting up Bloom's Portals task: Windows' permission prompt was declined");
+            "Windows' permission prompt was declined".to_string()
+        })?;
+        if info.hProcess.is_invalid() {
+            return Err("The set-up didn't start".into());
+        }
+        WaitForSingleObject(info.hProcess, 60_000);
+        let mut code = 1u32;
+        let _ = GetExitCodeProcess(info.hProcess, &mut code);
+        let _ = windows::Win32::Foundation::CloseHandle(info.hProcess);
+        if code != 0 {
+            return Err("The set-up didn't finish (see app-tweaks.log)".into());
+        }
+    }
+    Ok(())
+}
+
+/// With "Start Portals with Bloom" on but Bloom's task not made yet (it's
+/// new, or Bloom was updated to it), Windows' permission is asked for once,
+/// a few seconds after Bloom starts; declined, Settings offers it again.
+pub fn set_up_portals_if_needed(app: &tauri::AppHandle) {
+    if crate::utils::get_setting_str(app, START_PORTALS_KEY).as_deref() != Some("true") {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("bloom-portals-setup".into())
+        .spawn(|| {
+            let Some(marker) = crate::utils::data_file("portals-setup-asked.txt") else {
+                return;
+            };
+            if marker.exists() || portals_exe().is_none() || portals_task_ready() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let _ = std::fs::write(&marker, "asked");
+            let result = set_up_as_admin(true);
+            if let Ok(mut slot) = TASK_PROBLEM.lock() {
+                *slot = result.err();
+            }
+        });
+}
+
+/// Sets Portals' start up (on) or takes it down (off), asking Windows'
+/// permission once (Settings > Integrations > Portals).
+#[tauri::command]
+pub async fn portals_set_up(on: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = set_up_as_admin(on);
+        if let Ok(mut slot) = TASK_PROBLEM.lock() {
+            *slot = result.as_ref().err().cloned();
+        }
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(serde::Serialize)]
 pub struct PortalsStatus {
     installed: bool,
     starts_itself: bool,
-    /// A scheduled task starting Portals that Bloom couldn't switch off.
+    /// What went wrong setting it up, when something did.
     task_problem: Option<String>,
+    /// Bloom's task to start it as administrator is set up.
+    task_ready: bool,
+    /// Other scheduled tasks that start Portals at sign-in, still on.
+    other_tasks: Vec<String>,
 }
 
 #[tauri::command]
@@ -686,11 +995,30 @@ pub async fn portals_status() -> PortalsStatus {
         installed: portals_exe().is_some(),
         starts_itself: portals_starts_itself(),
         task_problem: TASK_PROBLEM.lock().ok().and_then(|p| p.clone()),
+        task_ready: portals_task_ready(),
+        other_tasks: unsafe {
+            task_service()
+                .map(|service| {
+                    portals_tasks(&service)
+                        .into_iter()
+                        .filter(|(path, enabled)| {
+                            *enabled
+                                && !path
+                                    .trim_start_matches('\\')
+                                    .eq_ignore_ascii_case(PORTALS_TASK)
+                        })
+                        .map(|(path, _)| path.trim_start_matches('\\').to_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        },
     })
     .await
     .unwrap_or(PortalsStatus {
         installed: false,
         starts_itself: false,
         task_problem: None,
+        task_ready: false,
+        other_tasks: Vec::new(),
     })
 }

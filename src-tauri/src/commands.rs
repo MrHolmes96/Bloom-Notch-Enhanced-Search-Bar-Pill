@@ -3671,9 +3671,6 @@ pub fn save_setting(app: AppHandle, key: String, value: serde_json::Value) -> Re
     if key.starts_with("bloom-windows-snap-border") {
         crate::snap_borders::apply(&app);
     }
-    if key == crate::app_tweaks::START_PORTALS_KEY {
-        crate::app_tweaks::sync_portals_tasks(&app);
-    }
     Ok(())
 }
 
