@@ -3,6 +3,7 @@
    with "Add task" pills and a done bar, Today outlined in Blitzit's
    purple-to-teal, and Blitz Now at the bottom. */
 .bz {
+	letter-spacing: -0.005em;
 	--bz-bg: #121212;
 	--bz-panel: #1a1a1a;
 	--bz-panel-border: #262626;
@@ -20,10 +21,10 @@
 	box-sizing: border-box;
 	z-index: 2;
 	display: flex;
-	gap: 10px;
-	padding: 6px 12px 12px;
+	gap: 8px;
+	padding: 4px 10px 10px;
 	color: var(--bz-text);
-	font-size: 13px;
+	font-size: 12px;
 	overflow: hidden;
 }
 
@@ -48,15 +49,15 @@
 }
 
 .bz-icon {
-	width: 26px;
-	height: 26px;
+	width: 22px;
+	height: 22px;
 	flex: none;
 	padding: 0;
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	border: none;
-	border-radius: 8px;
+	border-radius: 7px;
 	background: transparent;
 	color: var(--bz-muted);
 	cursor: pointer;
@@ -68,20 +69,20 @@
 }
 
 .bz-icon svg {
-	width: 15px;
-	height: 15px;
+	width: 13px;
+	height: 13px;
 }
 
 /* ---------------------------------------------------------------- sidebar */
 
 .bz-side {
-	width: 176px;
+	width: 150px;
 	flex: none;
 	display: flex;
 	flex-direction: column;
-	padding: 12px 8px 8px;
+	padding: 10px 6px 6px;
 	box-sizing: border-box;
-	border-radius: 16px;
+	border-radius: 12px;
 	background: var(--bz-panel);
 	border: 1px solid var(--bz-panel-border);
 	min-height: 0;
@@ -95,8 +96,8 @@
 }
 
 .bz-side-label {
-	font-size: 11px;
-	font-weight: 500;
+	font-size: 10px;
+	font-weight: 600;
 	letter-spacing: 0.08em;
 	text-transform: uppercase;
 	color: var(--bz-muted);
@@ -116,15 +117,15 @@
 .bz-side-list {
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: 8px;
 	width: 100%;
-	min-height: 38px;
-	padding: 0 10px 0 8px;
+	min-height: 30px;
+	padding: 0 8px 0 6px;
 	border: none;
-	border-radius: 10px;
+	border-radius: 8px;
 	background: transparent;
 	color: var(--bz-text);
-	font-size: 13.5px;
+	font-size: 12px;
 	text-align: left;
 	cursor: pointer;
 }
@@ -146,29 +147,29 @@
 }
 
 .bz-side-count {
-	font-size: 12px;
+	font-size: 11px;
 	color: var(--bz-muted);
 	font-variant-numeric: tabular-nums;
 }
 
 .bz-avatar {
-	width: 20px;
-	height: 20px;
+	width: 17px;
+	height: 17px;
 	flex: none;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	border-radius: 6px;
+	border-radius: 5px;
 	color: rgba(255, 255, 255, 0.95);
-	font-size: 10.5px;
-	font-weight: 700;
+	font-size: 9.5px;
+	font-weight: 650;
 }
 
 .bz-avatar.is-big {
-	width: 30px;
-	height: 30px;
-	border-radius: 9px;
-	font-size: 13px;
+	width: 22px;
+	height: 22px;
+	border-radius: 7px;
+	font-size: 11px;
 }
 
 .bz-side-sync {
@@ -176,12 +177,12 @@
 	align-items: center;
 	gap: 8px;
 	margin-top: 8px;
-	padding: 8px;
+	padding: 6px;
 	border: none;
-	border-radius: 10px;
+	border-radius: 8px;
 	background: transparent;
 	color: var(--bz-muted);
-	font-size: 11px;
+	font-size: 10.5px;
 	line-height: 1.3;
 	text-align: left;
 	cursor: pointer;
@@ -209,10 +210,10 @@
 	min-width: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
-	padding: 14px 14px 12px;
+	gap: 10px;
+	padding: 10px 10px 8px;
 	box-sizing: border-box;
-	border-radius: 16px;
+	border-radius: 12px;
 	background: var(--bz-bg);
 	border: 1px solid var(--bz-panel-border);
 	position: relative;
@@ -221,9 +222,9 @@
 .bz-head {
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: 8px;
 	flex: none;
-	height: 34px;
+	height: 26px;
 }
 
 .bz-title {
@@ -232,8 +233,8 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: 24px;
-	font-weight: 700;
+	font-size: 15px;
+	font-weight: 600;
 	letter-spacing: -0.01em;
 }
 
@@ -244,9 +245,9 @@
 .bz-views {
 	display: flex;
 	flex: none;
-	padding: 4px;
+	padding: 2px;
 	gap: 2px;
-	border-radius: 12px;
+	border-radius: 9px;
 	background: var(--bz-panel);
 	border: 1px solid var(--bz-panel-border);
 }
@@ -254,20 +255,20 @@
 .bz-views button {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	height: 28px;
-	padding: 0 12px;
+	gap: 5px;
+	height: 22px;
+	padding: 0 9px;
 	border: none;
-	border-radius: 9px;
+	border-radius: 7px;
 	background: transparent;
 	color: var(--bz-muted);
-	font-size: 13px;
+	font-size: 11.5px;
 	cursor: pointer;
 }
 
 .bz-views button svg {
-	width: 14px;
-	height: 14px;
+	width: 12px;
+	height: 12px;
 }
 
 .bz-views button:hover {
@@ -283,12 +284,12 @@
 
 .bz-problem {
 	flex: none;
-	padding: 8px 12px;
+	padding: 6px 10px;
 	border: none;
-	border-radius: 10px;
+	border-radius: 8px;
 	background: #2a2210;
 	color: #ffcf70;
-	font-size: 12px;
+	font-size: 11px;
 	text-align: left;
 	cursor: pointer;
 }
@@ -300,7 +301,7 @@
 	flex: 1;
 	min-height: 0;
 	display: flex;
-	gap: 14px;
+	gap: 8px;
 	overflow-x: auto;
 	overflow-y: hidden;
 	scrollbar-width: thin;
@@ -309,13 +310,13 @@
 
 .bz-col {
 	flex: 1 1 0;
-	min-width: 168px;
+	min-width: 150px;
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
-	padding: 14px 14px 10px;
+	gap: 8px;
+	padding: 10px 10px 8px;
 	box-sizing: border-box;
-	border-radius: 16px;
+	border-radius: 12px;
 	background: var(--bz-panel);
 	border: 1px solid var(--bz-panel-border);
 	transition:
@@ -343,9 +344,9 @@
 }
 
 .bz-col.is-folded {
-	flex: 0 0 56px;
-	min-width: 56px;
-	padding: 12px 6px;
+	flex: 0 0 40px;
+	min-width: 40px;
+	padding: 10px 4px;
 	align-items: center;
 }
 
@@ -363,8 +364,8 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: 16px;
-	font-weight: 700;
+	font-size: 13px;
+	font-weight: 600;
 }
 
 .bz-col.is-folded .bz-col-head {
@@ -381,17 +382,17 @@
 .bz-progress {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: 6px;
 	flex: none;
-	margin-top: -4px;
-	font-size: 11.5px;
+	margin-top: -2px;
+	font-size: 10.5px;
 	color: var(--bz-muted);
 	white-space: nowrap;
 }
 
 .bz-progress-track {
 	flex: 1;
-	height: 6px;
+	height: 4px;
 	border-radius: 999px;
 	background: var(--bz-track);
 	overflow: hidden;
@@ -408,15 +409,15 @@
 	display: inline-flex;
 	align-items: center;
 	align-self: flex-start;
-	gap: 8px;
+	gap: 6px;
 	flex: none;
-	height: 36px;
-	padding: 0 16px 0 14px;
+	height: 26px;
+	padding: 0 11px 0 9px;
 	border: none;
 	border-radius: 999px;
 	background: var(--bz-raised);
 	color: var(--bz-text);
-	font-size: 13.5px;
+	font-size: 11.5px;
 	font-weight: 600;
 	cursor: pointer;
 }
@@ -426,8 +427,8 @@
 }
 
 .bz-add svg {
-	width: 15px;
-	height: 15px;
+	width: 12px;
+	height: 12px;
 }
 
 .bz-add-input {
@@ -435,9 +436,9 @@
 	align-items: center;
 	gap: 8px;
 	flex: none;
-	height: 38px;
-	padding: 0 12px;
-	border-radius: 12px;
+	height: 30px;
+	padding: 0 10px;
+	border-radius: 8px;
 	background: var(--bz-raised);
 	border: 1px solid #3a3a3c;
 }
@@ -450,7 +451,7 @@
 	background: transparent;
 	color: var(--bz-text);
 	font-family: inherit;
-	font-size: 13px;
+	font-size: 12px;
 }
 
 .bz-add-input input::placeholder {
@@ -468,7 +469,7 @@
 	min-height: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: 6px;
 	overflow-y: auto;
 	scrollbar-width: thin;
 	scrollbar-color: #333 transparent;
@@ -477,15 +478,15 @@
 .bz-card {
 	display: flex;
 	align-items: flex-start;
-	gap: 10px;
+	gap: 8px;
 	flex: none;
-	padding: 12px;
+	padding: 8px 9px;
 	box-sizing: border-box;
-	border-radius: 12px;
+	border-radius: 9px;
 	background: var(--bz-raised);
 	border: 1px solid #2f2f31;
-	font-size: 13px;
-	line-height: 18px;
+	font-size: 12px;
+	line-height: 16px;
 	/* A finger moving up or down scrolls the column; sideways drags the card. */
 	touch-action: pan-y;
 }
@@ -508,8 +509,8 @@
 }
 
 .bz-check {
-	width: 18px;
-	height: 18px;
+	width: 14px;
+	height: 14px;
 	flex: none;
 	padding: 0;
 	display: flex;
@@ -536,8 +537,8 @@
 }
 
 .bz-check svg {
-	width: 11px;
-	height: 11px;
+	width: 9px;
+	height: 9px;
 }
 
 .bz-card-name {
@@ -567,10 +568,10 @@
 }
 
 .bz-card-list .bz-avatar {
-	width: 16px;
-	height: 16px;
-	font-size: 9px;
-	border-radius: 5px;
+	width: 14px;
+	height: 14px;
+	font-size: 8px;
+	border-radius: 4px;
 }
 
 .bz-ghost {
@@ -594,14 +595,14 @@
 .bz-blitz {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	height: 40px;
-	padding: 0 22px;
+	gap: 6px;
+	height: 30px;
+	padding: 0 16px;
 	border: 1px solid var(--bz-panel-border);
-	border-radius: 14px;
+	border-radius: 10px;
 	background: var(--bz-panel);
 	color: var(--bz-text);
-	font-size: 14px;
+	font-size: 12px;
 	font-weight: 600;
 	cursor: pointer;
 }
@@ -616,17 +617,17 @@
 }
 
 .bz-blitz svg {
-	width: 16px;
-	height: 16px;
+	width: 13px;
+	height: 13px;
 }
 
 .bz-avatar.is-emoji {
 	background: transparent;
-	font-size: 15px;
+	font-size: 13px;
 }
 
 .bz-avatar.is-big.is-emoji {
-	font-size: 24px;
+	font-size: 18px;
 }
 
 .bz-drop-line {
@@ -643,8 +644,8 @@
 }
 
 .bz-side.is-folded {
-	width: 52px;
-	padding: 10px 6px 8px;
+	width: 40px;
+	padding: 8px 4px 6px;
 }
 
 .bz-side.is-folded .bz-side-top {
