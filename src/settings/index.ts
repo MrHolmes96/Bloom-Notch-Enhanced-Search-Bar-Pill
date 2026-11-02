@@ -9,6 +9,7 @@ export { OverlaysTab, type OverlaysSection } from "./OverlaysTab";
 export { SearchBarTab, type SearchBarSection } from "./SearchBarTab";
 export { NotificationsTab, type NotificationsSection } from "./NotificationsTab";
 export { IntegrationsTab } from "./IntegrationsTab";
+export { PortalsSettings } from "./PortalsSettings";
 export { BlitzitSettings } from "./BlitzitSettings";
 export { GHelperSettings } from "./GHelperSettings";
 export { AboutTab } from "./AboutTab";

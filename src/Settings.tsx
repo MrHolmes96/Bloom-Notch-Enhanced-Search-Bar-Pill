@@ -42,7 +42,8 @@ import {
 	FolderSearch,
 	SlidersHorizontal,
 	Keyboard,
-	Bluetooth
+	Bluetooth,
+	ChevronRight
 } from "lucide-react";
 import {
 	useSettings,
@@ -56,6 +57,7 @@ import {
 	IntegrationsTab,
 	BlitzitSettings,
 	GHelperSettings,
+	PortalsSettings,
 	AboutTab,
 	WindowsTab
 } from "./settings/index";
@@ -86,7 +88,8 @@ const CATEGORIES: {
 	id: string;
 	label: string;
 	icon: Icon;
-	sections: { id: string; label: string; icon: Icon }[];
+	/** `hidden`: a page of its own the category opens on, not listed under it. */
+	sections: { id: string; label: string; icon: Icon; hidden?: boolean }[];
 }[] = [
 	{
 		id: "general",
@@ -141,9 +144,7 @@ const CATEGORIES: {
 		id: "windows",
 		label: "Windows",
 		icon: AppWindow,
-		sections: [
-			{ id: "sizes", label: "Window Sizes", icon: AppWindow }
-		]
+		sections: [{ id: "sizes", label: "Window Sizes", icon: AppWindow }]
 	},
 	{
 		id: "overlays",
@@ -181,9 +182,10 @@ const CATEGORIES: {
 		label: "Integrations",
 		icon: Blocks,
 		sections: [
-			{ id: "apps", label: "Apps", icon: Blocks },
+			{ id: "apps", label: "Apps", icon: Blocks, hidden: true },
 			{ id: "blitzit", label: "Blitzit", icon: Zap },
-			{ id: "ghelper", label: "G-Helper", icon: GHelperIcon }
+			{ id: "ghelper", label: "G-Helper", icon: GHelperIcon },
+			{ id: "portals", label: "Portals", icon: LayoutGrid }
 		]
 	},
 	{ id: "about", label: "About", icon: Info, sections: [] }
@@ -196,6 +198,8 @@ interface Place {
 }
 
 const SECTIONS_KEY = "bloom-settings-sections";
+/** Whether the apps under Integrations are shown in the sidebar. */
+const INTEGRATIONS_OPEN_KEY = "bloom-settings-integrations-open";
 
 /** Each category's last-open sub-section, to come back to it. */
 function readRemembered(): Record<string, string> {
@@ -217,6 +221,9 @@ function placeFor(tab: string, remembered: Record<string, string>): Place {
 	// Window borders moved from Windows to Appearance.
 	if (tab === "windows/borders") return { category: "appearance", section: "borders" };
 	const [categoryId, sectionId] = tab.split("/");
+	// Integrations itself is the list of apps; each app is a page under it.
+	if (categoryId === "integrations" && !sectionId)
+		return { category: "integrations", section: "apps" };
 	const category = CATEGORIES.find((c) => c.id === categoryId) ?? CATEGORIES[0];
 	const has = (id: string | undefined) => !!id && category.sections.some((s) => s.id === id);
 	const section = has(sectionId)
@@ -245,6 +252,24 @@ function SettingsApp() {
 	};
 	const { category, section } = place;
 	const settings = useSettings();
+	const [integrationsOpen, setIntegrationsOpen] = useState(() => {
+		try {
+			return localStorage.getItem(INTEGRATIONS_OPEN_KEY) !== "false";
+		} catch {
+			return true;
+		}
+	});
+	const showIntegrations = (open: boolean) => {
+		setIntegrationsOpen(open);
+		try {
+			localStorage.setItem(INTEGRATIONS_OPEN_KEY, String(open));
+		} catch {}
+	};
+	// Opened on one of its apps (from the notch, say): show where it is.
+	useEffect(() => {
+		if (category === "integrations" && section !== "apps" && !integrationsOpen)
+			showIntegrations(true);
+	}, [category, section]);
 
 	useEffect(() => {
 		return initTheme();
@@ -312,11 +337,13 @@ function SettingsApp() {
 
 			<div className="settings-body">
 				<div className="settings-sidebar">
-					{CATEGORIES.map(({ id, label, icon: CategoryIcon, sections }) => (
-						<div key={id} className="sidebar-tab-group">
+					{CATEGORIES.map(({ id, label, icon: CategoryIcon, sections }) => {
+						const foldable = id === "integrations";
+						const expanded = foldable ? integrationsOpen : category === id;
+						const tab = (
 							<button
-								className={`sidebar-tab ${category === id ? "active" : ""}`}
-								aria-expanded={sections.length > 0 ? category === id : undefined}
+								className={`sidebar-tab ${category === id && (!foldable || section === "apps") ? "active" : ""}`}
+								aria-expanded={!foldable && sections.length > 0 ? expanded : undefined}
 								onClick={() => go(id)}
 							>
 								<div className="sidebar-tab-icon">
@@ -324,21 +351,44 @@ function SettingsApp() {
 								</div>
 								<span>{label}</span>
 							</button>
-							{category === id &&
-								sections.map(({ id: sectionId, label: sectionLabel, icon: SectionIcon }) => (
-									<button
-										key={sectionId}
-										className={`sidebar-tab sidebar-subtab ${section === sectionId ? "active" : ""}`}
-										onClick={() => go(`${id}/${sectionId}`)}
-									>
-										<div className="sidebar-tab-icon">
-											<SectionIcon size={12} strokeWidth={1.5} />
-										</div>
-										<span>{sectionLabel}</span>
-									</button>
-								))}
-						</div>
-					))}
+						);
+						return (
+							<div key={id} className="sidebar-tab-group">
+								{foldable ? (
+									<div className="sidebar-tab-row">
+										{tab}
+										<button
+											type="button"
+											className={`sidebar-expand ${expanded ? "open" : ""}`}
+											aria-expanded={expanded}
+											aria-label={expanded ? `Hide ${label}' apps` : `Show ${label}' apps`}
+											title={expanded ? "Hide the apps" : "Show the apps"}
+											onClick={() => showIntegrations(!expanded)}
+										>
+											<ChevronRight size={14} strokeWidth={1.5} />
+										</button>
+									</div>
+								) : (
+									tab
+								)}
+								{expanded &&
+									sections
+										.filter((s) => !s.hidden)
+										.map(({ id: sectionId, label: sectionLabel, icon: SectionIcon }) => (
+											<button
+												key={sectionId}
+												className={`sidebar-tab sidebar-subtab ${category === id && section === sectionId ? "active" : ""}`}
+												onClick={() => go(`${id}/${sectionId}`)}
+											>
+												<div className="sidebar-tab-icon">
+													<SectionIcon size={12} strokeWidth={1.5} />
+												</div>
+												<span>{sectionLabel}</span>
+											</button>
+										))}
+							</div>
+						);
+					})}
 				</div>
 
 				<div className="settings-content">
@@ -471,6 +521,7 @@ function SettingsApp() {
 					{category === "integrations" && section === "apps" && <IntegrationsTab openTab={go} />}
 					{category === "integrations" && section === "blitzit" && <BlitzitSettings />}
 					{category === "integrations" && section === "ghelper" && <GHelperSettings />}
+					{category === "integrations" && section === "portals" && <PortalsSettings />}
 					{category === "about" && (
 						<AboutTab
 							appVersion={settings.appVersion}

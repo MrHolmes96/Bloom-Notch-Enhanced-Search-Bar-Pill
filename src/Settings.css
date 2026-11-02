@@ -1567,3 +1567,105 @@ input:checked + .slider:before {
 	border-color: #3aaeef;
 	color: #fff;
 }
+
+/* Settings > Integrations: each app's connection, right of its name. */
+.int-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: none;
+	margin-left: 12px;
+}
+
+.int-connect {
+	min-width: 84px;
+}
+
+.int-connected {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 84px;
+	box-sizing: border-box;
+	padding: 5px 12px;
+	border-radius: 6px;
+	background: #30d158;
+	color: #fff;
+	font-size: 11px;
+	font-weight: 600;
+}
+
+.int-disconnect {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.08));
+	border-radius: 6px;
+	background: var(--bloom-group-bg, rgba(255, 255, 255, 0.1));
+	color: var(--bloom-text, white);
+	cursor: pointer;
+}
+
+.int-disconnect:hover {
+	background: rgba(255, 69, 58, 0.85);
+	border-color: transparent;
+	color: #fff;
+}
+
+.int-busy {
+	font-size: 11px;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.5));
+}
+
+.int-chevron {
+	flex: none;
+	margin-left: 10px;
+	opacity: 0.6;
+}
+
+/* The arrow beside Integrations in the sidebar: shows or hides its apps. */
+.sidebar-tab-row {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+}
+
+.sidebar-tab-row > .sidebar-tab {
+	flex: 1;
+	min-width: 0;
+}
+
+.sidebar-expand {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	flex: none;
+	padding: 0;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--text-muted, rgba(255, 255, 255, 0.5));
+	cursor: pointer;
+}
+
+.sidebar-expand:hover {
+	background: rgba(255, 255, 255, 0.06);
+	color: var(--text-color, white);
+}
+
+.light-mode .sidebar-expand:hover {
+	background: rgba(0, 0, 0, 0.05);
+}
+
+.sidebar-expand svg {
+	transition: transform 0.15s ease;
+}
+
+.sidebar-expand.open svg {
+	transform: rotate(90deg);
+}

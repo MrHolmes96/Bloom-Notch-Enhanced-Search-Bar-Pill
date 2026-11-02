@@ -215,14 +215,74 @@ fn placement(hwnd: HWND) -> Option<Place> {
     })
 }
 
-fn on_a_screen(place: &Place) -> bool {
-    use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONULL};
-    // The title bar has to be reachable: its middle must be on some screen.
-    let point = POINT {
-        x: (place.left + place.right) / 2,
-        y: place.top + 10,
+/// Where window placements' "workspace" coordinates start, on screen: the
+/// primary screen's work area (Windows measures `rcNormalPosition` from it).
+fn workspace_offset() -> (i32, i32) {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
     };
-    unsafe { !MonitorFromPoint(point, MONITOR_DEFAULTTONULL).is_invalid() }
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe {
+        let primary = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+        if !GetMonitorInfoW(primary, &mut info).as_bool() {
+            return (0, 0);
+        }
+    }
+    (
+        info.rcWork.left - info.rcMonitor.left,
+        info.rcWork.top - info.rcMonitor.top,
+    )
+}
+
+/// The place to put a window: the saved one, or, when its normal size hangs
+/// off the screen (a window first seen maximised keeps the maximised
+/// overhang, as LM Studio's did at (-12, -12)), fitted into that screen's
+/// work area. `None` when it isn't on any screen now.
+fn fitted(place: &Place) -> Option<Place> {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONULL,
+    };
+    let (dx, dy) = workspace_offset();
+    let on_screen = RECT {
+        left: place.left + dx,
+        top: place.top + dy,
+        right: place.right + dx,
+        bottom: place.bottom + dy,
+    };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe {
+        let monitor = MonitorFromRect(&on_screen, MONITOR_DEFAULTTONULL);
+        if monitor.is_invalid() || !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return None;
+        }
+    }
+    let work = info.rcWork;
+    let (w, h) = (
+        on_screen.right - on_screen.left,
+        on_screen.bottom - on_screen.top,
+    );
+    let (work_w, work_h) = (work.right - work.left, work.bottom - work.top);
+    // The title bar has to be reachable, and the window has to fit.
+    if on_screen.top >= work.top && w <= work_w && h <= work_h {
+        return Some(*place);
+    }
+    let w = w.min(work_w);
+    let h = h.min(work_h);
+    let left = on_screen.left.clamp(work.left, work.right - w);
+    let top = on_screen.top.clamp(work.top, work.bottom - h);
+    Some(Place {
+        left: left - dx,
+        top: top - dy,
+        right: left + w - dx,
+        bottom: top + h - dy,
+        maximized: place.maximized,
+    })
 }
 
 fn apply(hwnd: HWND, place: &Place) {
@@ -377,13 +437,13 @@ fn place_new(hwnd: HWND, app: &str, class: &str, title: &str) {
         }
         Choice::Use(_, place) => place,
     };
-    if !on_a_screen(&place) {
+    let Some(place) = fitted(&place) else {
         log(&format!(
             "{} opened: its saved place is off every screen now, left alone",
             who(app, &name)
         ));
         return;
-    }
+    };
     if another_open(hwnd, app, &name, class) {
         log(&format!(
             "{} opened: another of the same window is open, the app places it",
