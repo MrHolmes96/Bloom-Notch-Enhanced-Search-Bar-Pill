@@ -94,7 +94,8 @@ body {
 }
 
 .settings-sidebar {
-	width: 170px;
+	/* Room for the longest name ("Search Bar Pill") beside its arrow. */
+	width: 194px;
 	background: rgba(255, 255, 255, 0.015);
 	border-right: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.08));
 	display: flex;
@@ -1642,7 +1643,7 @@ input:checked + .slider:before {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	width: 26px;
+	width: 22px;
 	height: 26px;
 	flex: none;
 	padding: 0;
@@ -1668,4 +1669,10 @@ input:checked + .slider:before {
 
 .sidebar-expand.open svg {
 	transform: rotate(90deg);
+}
+
+.sidebar-tab-row > .sidebar-tab span {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }

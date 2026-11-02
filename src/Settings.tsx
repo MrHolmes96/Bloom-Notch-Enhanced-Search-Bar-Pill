@@ -198,8 +198,20 @@ interface Place {
 }
 
 const SECTIONS_KEY = "bloom-settings-sections";
-/** Whether the apps under Integrations are shown in the sidebar. */
+/** Which categories show their pages in the sidebar ({ id: true }). */
+const OPEN_KEY = "bloom-settings-sidebar-open";
+/** The earlier key for Integrations alone, read once. */
 const INTEGRATIONS_OPEN_KEY = "bloom-settings-integrations-open";
+
+function readOpen(): Record<string, boolean> {
+	try {
+		const parsed: unknown = JSON.parse(localStorage.getItem(OPEN_KEY) ?? "null");
+		if (parsed && typeof parsed === "object") return parsed as Record<string, boolean>;
+		return { integrations: localStorage.getItem(INTEGRATIONS_OPEN_KEY) !== "false" };
+	} catch {
+		return {};
+	}
+}
 
 /** Each category's last-open sub-section, to come back to it. */
 function readRemembered(): Record<string, string> {
@@ -236,11 +248,27 @@ function placeFor(tab: string, remembered: Record<string, string>): Place {
 
 function SettingsApp() {
 	const [place, setPlace] = useState<Place>(() => placeFor("general", readRemembered()));
+	const [open, setOpen] = useState<Record<string, boolean>>(readOpen);
+	const showPages = (id: string, show: boolean) =>
+		setOpen((now) => {
+			const next = { ...now, [id]: show };
+			try {
+				localStorage.setItem(OPEN_KEY, JSON.stringify(next));
+			} catch {}
+			return next;
+		});
 	// Read fresh each time: the page-opening listener below is set up once.
 	const go = (tab: string) => {
 		const remembered = readRemembered();
 		const next = placeFor(tab, remembered);
 		setPlace(next);
+		// Going to one of a category's pages shows it under the category, so
+		// it's clear where you are; the arrow hides it again. (Integrations'
+		// own page, its list of apps, leaves it as it is.)
+		const page = CATEGORIES.find((c) => c.id === next.category)?.sections.find(
+			(s) => s.id === next.section
+		);
+		if (page && !page.hidden && !readOpen()[next.category]) showPages(next.category, true);
 		if (next.section) {
 			try {
 				localStorage.setItem(
@@ -252,24 +280,6 @@ function SettingsApp() {
 	};
 	const { category, section } = place;
 	const settings = useSettings();
-	const [integrationsOpen, setIntegrationsOpen] = useState(() => {
-		try {
-			return localStorage.getItem(INTEGRATIONS_OPEN_KEY) !== "false";
-		} catch {
-			return true;
-		}
-	});
-	const showIntegrations = (open: boolean) => {
-		setIntegrationsOpen(open);
-		try {
-			localStorage.setItem(INTEGRATIONS_OPEN_KEY, String(open));
-		} catch {}
-	};
-	// Opened on one of its apps (from the notch, say): show where it is.
-	useEffect(() => {
-		if (category === "integrations" && section !== "apps" && !integrationsOpen)
-			showIntegrations(true);
-	}, [category, section]);
 
 	useEffect(() => {
 		return initTheme();
@@ -338,14 +348,14 @@ function SettingsApp() {
 			<div className="settings-body">
 				<div className="settings-sidebar">
 					{CATEGORIES.map(({ id, label, icon: CategoryIcon, sections }) => {
-						const foldable = id === "integrations";
-						const expanded = foldable ? integrationsOpen : category === id;
+						const visible = sections.filter((s) => !s.hidden);
+						const foldable = visible.length > 0;
+						const expanded = foldable && !!open[id];
+						// The category is marked when you're on it and its page isn't shown below.
+						const here = category === id && (!expanded || !visible.some((s) => s.id === section));
+						const what = id === "integrations" ? "apps" : "pages";
 						const tab = (
-							<button
-								className={`sidebar-tab ${category === id && (!foldable || section === "apps") ? "active" : ""}`}
-								aria-expanded={!foldable && sections.length > 0 ? expanded : undefined}
-								onClick={() => go(id)}
-							>
+							<button className={`sidebar-tab ${here ? "active" : ""}`} onClick={() => go(id)}>
 								<div className="sidebar-tab-icon">
 									<CategoryIcon size={14} strokeWidth={1.5} />
 								</div>
@@ -361,9 +371,9 @@ function SettingsApp() {
 											type="button"
 											className={`sidebar-expand ${expanded ? "open" : ""}`}
 											aria-expanded={expanded}
-											aria-label={expanded ? `Hide ${label}' apps` : `Show ${label}' apps`}
-											title={expanded ? "Hide the apps" : "Show the apps"}
-											onClick={() => showIntegrations(!expanded)}
+											aria-label={`${expanded ? "Hide" : "Show"} ${label}'s ${what}`}
+											title={`${expanded ? "Hide" : "Show"} the ${what}`}
+											onClick={() => showPages(id, !expanded)}
 										>
 											<ChevronRight size={14} strokeWidth={1.5} />
 										</button>
@@ -372,20 +382,18 @@ function SettingsApp() {
 									tab
 								)}
 								{expanded &&
-									sections
-										.filter((s) => !s.hidden)
-										.map(({ id: sectionId, label: sectionLabel, icon: SectionIcon }) => (
-											<button
-												key={sectionId}
-												className={`sidebar-tab sidebar-subtab ${category === id && section === sectionId ? "active" : ""}`}
-												onClick={() => go(`${id}/${sectionId}`)}
-											>
-												<div className="sidebar-tab-icon">
-													<SectionIcon size={12} strokeWidth={1.5} />
-												</div>
-												<span>{sectionLabel}</span>
-											</button>
-										))}
+									visible.map(({ id: sectionId, label: sectionLabel, icon: SectionIcon }) => (
+										<button
+											key={sectionId}
+											className={`sidebar-tab sidebar-subtab ${category === id && section === sectionId ? "active" : ""}`}
+											onClick={() => go(`${id}/${sectionId}`)}
+										>
+											<div className="sidebar-tab-icon">
+												<SectionIcon size={12} strokeWidth={1.5} />
+											</div>
+											<span>{sectionLabel}</span>
+										</button>
+									))}
 							</div>
 						);
 					})}
