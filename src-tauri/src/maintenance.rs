@@ -409,6 +409,7 @@ pub fn export_logs(app: Option<&AppHandle>) -> Result<PathBuf, String> {
         "blitzit-sync.log",
         "tray-menus.log",
         "desktop-menu.log",
+        "window-memory.log",
         "tray-app-hidden.txt",
         "tray-icons.txt",
         "restarts.txt",

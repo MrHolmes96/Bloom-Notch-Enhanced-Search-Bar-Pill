@@ -20,7 +20,7 @@ import {
  * settings; what is chosen here changes Bloom's tray, not Windows'.
  */
 
-function AppImage({ path, image }: { path: string; image?: string | null }) {
+export function AppImage({ path, image }: { path: string; image?: string | null }) {
 	const [src, setSrc] = useState<string | null>(image ?? null);
 	useEffect(() => {
 		if (image) {

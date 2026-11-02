@@ -46,6 +46,7 @@ mod utils;
 mod wifi;
 mod window_capture;
 mod window_memory;
+mod window_rules;
 
 use std::sync::atomic::Ordering;
 use tauri::Manager;
@@ -342,6 +343,10 @@ fn main() {
             end_task,
             live_preview::dock_live_previews,
             window_memory::forget_window_sizes,
+            window_memory::window_memory_apps,
+            window_memory::window_memory_set_mode,
+            window_memory::window_memory_set_main,
+            window_memory::window_memory_forget_app,
             quick_settings::quick_settings_state,
             quick_settings::quick_setting_action,
             notifications::notifications_status,
