@@ -1,0 +1,92 @@
+/* Under a dock preview: an app's download (see DownloadPanel.tsx). Subtle:
+   the card's own colours, Windows' accent for the download, green for an
+   install or Steam's "Updating files". */
+.dl-panel {
+	align-self: stretch;
+	min-width: 240px;
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	padding: 8px 8px 4px;
+	border-top: 1px solid rgba(255, 255, 255, 0.1);
+	color: rgba(255, 255, 255, 0.9);
+	font-size: 11px;
+	cursor: default;
+}
+
+.dl-name {
+	font-size: 12px;
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.dl-row {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.dl-label {
+	font-weight: 500;
+}
+
+.dl-amount {
+	color: rgba(255, 255, 255, 0.6);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.dl-foot {
+	margin-top: 2px;
+	color: rgba(255, 255, 255, 0.6);
+	font-variant-numeric: tabular-nums;
+}
+
+.dl-bar {
+	position: relative;
+	height: 4px;
+	border-radius: 2px;
+	overflow: hidden;
+	background: rgba(255, 255, 255, 0.14);
+}
+
+.dl-bar-fill {
+	height: 100%;
+	border-radius: inherit;
+	transition: width 0.4s ease;
+}
+
+.dl-bar--accent .dl-bar-fill {
+	background: var(--windows-accent, #0078d4);
+}
+
+.dl-bar--green .dl-bar-fill {
+	background: #3cc35a;
+}
+
+/* No amount known: a short stretch sweeping along, as on the dock. */
+.dl-bar--sweep .dl-bar-fill {
+	width: 40%;
+	transition: none;
+	animation: dl-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes dl-sweep {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(250%);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.dl-bar--sweep .dl-bar-fill {
+		width: 100%;
+		opacity: 0.6;
+		animation: none;
+	}
+}

@@ -14,6 +14,7 @@ import { mergeTrayApps, selectDockTrayApps, type AppInfo, type TrayApp } from ".
 import { binDoubleClickAction, removeCustomFolder, type DockExtra } from "./dockExtras";
 import { DockIconImage } from "./dockIcon";
 import { progressByItem, type ShownProgress, type WindowProgress } from "./dockProgress";
+import { DownloadPanel } from "./components/DownloadPanel";
 import { fetchJumpList, hasJumpList, openJumpItem, type JumpGroup } from "./jumpList";
 
 // Host processes (Edge/Chrome/Brave/ApplicationFrameHost) run every PWA/UWP
@@ -1713,6 +1714,13 @@ const Dock = memo(function Dock() {
 																		</div>
 																	))}
 																</div>
+																{progressOf.has(itemKey(app)) && (
+																	<DownloadPanel
+																		hwnd={progressOf.get(itemKey(app))!.hwnd}
+																		progress={progressOf.get(itemKey(app))!}
+																		onLayout={() => reportDockRect.current()}
+																	/>
+																)}
 															</motion.div>
 														)}
 												</AnimatePresence>
@@ -1886,6 +1894,13 @@ const Dock = memo(function Dock() {
 																</div>
 															))}
 														</div>
+														{progressOf.has(itemKey(app)) && (
+															<DownloadPanel
+																hwnd={progressOf.get(itemKey(app))!.hwnd}
+																progress={progressOf.get(itemKey(app))!}
+																onLayout={() => reportDockRect.current()}
+															/>
+														)}
 													</motion.div>
 												)}
 										</AnimatePresence>

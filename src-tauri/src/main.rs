@@ -11,6 +11,7 @@ mod commands;
 mod data_folders;
 mod desktop_menu;
 mod dock_extras;
+mod download_details;
 mod foreground;
 mod ghelper;
 mod ghelper_toast;
@@ -356,6 +357,7 @@ fn main() {
             window_memory::window_memory_set_main,
             window_memory::window_memory_forget_app,
             startup_timing::startup_mark,
+            download_details::download_details,
             quick_settings::quick_settings_state,
             quick_settings::quick_setting_action,
             notifications::notifications_status,

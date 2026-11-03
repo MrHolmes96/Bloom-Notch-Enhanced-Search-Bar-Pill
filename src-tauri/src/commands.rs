@@ -3247,6 +3247,53 @@ pub(crate) fn app_display_name(exe_path: &str, aumid: Option<&str>) -> String {
         .unwrap_or_else(|| unsafe { friendly_process_name(exe_path) })
 }
 
+/// Label for an app window's process: as `app_display_name`, but a helper
+/// program with no name of its own in the Start menu takes the name of the
+/// program that started it from the same install ("Steam" for Steam's
+/// `steamwebhelper.exe`, started by `steam.exe`, rather than its own
+/// description, "Steam Client WebHelper").
+pub(crate) fn app_display_name_of_process(exe_path: &str, aumid: Option<&str>, pid: u32) -> String {
+    aumid
+        .filter(|id| id.contains('!'))
+        .and_then(installed_app_name)
+        .or_else(|| installed_app_name(exe_path))
+        .or_else(|| starter_name(pid, exe_path))
+        .unwrap_or_else(|| unsafe { friendly_process_name(exe_path) })
+}
+
+/// The name of the program that started `pid` from the same install (its
+/// Start menu name, else its description), walking up to four starters.
+/// Cached per process.
+fn starter_name(pid: u32, exe_path: &str) -> Option<String> {
+    /// By process: its program, and the name found.
+    type Names = HashMap<u32, (String, Option<String>)>;
+    static CACHE: std::sync::Mutex<Option<Names>> = std::sync::Mutex::new(None);
+    if let Ok(cache) = CACHE.lock() {
+        if let Some((path, name)) = cache.as_ref().and_then(|c| c.get(&pid)) {
+            if path.eq_ignore_ascii_case(exe_path) {
+                return name.clone();
+            }
+        }
+    }
+    let starters = unsafe { crate::taskbar_progress::starters(pid) };
+    let name = starters
+        .iter()
+        .find_map(|path| installed_app_name(path))
+        .or_else(|| {
+            starters
+                .last()
+                .map(|path| unsafe { friendly_process_name(path) })
+        });
+    if let Ok(mut cache) = CACHE.lock() {
+        let cache = cache.get_or_insert_with(HashMap::new);
+        if cache.len() > 512 {
+            cache.clear();
+        }
+        cache.insert(pid, (exe_path.to_string(), name.clone()));
+    }
+    name
+}
+
 /// Friendly name for an executable: the shell's `FileDescription` from version
 /// info ("Google Chrome"), falling back to the prettified file stem. Results are
 /// cached by path because the mixer polls while it is open.

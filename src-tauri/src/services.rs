@@ -4527,7 +4527,11 @@ pub unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> B
                     } else {
                         // The Start menu name ("WhatsApp", "LocalSend") rather than
                         // the executable's ("WhatsApp.Root", "localsend_app").
-                        crate::commands::app_display_name(&path, window_aumid.as_deref())
+                        crate::commands::app_display_name_of_process(
+                            &path,
+                            window_aumid.as_deref(),
+                            process_id,
+                        )
                     };
 
                     // Only avoid adding the exact same window handle (HWND) multiple times

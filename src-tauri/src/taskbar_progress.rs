@@ -94,6 +94,8 @@ struct Entry {
     second_stage: bool,
     /// The last tenth of the way logged, to log a run's course briefly.
     logged_tenth: i32,
+    /// The value over the last minute (this stage), for the time left.
+    samples: std::collections::VecDeque<(std::time::Instant, f64)>,
 }
 
 /// Full and still shown this long: the app is on to a second stage.
@@ -269,6 +271,40 @@ unsafe fn processes() -> Vec<(u32, u32)> {
     pairs
 }
 
+/// The programs that started `pid` from the same install, nearest first
+/// (for Steam's `steamwebhelper.exe`: `steam.exe`); none for a program
+/// started from elsewhere.
+pub(crate) unsafe fn starters(pid: u32) -> Vec<String> {
+    let Some(mut last) = crate::commands::any_process_path(pid) else {
+        return Vec::new();
+    };
+    let pairs = processes();
+    let mut found = Vec::new();
+    let mut at = pid;
+    for _ in 0..4 {
+        let Some(&(_, parent)) = pairs.iter().find(|(p, _)| *p == at) else {
+            break;
+        };
+        if parent == 0 || parent == at {
+            break;
+        }
+        let Some(path) = crate::commands::any_process_path(parent) else {
+            break;
+        };
+        if !same_install(&last, &path) {
+            break;
+        }
+        if !path.eq_ignore_ascii_case(&last)
+            && !found.iter().any(|p: &String| p.eq_ignore_ascii_case(&path))
+        {
+            found.push(path.clone());
+        }
+        last = path;
+        at = parent;
+    }
+    found
+}
+
 /// A game a launcher started from its own library (Steam keeps games inside
 /// its folder, in `steamapps`): the game's own app, not part of the launcher.
 fn is_library_game(path: &str) -> bool {
@@ -371,6 +407,7 @@ unsafe fn new_entry(hwnd: isize, state: u32, value: Option<f64>) -> Entry {
         full_since: None,
         second_stage: false,
         logged_tenth: -1,
+        samples: std::collections::VecDeque::new(),
     }
 }
 
@@ -404,6 +441,7 @@ unsafe fn record_value(hwnd: isize, value: f64) -> bool {
             // install, then the next download in the queue, and so on).
             entry.full_since = None;
             entry.second_stage = !entry.second_stage;
+            entry.samples.clear();
             redraw = true;
             note(&format!(
                 "window={hwnd:#x}: started over at {:.0}% after 100% ({})",
@@ -427,6 +465,21 @@ unsafe fn record_value(hwnd: isize, value: f64) -> bool {
                     "first stage"
                 }
             ));
+        }
+        let now = std::time::Instant::now();
+        if entry
+            .samples
+            .back()
+            .is_none_or(|(at, _)| now.duration_since(*at).as_millis() >= 500)
+        {
+            entry.samples.push_back((now, value));
+            while entry
+                .samples
+                .front()
+                .is_some_and(|(at, _)| now.duration_since(*at).as_secs() > 60)
+            {
+                entry.samples.pop_front();
+            }
         }
         entry.state = state;
         entry.value = Some(value);
@@ -492,6 +545,55 @@ pub fn snapshot() -> Vec<Progress> {
             }
         })
         .collect()
+}
+
+/// Seconds left at the pace of the last minute (at least 5 s of it), or
+/// none when it isn't moving forward.
+fn time_left(samples: &std::collections::VecDeque<(std::time::Instant, f64)>) -> Option<f64> {
+    let (last_at, last) = *samples.back()?;
+    let pace = pace(samples)?;
+    // Counted from now: the time since the last value is already spent.
+    let left = (1.0 - last) / pace - last_at.elapsed().as_secs_f64();
+    Some(left.max(1.0))
+}
+
+/// How fast the value moves (of the whole per second) over the last 20 s
+/// (at least 5 s of it), or none when it isn't moving forward.
+fn pace(samples: &std::collections::VecDeque<(std::time::Instant, f64)>) -> Option<f64> {
+    let (last_at, last) = *samples.back()?;
+    let (first_at, first) = *samples
+        .iter()
+        .find(|(at, _)| last_at.duration_since(*at).as_secs_f64() <= 20.0)?;
+    let span = last_at.duration_since(first_at).as_secs_f64();
+    // Stalled for a while: nothing moving now.
+    if span < 5.0 || last <= first || last >= 0.999 || last_at.elapsed().as_secs() > 15 {
+        return None;
+    }
+    Some((last - first) / span)
+}
+
+/// One window's progress for the dock's download panel.
+pub(crate) struct Detail {
+    pub programs: Vec<String>,
+    pub state: &'static str,
+    pub value: Option<f64>,
+    pub time_left: Option<f64>,
+    /// Of the whole per second.
+    pub pace: Option<f64>,
+}
+
+/// The progress shown for `hwnd`, for the dock's download panel.
+pub(crate) fn detail(hwnd: isize) -> Option<Detail> {
+    let entries = ENTRIES.lock().ok()?;
+    let entry = entries.iter().find(|e| e.hwnd == hwnd)?;
+    let (state, value) = shown(entry);
+    Some(Detail {
+        programs: entry.programs.clone(),
+        state,
+        value,
+        time_left: time_left(&entry.samples),
+        pace: pace(&entry.samples),
+    })
 }
 
 /// What the dock draws for an entry: its own state, or the second stage
@@ -880,6 +982,7 @@ mod tests {
             full_since: None,
             second_stage: false,
             logged_tenth: -1,
+            samples: std::collections::VecDeque::new(),
         }
     }
 

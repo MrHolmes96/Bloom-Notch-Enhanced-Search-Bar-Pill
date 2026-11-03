@@ -24,6 +24,8 @@ export interface WindowProgress {
 }
 
 export interface ShownProgress {
+	/** The window reporting it (for the download panel's details). */
+	hwnd: number;
 	state: ProgressState;
 	/** From 0 to 1; null while indeterminate, or installing with no amount known. */
 	value: number | null;
@@ -86,10 +88,14 @@ export function pickProgress(list: WindowProgress[]): ShownProgress | null {
 		if (a < b || (a === b && (p.value ?? 1) < (best.value ?? 1))) best = p;
 	}
 	if (!best) return null;
-	if (best.state === "indeterminate") return { state: best.state, value: null };
-	if (best.state === "installing") return { state: best.state, value: best.value };
+	if (best.state === "indeterminate") return { hwnd: best.hwnd, state: best.state, value: null };
+	if (best.state === "installing") return { hwnd: best.hwnd, state: best.state, value: best.value };
 	// Paused or failed before any value: Windows fills the bar; normal starts empty.
-	return { state: best.state, value: best.value ?? (best.state === "normal" ? 0 : 1) };
+	return {
+		hwnd: best.hwnd,
+		state: best.state,
+		value: best.value ?? (best.state === "normal" ? 0 : 1)
+	};
 }
 
 /**
