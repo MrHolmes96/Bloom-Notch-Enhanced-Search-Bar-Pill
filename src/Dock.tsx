@@ -344,6 +344,7 @@ const Dock = memo(function Dock() {
 				const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
 				const visible = await getCurrentWebviewWindow().isVisible();
 				if (visible) {
+					void invoke("startup_mark", { what: "the dock's entrance starts" }).catch(() => {});
 					setStartupAnimating(true);
 					setIsReady(true);
 					setTimeout(() => setIsImpacted(true), 280);

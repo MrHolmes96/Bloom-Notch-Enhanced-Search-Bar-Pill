@@ -192,7 +192,7 @@ export function IntegrationsTab({ openTab }: { openTab: (tab: string) => void })
 				<AppRow
 					icon={LayoutGrid}
 					name="Portals"
-					desc="Bloom starts Portals as administrator after you sign in"
+					desc="Starts as administrator as you sign in, its loading pop-up out of sight"
 					connection={portalsConnection}
 					open={() => openTab("integrations/portals")}
 					last

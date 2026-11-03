@@ -19,6 +19,8 @@ export interface PortalsStatus {
 	task_ready: boolean;
 	/** Other scheduled tasks that start Portals at sign-in, still on. */
 	other_tasks: string[];
+	/** Windows starts Bloom's task itself as you sign in (the current kind). */
+	starts_at_sign_in: boolean;
 }
 
 /** Portals' state and switching Bloom starting it on or off. */
@@ -103,10 +105,17 @@ export function PortalsSettings() {
 				desc: "Portals would start without administrator rights until it is",
 				button: { text: "Set up now", run: () => void setUp(true) }
 			};
+		if (!status.starts_at_sign_in)
+			return {
+				icon: TriangleAlert,
+				label: "Set Up the Older Way",
+				desc: "Portals starts only once Bloom is up. Updated, Windows starts it as you sign in, alongside Bloom",
+				button: { text: "Update", run: () => void setUp(true) }
+			};
 		return {
 			icon: CircleCheck,
 			label: "Set Up",
-			desc: "Bloom starts Portals as administrator a few seconds after you sign in",
+			desc: "Windows starts Portals as administrator as you sign in, alongside Bloom",
 			button: null
 		};
 	})();
@@ -120,7 +129,7 @@ export function PortalsSettings() {
 				<SettingRow
 					icon={Power}
 					label="Start Portals with Bloom"
-					desc="As administrator, after you sign in, with its loading pop-up kept out of sight. Windows asks for permission once"
+					desc="As administrator, as you sign in, with its loading pop-up kept out of sight. Windows asks for permission once"
 					divider={!!statusRow}
 				>
 					<label className="toggle-switch">

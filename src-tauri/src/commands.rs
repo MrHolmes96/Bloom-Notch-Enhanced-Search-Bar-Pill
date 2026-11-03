@@ -59,6 +59,7 @@ pub async fn set_notch_hovered(app: AppHandle, hovered: bool) {
 #[tauri::command]
 pub async fn dock_page_ready() {
     DOCK_PAGE_READY.store(true, Ordering::Relaxed);
+    crate::startup_timing::mark("the dock's page is ready");
 }
 
 #[tauri::command]
@@ -290,6 +291,7 @@ pub async fn init_dock(app: AppHandle, mode: String) {
         if dock_win.show().is_err() {
             return;
         }
+        crate::startup_timing::mark("the dock is on screen");
         if let Ok(hwnd) = dock_win.hwnd() {
             re_assert_topmost(hwnd);
         }
@@ -572,6 +574,7 @@ pub async fn change_dock_mode(app: AppHandle, mode: String) {
 
 #[tauri::command]
 pub async fn change_notch_mode(app: AppHandle, mode: String) {
+    crate::startup_timing::mark("the notch's page asks to be shown");
     if let Some(main_win) = app.get_webview_window("main") {
         if mode == "fixed" {
             crate::services::apply_main_appbar_mode(&app, true);

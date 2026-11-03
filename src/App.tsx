@@ -880,6 +880,9 @@ function App() {
 					const win = getCurrentWebviewWindow();
 					const visible = await win.isVisible();
 					if (visible) {
+						void invoke("startup_mark", {
+							what: "the notch is on screen (its entrance starts)"
+						}).catch(() => {});
 						setStartupAnimating(true);
 						setIsReady(true);
 						// The window is shown here; WebView2 may only create its
@@ -1119,9 +1122,17 @@ function App() {
 	useEffect(() => {
 		if (!windowLabel) return;
 
+		if (windowLabel === "main") {
+			void invoke("startup_mark", { what: "the notch's page is running" }).catch(() => {});
+		}
 		invoke("load_settings")
 			.then(async (settings: any) => {
 				if (await reloadIfMirrorWasStale(settings)) return;
+				if (windowLabel === "main") {
+					void invoke("startup_mark", { what: "the notch's page has read the settings" }).catch(
+						() => {}
+					);
+				}
 				const getVal = (key: string, fallback: string | null = null) => {
 					const val = settings[key];
 					if (val !== undefined && val !== null) return String(val);

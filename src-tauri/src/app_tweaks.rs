@@ -128,6 +128,7 @@ unsafe extern "system" fn on_event(
         if hwnd.0 as isize == following {
             stop_following();
             log("Portals closed its loading pop-up");
+            crate::startup_timing::mark("Portals closed its loading pop-up (Portals is ready)");
             SPLASH_CLOSED.store(true, Ordering::Relaxed);
         }
         return;
@@ -411,67 +412,28 @@ fn portals_running() -> bool {
     }
 }
 
-/// Reads Portals' program files once, so Windows has them in memory and
-/// Portals starts as quickly as when started by hand (at most 600 MB).
-fn warm_up(dir: &std::path::Path) {
-    use std::io::Read;
-    let mut budget: u64 = 600 * 1024 * 1024;
-    let mut folders = vec![dir.to_path_buf()];
-    let mut buffer = vec![0u8; 1 << 20];
-    while let Some(folder) = folders.pop() {
-        let Ok(entries) = std::fs::read_dir(&folder) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            if kind.is_dir() {
-                folders.push(path);
-                continue;
-            }
-            let Ok(mut file) = std::fs::File::open(&path) else {
-                continue;
-            };
-            while let Ok(read) = file.read(&mut buffer) {
-                if read == 0 {
-                    break;
-                }
-                budget = budget.saturating_sub(read as u64);
-                if budget == 0 {
-                    return;
-                }
-            }
-        }
-    }
+/// Whether "Start Portals with Bloom" is on, read straight from
+/// settings.json (this runs before Bloom's settings are loaded).
+fn start_portals_on() -> bool {
+    crate::utils::data_file("settings.json")
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| {
+            v.get(START_PORTALS_KEY)
+                .and_then(|v| v.as_str())
+                .map(|v| v == "true")
+        })
+        .unwrap_or(false)
 }
 
-/// How busy the processor is now (0–100), measured over `over`.
-fn processor_busy(over: std::time::Duration) -> Option<f64> {
-    use windows::Win32::Foundation::FILETIME;
-    use windows::Win32::System::Threading::GetSystemTimes;
-    let read = || unsafe {
-        let (mut idle, mut kernel, mut user) = (
-            FILETIME::default(),
-            FILETIME::default(),
-            FILETIME::default(),
-        );
-        GetSystemTimes(Some(&mut idle), Some(&mut kernel), Some(&mut user)).ok()?;
-        let n = |t: FILETIME| ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64;
-        Some((n(idle), n(kernel) + n(user)))
-    };
-    let (idle_a, total_a) = read()?;
-    std::thread::sleep(over);
-    let (idle_b, total_b) = read()?;
-    let total = total_b.saturating_sub(total_a) as f64;
-    (total > 0.0).then(|| 100.0 * (1.0 - idle_b.saturating_sub(idle_a) as f64 / total))
-}
-
-/// After sign-in (Bloom started by its startup task): starts Portals when
-/// the user chose that, it isn't running yet and doesn't start itself.
-pub fn start_portals_after_sign_in(app: &tauri::AppHandle) {
-    if crate::utils::get_setting_str(app, START_PORTALS_KEY).as_deref() != Some("true") {
+/// At sign-in, the first thing Bloom does (before its own windows): makes
+/// sure Portals starts as administrator, at once. Bloom's task starts it by
+/// itself as Windows signs in, alongside Bloom; while that task is still the
+/// older kind (run by Bloom, set up again with one permission prompt), Bloom
+/// runs it now. Nothing waits for the processor or reads Portals' files
+/// first. Each step goes into startup-timing.log.
+pub fn start_portals_after_sign_in() {
+    if !start_portals_on() {
         return;
     }
     let _ = std::thread::Builder::new()
@@ -490,68 +452,66 @@ pub fn start_portals_after_sign_in(app: &tauri::AppHandle) {
                 while since.elapsed() < std::time::Duration::from_secs(20) {
                     if portals_running() {
                         log("Portals started by itself");
+                        crate::startup_timing::mark("Portals is running (started by itself)");
                         return;
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    std::thread::sleep(std::time::Duration::from_millis(250));
                 }
                 log("Portals didn't start by itself in 20 s: Bloom starts it");
             }
             if portals_running() {
-                log("Starting Portals: it was running already (started by itself, before Bloom)");
+                log("Starting Portals: it was running already");
+                crate::startup_timing::mark("Portals was already running when Bloom started");
                 return;
             }
-            if let Some(dir) = exe.parent() {
-                warm_up(dir);
-            }
-            let warmed = started.elapsed();
-            // Settled: the processor mostly free for a second, at most 12 s
-            // after Bloom started.
-            let mut calm = 0;
-            while started.elapsed() < std::time::Duration::from_secs(12) {
-                match processor_busy(std::time::Duration::from_millis(250)) {
-                    Some(busy) if busy < 40.0 => calm += 1,
-                    Some(_) => calm = 0,
-                    None => break,
-                }
-                if calm >= 4 {
-                    break;
-                }
-            }
-            if portals_running() {
-                return;
-            }
-            // As administrator, through Bloom's task (as Portals ran before);
-            // without the task (not set up yet), the usual way.
-            let how = match run_portals_task() {
-                Ok(()) => "as administrator (Bloom's task)".to_string(),
-                Err(why) => {
-                    let result = std::process::Command::new(&exe)
-                        .current_dir(exe.parent().unwrap_or(std::path::Path::new(".")))
-                        .spawn();
-                    match result {
-                        Ok(_) => format!("NOT as administrator ({why})"),
-                        Err(e) => format!("couldn't start it at all ({why}; {e})"),
+            let run = |why: &str| {
+                let how = match run_portals_task() {
+                    Ok(()) => "as administrator (Bloom's task)".to_string(),
+                    Err(e) => {
+                        let result = std::process::Command::new(&exe)
+                            .current_dir(exe.parent().unwrap_or(std::path::Path::new(".")))
+                            .spawn();
+                        match result {
+                            Ok(_) => format!("NOT as administrator ({e})"),
+                            Err(e2) => format!("couldn't start it at all ({e}; {e2})"),
+                        }
                     }
-                }
+                };
+                log(&format!(
+                    "Starting Portals {:.1} s after Bloom started ({why}): {how}",
+                    started.elapsed().as_secs_f64()
+                ));
+                crate::startup_timing::mark(&format!("Bloom started Portals: {how}"));
             };
-            log(&format!(
-                "Starting Portals {:.1} s after Bloom (its files read in {:.1} s): {how}",
-                started.elapsed().as_secs_f64(),
-                warmed.as_secs_f64(),
-            ));
+            let at_sign_in = task_starts_at_sign_in();
+            if at_sign_in {
+                log("Starting Portals: Bloom's task starts it by itself at sign-in");
+            } else {
+                run("Bloom's task is the older kind, run by Bloom");
+            }
             // Only said to have started once it runs.
-            let asked = std::time::Instant::now();
-            while asked.elapsed() < std::time::Duration::from_secs(20) {
+            let mut ran_again = false;
+            while started.elapsed() < std::time::Duration::from_secs(40) {
                 if portals_running() {
                     log(&format!(
-                        "Portals is running ({:.1} s after Bloom)",
+                        "Portals is running ({:.1} s after Bloom started)",
                         started.elapsed().as_secs_f64()
                     ));
+                    crate::startup_timing::mark("Portals is running");
                     return;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(250));
+                // The task's own start didn't happen (or failed): run it.
+                if at_sign_in
+                    && !ran_again
+                    && started.elapsed() > std::time::Duration::from_secs(10)
+                {
+                    ran_again = true;
+                    run("its task hadn't started it 10 s after Bloom");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
-            log("Portals did NOT start within 20 s");
+            log("Portals did NOT start within 40 s");
+            crate::startup_timing::mark("Portals did NOT start within 40 s");
         });
 }
 
@@ -676,19 +636,29 @@ pub fn launch_portals_as_admin() -> bool {
         log("Launcher: Portals isn't installed where Bloom looks");
         return false;
     };
+    crate::startup_timing::begin("Portals launcher (Bloom's task, as administrator)");
+    // Normal priority, for this launcher and so for Portals: a task Bloom set
+    // up before ran below normal (Task Scheduler's default).
+    set_normal_priority(None);
     start();
     // The hooks are in place before Portals makes its pop-up.
     std::thread::sleep(std::time::Duration::from_millis(150));
     let started = std::process::Command::new(&exe)
         .current_dir(exe.parent().unwrap_or(std::path::Path::new(".")))
         .spawn();
-    if let Err(e) = started {
-        log(&format!(
-            "Launcher: couldn't start Portals as administrator: {e}"
-        ));
-        return false;
-    }
+    let child = match started {
+        Ok(child) => child,
+        Err(e) => {
+            log(&format!(
+                "Launcher: couldn't start Portals as administrator: {e}"
+            ));
+            crate::startup_timing::mark("couldn't start Portals");
+            return false;
+        }
+    };
+    set_normal_priority(Some(child.id()));
     log("Launcher: started Portals as administrator");
+    crate::startup_timing::mark("Portals started (as administrator, normal priority)");
     let since = std::time::Instant::now();
     while since.elapsed() < std::time::Duration::from_secs(30)
         && !SPLASH_CLOSED.load(Ordering::Relaxed)
@@ -696,6 +666,28 @@ pub fn launch_portals_as_admin() -> bool {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     true
+}
+
+/// Normal priority for this process (`None`) or another one.
+fn set_normal_priority(pid: Option<u32>) {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, SetPriorityClass, NORMAL_PRIORITY_CLASS,
+        PROCESS_SET_INFORMATION,
+    };
+    unsafe {
+        match pid {
+            None => {
+                let _ = SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+            }
+            Some(pid) => {
+                if let Ok(process) = OpenProcess(PROCESS_SET_INFORMATION, false, pid) {
+                    let _ = SetPriorityClass(process, NORMAL_PRIORITY_CLASS);
+                    let _ = CloseHandle(process);
+                }
+            }
+        }
+    }
 }
 
 unsafe fn task_service() -> Result<windows::Win32::System::TaskScheduler::ITaskService, String> {
@@ -725,6 +717,43 @@ fn portals_task_ready() -> bool {
                     .map_err(|e| e.to_string())
             })
             .is_ok()
+    }
+}
+
+/// Whether Bloom's task is the current kind: started by Windows itself at
+/// sign-in (alongside Bloom, not after it) and at normal priority (Task
+/// Scheduler's default runs it, and so Portals, below normal).
+fn task_starts_at_sign_in() -> bool {
+    use windows::Win32::System::TaskScheduler::{TASK_TRIGGER_LOGON, TASK_TRIGGER_TYPE2};
+    unsafe {
+        let Ok(service) = task_service() else {
+            return false;
+        };
+        let Ok(definition) = service
+            .GetFolder(&windows::core::BSTR::from("\\"))
+            .and_then(|root| root.GetTask(&windows::core::BSTR::from(PORTALS_TASK)))
+            .and_then(|task| task.Definition())
+        else {
+            return false;
+        };
+        let mut priority = 7;
+        let _ = definition
+            .Settings()
+            .and_then(|s| s.Priority(&mut priority));
+        let mut at_logon = false;
+        if let Ok(triggers) = definition.Triggers() {
+            let mut count = 0;
+            let _ = triggers.Count(&mut count);
+            for i in 1..=count {
+                let mut kind = TASK_TRIGGER_TYPE2(0);
+                if triggers.get_Item(i).and_then(|t| t.Type(&mut kind)).is_ok()
+                    && kind == TASK_TRIGGER_LOGON
+                {
+                    at_logon = true;
+                }
+            }
+        }
+        at_logon && priority <= 4
     }
 }
 
@@ -772,8 +801,9 @@ unsafe fn set_up(on: bool) -> Result<(), String> {
     use windows::core::{Interface, BSTR};
     use windows::Win32::Foundation::{VARIANT_FALSE, VARIANT_TRUE};
     use windows::Win32::System::TaskScheduler::{
-        IExecAction, TASK_ACTION_EXEC, TASK_CREATE_OR_UPDATE, TASK_INSTANCES_IGNORE_NEW,
-        TASK_LOGON_INTERACTIVE_TOKEN, TASK_RUNLEVEL_HIGHEST,
+        IExecAction, ILogonTrigger, TASK_ACTION_EXEC, TASK_CREATE_OR_UPDATE,
+        TASK_INSTANCES_IGNORE_NEW, TASK_LOGON_INTERACTIVE_TOKEN, TASK_RUNLEVEL_HIGHEST,
+        TASK_TRIGGER_LOGON,
     };
     use windows::Win32::System::Variant::VARIANT;
     let service = task_service()?;
@@ -789,7 +819,7 @@ unsafe fn set_up(on: bool) -> Result<(), String> {
         task.RegistrationInfo()
             .and_then(|info| {
                 info.SetDescription(&BSTR::from(
-                    "Bloom: starts Portals as administrator once Bloom is on screen after sign-in (Settings > Integrations > Portals)",
+                    "Bloom: starts Portals as administrator as you sign in, keeping its loading pop-up out of sight (Settings > Integrations > Portals)",
                 ))
             })
             .map_err(|e| format!("description: {e}"))?;
@@ -806,7 +836,20 @@ unsafe fn set_up(on: bool) -> Result<(), String> {
             .and_then(|_| settings.SetAllowDemandStart(VARIANT_TRUE))
             .and_then(|_| settings.SetExecutionTimeLimit(&BSTR::from("PT0S")))
             .and_then(|_| settings.SetMultipleInstances(TASK_INSTANCES_IGNORE_NEW))
+            // Normal priority: Task Scheduler's default (7) is below normal,
+            // and Portals would inherit it.
+            .and_then(|_| settings.SetPriority(4))
             .map_err(|e| format!("settings: {e}"))?;
+        // Started by Windows itself as this account signs in, at the same
+        // time as Bloom (not after it), as your own task for Portals did.
+        let trigger: ILogonTrigger = task
+            .Triggers()
+            .and_then(|triggers| triggers.Create(TASK_TRIGGER_LOGON))
+            .and_then(|trigger| trigger.cast())
+            .map_err(|e| format!("sign-in trigger: {e}"))?;
+        trigger
+            .SetUserId(&BSTR::from(sid.as_str()))
+            .map_err(|e| format!("sign-in trigger: {e}"))?;
         let action: IExecAction = task
             .Actions()
             .and_then(|actions| actions.Create(TASK_ACTION_EXEC))
@@ -947,10 +990,21 @@ pub fn set_up_portals_if_needed(app: &tauri::AppHandle) {
     let _ = std::thread::Builder::new()
         .name("bloom-portals-setup".into())
         .spawn(|| {
-            let Some(marker) = crate::utils::data_file("portals-setup-asked.txt") else {
+            if portals_exe().is_none() {
+                return;
+            }
+            // Asked once to set it up, and once more to bring an older task
+            // up to date (started by Windows at sign-in, normal priority).
+            let ready = portals_task_ready();
+            let name = if ready {
+                "portals-setup-sign-in-asked.txt"
+            } else {
+                "portals-setup-asked.txt"
+            };
+            let Some(marker) = crate::utils::data_file(name) else {
                 return;
             };
-            if marker.exists() || portals_exe().is_none() || portals_task_ready() {
+            if marker.exists() || (ready && task_starts_at_sign_in()) {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_secs(5));
@@ -985,6 +1039,9 @@ pub struct PortalsStatus {
     task_problem: Option<String>,
     /// Bloom's task to start it as administrator is set up.
     task_ready: bool,
+    /// And of the current kind: Windows starts it as you sign in, at normal
+    /// priority (an older one is run by Bloom once Bloom is up).
+    starts_at_sign_in: bool,
     /// Other scheduled tasks that start Portals at sign-in, still on.
     other_tasks: Vec<String>,
 }
@@ -996,6 +1053,7 @@ pub async fn portals_status() -> PortalsStatus {
         starts_itself: portals_starts_itself(),
         task_problem: TASK_PROBLEM.lock().ok().and_then(|p| p.clone()),
         task_ready: portals_task_ready(),
+        starts_at_sign_in: task_starts_at_sign_in(),
         other_tasks: unsafe {
             task_service()
                 .map(|service| {
@@ -1019,6 +1077,7 @@ pub async fn portals_status() -> PortalsStatus {
         starts_itself: false,
         task_problem: None,
         task_ready: false,
+        starts_at_sign_in: false,
         other_tasks: Vec::new(),
     })
 }

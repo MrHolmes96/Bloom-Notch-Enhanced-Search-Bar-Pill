@@ -33,6 +33,7 @@ mod shelf_preview;
 mod shell_probe;
 mod snap_borders;
 mod startup;
+mod startup_timing;
 mod state;
 mod taskbar_progress;
 mod toast;
@@ -172,8 +173,15 @@ fn main() {
     // before anything opens them.
     data_folders::move_old_data();
 
+    startup_timing::begin(if autostart {
+        "Bloom, started by its startup task"
+    } else {
+        "Bloom, started by hand or by its installer"
+    });
     if autostart {
         startup::boost_startup();
+        // Before Bloom's own windows: Portals starts alongside, not after.
+        app_tweaks::start_portals_after_sign_in();
     }
 
     brightness::setup_worker();
@@ -347,6 +355,7 @@ fn main() {
             window_memory::window_memory_set_mode,
             window_memory::window_memory_set_main,
             window_memory::window_memory_forget_app,
+            startup_timing::startup_mark,
             quick_settings::quick_settings_state,
             quick_settings::quick_setting_action,
             notifications::notifications_status,
@@ -403,6 +412,7 @@ fn main() {
             bluetooth::bluetooth_unpair
         ])
         .setup(move |app| {
+            startup_timing::mark("Bloom's windows made; setting up");
             init_taskbar_marker(app.handle());
             // Populate the settings cache before anything else: a webview can
             // invoke save_setting as soon as it loads, which happens before the
@@ -555,12 +565,10 @@ fn main() {
             if !autostart {
                 app_tweaks::set_up_portals_if_needed(app.handle());
             }
-            if autostart {
-                app_tweaks::start_portals_after_sign_in(app.handle());
-            }
             setup_taskbar_hook();
             setup_audio_visualization(app.handle().clone());
             setup_settings_watcher(app.handle().clone());
+            startup_timing::mark("Bloom's setup done (its pages load now)");
             wifi::setup_wifi_notifications(app.handle().clone());
             bluetooth::setup_bluetooth_notifications(app.handle().clone());
             bluetooth::start_battery_monitor(app.handle().clone());
