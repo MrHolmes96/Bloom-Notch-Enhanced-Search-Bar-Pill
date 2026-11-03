@@ -85,7 +85,19 @@ struct Entry {
     value: Option<f64>,
     /// The value the dock last heard of.
     announced: Option<f64>,
+    /// When the value reached full and stayed there (the app still showing
+    /// progress): Steam has downloaded a game and is installing it.
+    full_since: Option<std::time::Instant>,
+    /// A second stage: after reaching full the value started over (Steam
+    /// reporting its install after its download); starting over again goes
+    /// back to a first stage (the next download).
+    second_stage: bool,
+    /// The last tenth of the way logged, to log a run's course briefly.
+    logged_tenth: i32,
 }
+
+/// Full and still shown this long: the app is on to a second stage.
+const SECOND_STAGE_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// One window's progress, as the dock draws it.
 #[derive(Clone, Serialize)]
@@ -97,7 +109,9 @@ pub struct Progress {
     pub programs: Vec<String>,
     /// The app's other top-level windows (all processes of its install).
     pub windows: Vec<isize>,
-    /// "normal", "indeterminate", "paused" or "error".
+    /// "normal", "indeterminate", "paused", "error", or "installing": a
+    /// second stage after the value reached full (Steam installing what it
+    /// downloaded), its own value when the app reports one, else none.
     pub state: &'static str,
     /// From 0 to 1; none while indeterminate before any value was given.
     pub value: Option<f64>,
@@ -354,6 +368,9 @@ unsafe fn new_entry(hwnd: isize, state: u32, value: Option<f64>) -> Entry {
         state,
         value,
         announced: None,
+        full_since: None,
+        second_stage: false,
+        logged_tenth: -1,
     }
 }
 
@@ -369,10 +386,48 @@ unsafe fn record_value(hwnd: isize, value: f64) -> bool {
             TBPF_ERROR | TBPF_PAUSED => entry.state,
             _ => TBPF_NORMAL,
         };
-        let redraw = state != entry.state
+        let mut redraw = state != entry.state
             || entry.announced.is_none_or(|shown| {
                 (shown - value).abs() >= STEP || (value >= 1.0) != (shown >= 1.0)
             });
+        let full = value >= 0.999;
+        if full && entry.full_since.is_none() {
+            entry.full_since = Some(std::time::Instant::now());
+            note(&format!("window={hwnd:#x}: reached 100%"));
+            // Still shown a moment from now: drawn as the second stage then.
+            std::thread::spawn(|| {
+                std::thread::sleep(SECOND_STAGE_AFTER + std::time::Duration::from_millis(100));
+                queue(Work::Announce);
+            });
+        } else if !full && entry.full_since.is_some() {
+            // Started over after reaching full: the next stage (a download's
+            // install, then the next download in the queue, and so on).
+            entry.full_since = None;
+            entry.second_stage = !entry.second_stage;
+            redraw = true;
+            note(&format!(
+                "window={hwnd:#x}: started over at {:.0}% after 100% ({})",
+                value * 100.0,
+                if entry.second_stage {
+                    "second stage, shown green"
+                } else {
+                    "a new first stage"
+                }
+            ));
+        }
+        let tenth = (value * 10.0).floor() as i32;
+        if tenth != entry.logged_tenth {
+            entry.logged_tenth = tenth;
+            note(&format!(
+                "window={hwnd:#x}: {:.0}% ({})",
+                value * 100.0,
+                if entry.second_stage {
+                    "second stage"
+                } else {
+                    "first stage"
+                }
+            ));
+        }
         entry.state = state;
         entry.value = Some(value);
         return redraw;
@@ -389,6 +444,7 @@ unsafe fn record_state(hwnd: isize, state: u32) -> bool {
     let index = entries.iter().position(|e| e.hwnd == hwnd);
     match (index, state) {
         (Some(index), TBPF_NOPROGRESS) => {
+            note(&format!("window={hwnd:#x}: progress cleared"));
             entries.remove(index);
             true
         }
@@ -396,6 +452,9 @@ unsafe fn record_state(hwnd: isize, state: u32) -> bool {
         (Some(index), state) => {
             let entry = &mut entries[index];
             let redraw = entry.state != state;
+            if redraw {
+                note(&format!("window={hwnd:#x}: {}", state_name(state)));
+            }
             entry.state = state;
             redraw
         }
@@ -422,16 +481,35 @@ pub fn snapshot() -> Vec<Progress> {
         .zip(windows)
         .map(|(entry, windows)| {
             entry.announced = entry.value;
+            let (state, value) = shown(entry);
             Progress {
                 hwnd: entry.hwnd,
                 owner: entry.owner,
                 programs: entry.programs.clone(),
                 windows,
-                state: state_name(entry.state),
-                value: entry.value,
+                state,
+                value,
             }
         })
         .collect()
+}
+
+/// What the dock draws for an entry: its own state, or the second stage
+/// (green) once it started over after full, or once it has sat at full,
+/// still shown, for a moment (with no amount: a stretch sweeping along).
+fn shown(entry: &Entry) -> (&'static str, Option<f64>) {
+    let running = matches!(entry.state, TBPF_NORMAL | TBPF_INDETERMINATE);
+    if running && entry.second_stage {
+        return ("installing", entry.value);
+    }
+    if running
+        && entry
+            .full_since
+            .is_some_and(|since| since.elapsed() >= SECOND_STAGE_AFTER)
+    {
+        return ("installing", None);
+    }
+    (state_name(entry.state), entry.value)
 }
 
 #[tauri::command]
@@ -789,6 +867,43 @@ pub(crate) fn start(app: &AppHandle, host: HWND) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(state: u32, value: f64) -> Entry {
+        Entry {
+            hwnd: 1,
+            owner: 1,
+            programs: Vec::new(),
+            family: Vec::new(),
+            state,
+            value: Some(value),
+            announced: None,
+            full_since: None,
+            second_stage: false,
+            logged_tenth: -1,
+        }
+    }
+
+    #[test]
+    fn a_second_stage_is_shown_as_installing() {
+        // Downloading: its own state and value.
+        let mut e = entry(TBPF_NORMAL, 0.4);
+        assert_eq!(shown(&e), ("normal", Some(0.4)));
+        // Just reached full: still the download.
+        e.value = Some(1.0);
+        e.full_since = Some(std::time::Instant::now());
+        assert_eq!(shown(&e), ("normal", Some(1.0)));
+        // Sat at full, still shown: installing, no amount known.
+        e.full_since = Some(std::time::Instant::now() - SECOND_STAGE_AFTER);
+        assert_eq!(shown(&e), ("installing", None));
+        // Started over: the install's own progress.
+        e.full_since = None;
+        e.second_stage = true;
+        e.value = Some(0.3);
+        assert_eq!(shown(&e), ("installing", Some(0.3)));
+        // Paused or failed: shown as such whatever the stage.
+        e.state = TBPF_PAUSED;
+        assert_eq!(shown(&e), ("paused", Some(0.3)));
+    }
 
     #[test]
     fn states_follow_windows_priority() {

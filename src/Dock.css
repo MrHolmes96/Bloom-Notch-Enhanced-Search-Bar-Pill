@@ -372,9 +372,11 @@ body {
 
 /* An app's progress (a download, a copy) in place of its dots, as Windows'
    taskbar draws it along its button: the dots' spot and height, so the dock
-   keeps its size. Green while it runs, yellow paused, red on an error. */
+   keeps its size. Windows' accent colour while it runs, green for a second
+   stage (Steam installing what it downloaded), yellow paused, red on an
+   error. */
 .dock-progress {
-	--dock-progress-color: #3cc35a;
+	--dock-progress-color: var(--windows-accent, #0078d4);
 	position: absolute;
 	bottom: -4px;
 	width: 24px;
@@ -383,6 +385,10 @@ body {
 	overflow: hidden;
 	background: color-mix(in srgb, var(--bloom-text, white) 22%, transparent);
 	pointer-events: none;
+}
+
+.dock-progress--installing {
+	--dock-progress-color: #3cc35a;
 }
 
 .dock-progress--paused {
@@ -401,6 +407,7 @@ body {
 }
 
 /* Working, with no amount known yet: a short stretch sweeping along. */
+.dock-progress--sweep .dock-progress-fill,
 .dock-progress--indeterminate .dock-progress-fill {
 	width: 40%;
 	transition: none;
@@ -417,6 +424,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+	.dock-progress--sweep .dock-progress-fill,
 	.dock-progress--indeterminate .dock-progress-fill {
 		width: 100%;
 		opacity: 0.6;

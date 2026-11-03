@@ -255,6 +255,16 @@ export function initTheme() {
 	// Fast synchronous draw using cached localStorage
 	applyTheme(syncMode, syncColor, syncOpacity, syncSaturation, syncBrightness);
 
+	// Windows' accent colour, whatever Bloom's theme (the dock's progress bars
+	// use it): read now, and again whenever Windows' changes.
+	const setWindowsAccent = (hex: string) => {
+		if (/^#[0-9a-f]{6}$/i.test(hex))
+			document.documentElement.style.setProperty("--windows-accent", hex);
+	};
+	void invoke<string>("get_system_accent_color")
+		.then(setWindowsAccent)
+		.catch(() => {});
+
 	// Sync settings.json in background to avoid flickers
 	invoke<Record<string, any>>("load_settings")
 		.then(async (settings) => {
@@ -320,6 +330,7 @@ export function initTheme() {
 
 	// Listen to system accent color updates in case of adaptive theme
 	const accentPromise = listen<string>("system-accent-changed", (event) => {
+		setWindowsAccent(event.payload);
 		const currentMode = localStorage.getItem("bloom-theme-mode") || "dark";
 		if (currentMode === "adaptive") {
 			const opacity = parseFloat(localStorage.getItem("bloom-theme-opacity") || "0.80");

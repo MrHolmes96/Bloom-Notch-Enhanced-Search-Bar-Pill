@@ -1,6 +1,10 @@
 import type { AppInfo } from "./dockApps";
 
-export type ProgressState = "normal" | "indeterminate" | "paused" | "error";
+/**
+ * "installing": a second stage after the bar reached full (Steam installing
+ * what it downloaded), drawn green; with no value, as a sweeping stretch.
+ */
+export type ProgressState = "normal" | "indeterminate" | "paused" | "error" | "installing";
 
 /** One window's progress, as its app reported it to the taskbar. */
 export interface WindowProgress {
@@ -21,12 +25,18 @@ export interface WindowProgress {
 
 export interface ShownProgress {
 	state: ProgressState;
-	/** From 0 to 1; null only while indeterminate. */
+	/** From 0 to 1; null while indeterminate, or installing with no amount known. */
 	value: number | null;
 }
 
 /** Windows' order when several windows of one button report progress. */
-const PRIORITY: Record<ProgressState, number> = { error: 0, paused: 1, normal: 2, indeterminate: 3 };
+const PRIORITY: Record<ProgressState, number> = {
+	error: 0,
+	paused: 1,
+	normal: 2,
+	installing: 2,
+	indeterminate: 3
+};
 
 const exeName = (path?: string) =>
 	(path ?? "").toLowerCase().replace(/\\/g, "/").split("/").pop() ?? "";
@@ -77,6 +87,7 @@ export function pickProgress(list: WindowProgress[]): ShownProgress | null {
 	}
 	if (!best) return null;
 	if (best.state === "indeterminate") return { state: best.state, value: null };
+	if (best.state === "installing") return { state: best.state, value: best.value };
 	// Paused or failed before any value: Windows fills the bar; normal starts empty.
 	return { state: best.state, value: best.value ?? (best.state === "normal" ? 0 : 1) };
 }

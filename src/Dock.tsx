@@ -156,7 +156,7 @@ function ProgressBar({ progress }: { progress: ShownProgress }) {
 	const percent = progress.value === null ? undefined : Math.round(progress.value * 100);
 	return (
 		<div
-			className={`dock-progress dock-progress--${progress.state}`}
+			className={`dock-progress dock-progress--${progress.state}${progress.value === null ? " dock-progress--sweep" : ""}`}
 			role="progressbar"
 			aria-valuemin={0}
 			aria-valuemax={100}
