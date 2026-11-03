@@ -1264,8 +1264,7 @@ pub(crate) fn visible_top_windows() -> Vec<isize> {
 fn new_menus(before: &[isize], excluded: &[u32], shell: u32) -> Vec<isize> {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetClassNameW, GetWindowLongW, GetWindowRect, GWL_EXSTYLE, GWL_STYLE, WS_CAPTION,
-        WS_EX_TRANSPARENT,
+        GetClassNameW, GetWindowLongW, GetWindowRect, GWL_EXSTYLE, GWL_STYLE,
     };
     visible_top_windows()
         .into_iter()
@@ -1292,7 +1291,7 @@ fn new_menus(before: &[isize], excluded: &[u32], shell: u32) -> Vec<isize> {
             }
             let style = unsafe { GetWindowLongW(window, GWL_STYLE) } as u32;
             let ex_style = unsafe { GetWindowLongW(window, GWL_EXSTYLE) } as u32;
-            if style & WS_CAPTION.0 == WS_CAPTION.0 || ex_style & WS_EX_TRANSPARENT.0 != 0 {
+            if !menu_styles(style, ex_style) {
                 return false;
             }
             let mut rect = RECT::default();
@@ -1303,6 +1302,25 @@ fn new_menus(before: &[isize], excluded: &[u32], shell: u32) -> Vec<isize> {
             width > 8 && height > 8 && width <= 2400 && height <= 2400
         })
         .collect()
+}
+
+/// Whether a new window's styles fit a tray app's menu: one without a title
+/// bar, or a pop-up tool window that keeps a title bar's style bits without
+/// showing one (Steam's menu: style 0x96ca0000, ex-style 0x188). An app's
+/// own window (an app window, or one with no tool-window style) doesn't.
+fn menu_styles(style: u32, ex_style: u32) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WS_CAPTION, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
+    };
+    if ex_style & WS_EX_TRANSPARENT.0 != 0 {
+        return false;
+    }
+    if style & WS_CAPTION.0 != WS_CAPTION.0 {
+        return true;
+    }
+    style & WS_POPUP.0 != 0
+        && ex_style & WS_EX_TOOLWINDOW.0 != 0
+        && ex_style & WS_EX_APPWINDOW.0 == 0
 }
 
 fn menu_log(line: &str) {
@@ -1787,4 +1805,25 @@ pub fn click(id: &str, button: Button) -> Result<(), String> {
         matches!(button, Button::Right),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::menu_styles;
+
+    #[test]
+    fn steams_menu_counts_and_app_windows_dont() {
+        // As tray-menus.log recorded them.
+        assert!(menu_styles(0x96ca_0000, 0x188), "Steam's tray menu");
+        assert!(!menu_styles(0x96cf_0000, 0x40100), "Steam's own window");
+        assert!(
+            !menu_styles(0x14c7_0000, 0x0020_0100),
+            "LM Studio / Blitzit"
+        );
+        assert!(
+            menu_styles(0x9480_0000, 0x0000_0188),
+            "a menu without a title bar"
+        );
+        assert!(!menu_styles(0x9480_0000, 0x20), "a click-through window");
+    }
 }
