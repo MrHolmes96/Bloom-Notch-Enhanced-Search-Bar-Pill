@@ -160,9 +160,35 @@ fn bring_to_front_how(hwnd: HWND) -> (bool, &'static str) {
         if in_front(target) {
             return (true, "SwitchToThisWindow");
         }
-        // Windows still refused (a full-screen app holding the foreground):
-        // share the foreground thread's input for a moment, which it accepts.
         let foreground = GetForegroundWindow();
+        // Windows still refused because a full-screen app (a game) holds the
+        // foreground: it is minimized, as Windows does with a full-screen
+        // game you switch away from, and the window then comes forward the
+        // usual way. Its input is never shared to force the switch: tied to
+        // a busy game's input, the window switched to could stay frozen.
+        if !foreground.is_invalid()
+            && process_of(foreground) != process_of(target)
+            && (crate::utils::is_window_fullscreen(foreground)
+                || windows::Win32::UI::WindowsAndMessaging::IsHungAppWindow(foreground).as_bool())
+        {
+            minimize(foreground);
+            grant_to(process_of(target));
+            let _ = SetForegroundWindow(target);
+            if !in_front(target) {
+                SwitchToThisWindow(target, true);
+            }
+            let done = in_front(target);
+            return (
+                done,
+                if done {
+                    "full-screen app minimized, then SetForegroundWindow"
+                } else {
+                    "full-screen app minimized, still refused"
+                },
+            );
+        }
+        // An ordinary window that answers (Explorer, say): share its thread's
+        // input for a moment, which Windows accepts.
         let foreground_thread = GetWindowThreadProcessId(foreground, None);
         let own_thread = GetCurrentThreadId();
         let attached = foreground_thread != 0
@@ -268,12 +294,18 @@ pub fn switch_to(hwnd: HWND) -> bool {
     let started = std::time::Instant::now();
     leave_start_menu();
     let before = unsafe { GetForegroundWindow() };
+    let from_full_screen = !before.is_invalid()
+        && process_of(before) != process_of(hwnd)
+        && crate::utils::is_window_fullscreen(before);
     let (done, how) = bring_to_front_how(hwnd);
     let took = started.elapsed().as_millis();
     std::thread::sleep(std::time::Duration::from_millis(150));
     if SWITCHES.load(Ordering::SeqCst) != this {
         note(hwnd, &format!("{how} in {took} ms"));
         return done;
+    }
+    if from_full_screen {
+        free_cursor(hwnd);
     }
     let now = unsafe { GetForegroundWindow() };
     let taken_back = !before.is_invalid()
@@ -296,6 +328,39 @@ pub fn switch_to(hwnd: HWND) -> bool {
         ),
     );
     done
+}
+
+/// A game keeps the pointer inside its window while it plays; switched away
+/// from, the pointer is let go (as the game itself does when it notices),
+/// so the window switched to answers the mouse at once.
+fn free_cursor(now_in_front: HWND) {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        ClipCursor, GetClipCursor, GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+        SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    };
+    unsafe {
+        if !in_front(now_in_front) {
+            return;
+        }
+        let mut clip = RECT::default();
+        if GetClipCursor(&mut clip).is_err() {
+            return;
+        }
+        let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        let whole = clip.left <= left
+            && clip.top <= top
+            && clip.right >= left + GetSystemMetrics(SM_CXVIRTUALSCREEN)
+            && clip.bottom >= top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        if !whole {
+            let _ = ClipCursor(None);
+            note(
+                now_in_front,
+                "the pointer was still held by the full-screen app: let go",
+            );
+        }
+    }
 }
 
 /// One line in `focus.log` (Bloom's data folder) per switch from the dock:
