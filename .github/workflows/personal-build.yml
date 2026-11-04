@@ -52,9 +52,22 @@ jobs:
           fi
           cp "$INSTALLER" Bloom-personal-setup.exe
           STAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
-          gh release delete personal-build --yes --cleanup-tag || true
-          gh release create personal-build Bloom-personal-setup.exe \
-            --target "$GITHUB_SHA" \
-            --title "Bloom personal build" \
-            --notes "Built $STAMP from ${GITHUB_SHA::7}. Download Bloom-personal-setup.exe and run it to install or update." \
-            --prerelease
+          # GitHub's API now and then answers 502 for a moment: try again
+          # (up to five times, waiting longer each time) rather than leave
+          # the download link without a release.
+          for attempt in 1 2 3 4 5; do
+            gh release delete personal-build --yes --cleanup-tag || true
+            if gh release create personal-build Bloom-personal-setup.exe \
+              --target "$GITHUB_SHA" \
+              --title "Bloom personal build" \
+              --notes "Built $STAMP from ${GITHUB_SHA::7}. Download Bloom-personal-setup.exe and run it to install or update." \
+              --prerelease \
+              && gh release view personal-build --json assets -q '.assets[].name' | grep -qx Bloom-personal-setup.exe; then
+              echo "Published (attempt $attempt)."
+              exit 0
+            fi
+            echo "::warning::Publishing failed (attempt $attempt); trying again."
+            sleep $((attempt * 20))
+          done
+          echo "::error::Couldn't publish the release after five attempts."
+          exit 1
