@@ -96,6 +96,8 @@ struct Entry {
     logged_tenth: i32,
     /// The value over the last minute (this stage), for the time left.
     samples: std::collections::VecDeque<(std::time::Instant, f64)>,
+    /// When the app last reported anything (a value or a state).
+    last_report: std::time::Instant,
 }
 
 /// Full and still shown this long: the app is on to a second stage.
@@ -408,6 +410,7 @@ unsafe fn new_entry(hwnd: isize, state: u32, value: Option<f64>) -> Entry {
         second_stage: false,
         logged_tenth: -1,
         samples: std::collections::VecDeque::new(),
+        last_report: std::time::Instant::now(),
     }
 }
 
@@ -417,13 +420,16 @@ unsafe fn record_value(hwnd: isize, value: f64) -> bool {
         return false;
     };
     if let Some(entry) = entries.iter_mut().find(|e| e.hwnd == hwnd) {
+        let was_quiet = gone_quiet(entry);
+        entry.last_report = std::time::Instant::now();
         // A value ends the indeterminate state; paused and error stay until
         // the app changes them, the value updating underneath.
         let state = match entry.state {
             TBPF_ERROR | TBPF_PAUSED => entry.state,
             _ => TBPF_NORMAL,
         };
-        let mut redraw = state != entry.state
+        let mut redraw = was_quiet
+            || state != entry.state
             || entry.announced.is_none_or(|shown| {
                 (shown - value).abs() >= STEP || (value >= 1.0) != (shown >= 1.0)
             });
@@ -504,7 +510,9 @@ unsafe fn record_state(hwnd: isize, state: u32) -> bool {
         (None, TBPF_NOPROGRESS) => false,
         (Some(index), state) => {
             let entry = &mut entries[index];
-            let redraw = entry.state != state;
+            let was_quiet = gone_quiet(entry);
+            entry.last_report = std::time::Instant::now();
+            let redraw = was_quiet || entry.state != state;
             if redraw {
                 note(&format!("window={hwnd:#x}: {}", state_name(state)));
             }
@@ -527,6 +535,33 @@ pub fn snapshot() -> Vec<Progress> {
         .into_iter()
         .filter(|p| steam_of(&p.programs).is_none_or(crate::download_details::steam_working))
         .collect()
+}
+
+/// An app that stopped reporting while its progress still shows running: the
+/// last value it sent is no longer true (it finished without clearing it, or
+/// its download stopped). Hidden until it reports again. Browsers report
+/// several times a second while downloading, other apps (game clients
+/// between stages) can be quiet longer; Steam's own record decides for
+/// Steam, and a paused or failed bar stays as the app set it.
+fn gone_quiet(entry: &Entry) -> bool {
+    if !matches!(entry.state, TBPF_NORMAL | TBPF_INDETERMINATE)
+        || steam_of(&entry.programs).is_some()
+    {
+        return false;
+    }
+    let browser = entry.programs.iter().any(|p| {
+        let p = p.to_lowercase();
+        [
+            "\\brave.exe",
+            "\\chrome.exe",
+            "\\msedge.exe",
+            "\\firefox.exe",
+        ]
+        .iter()
+        .any(|b| p.ends_with(b))
+    });
+    let limit = if browser { 30 } else { 90 };
+    entry.last_report.elapsed().as_secs() >= limit
 }
 
 /// Steam's program, when the progress is Steam's.
@@ -555,6 +590,7 @@ fn all_entries() -> Vec<Progress> {
     entries
         .iter_mut()
         .zip(windows)
+        .filter(|(entry, _)| !gone_quiet(entry))
         .map(|(entry, windows)| {
             entry.announced = entry.value;
             let (state, value) = shown(entry);
@@ -610,6 +646,9 @@ pub(crate) fn detail(hwnd: isize) -> Option<Detail> {
     let detail = {
         let entries = ENTRIES.lock().ok()?;
         let entry = entries.iter().find(|e| e.hwnd == hwnd)?;
+        if gone_quiet(entry) {
+            return None;
+        }
         let (state, value) = shown(entry);
         Detail {
             programs: entry.programs.clone(),
@@ -627,30 +666,49 @@ pub(crate) fn detail(hwnd: isize) -> Option<Detail> {
     Some(detail)
 }
 
-/// While Steam shows progress, checks its own record every 2 s and tells the
-/// dock when that changes: Steam finishing hides its bar even when Steam
-/// sends nothing more.
-fn watch_steam() {
+/// Every 2 s while anything shows progress: whether each bar should still
+/// show (Steam's own record for Steam, an app gone quiet for the others),
+/// and the dock is told when that changes, so a bar goes the moment its
+/// download is over even when the app sends nothing more.
+fn watch_shown() {
     let _ = std::thread::Builder::new()
-        .name("bloom-steam-progress".into())
+        .name("bloom-progress-watch".into())
         .spawn(|| {
-            let mut last: Option<bool> = None;
+            let mut last: Vec<(isize, bool)> = Vec::new();
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                let steam = ENTRIES.lock().ok().and_then(|entries| {
-                    entries
-                        .iter()
-                        .find_map(|e| steam_of(&e.programs).map(str::to_string))
-                });
-                let Some(steam) = steam else {
-                    last = None;
-                    continue;
-                };
-                let working = crate::download_details::steam_working(&steam);
-                if last.is_some_and(|before| before != working) {
+                let listed: Vec<(isize, bool, Option<String>)> = ENTRIES
+                    .lock()
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .map(|e| {
+                                (e.hwnd, !gone_quiet(e), steam_of(&e.programs).map(str::to_string))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let now: Vec<(isize, bool)> = listed
+                    .into_iter()
+                    .map(|(hwnd, shown, steam)| {
+                        let shown = shown
+                            && steam
+                                .as_deref()
+                                .is_none_or(crate::download_details::steam_working);
+                        (hwnd, shown)
+                    })
+                    .collect();
+                for (hwnd, shown) in &now {
+                    if !shown && last.contains(&(*hwnd, true)) {
+                        note(&format!(
+                            "window={hwnd:#x}: hidden (its app stopped reporting, or Steam's record says it's done) until it reports again"
+                        ));
+                    }
+                }
+                if now != last && !(now.is_empty() && last.is_empty()) {
                     queue(Work::Announce);
                 }
-                last = Some(working);
+                last = now;
             }
         });
 }
@@ -969,7 +1027,7 @@ pub(crate) fn start(app: &AppHandle, host: HWND) {
     let _ = APP.set(app.clone());
     HOST.store(host.0 as isize, Ordering::Relaxed);
     start_worker();
-    watch_steam();
+    watch_shown();
     let _ = std::thread::Builder::new()
         .name("bloom-task-list".into())
         .spawn(|| unsafe {
@@ -1043,7 +1101,27 @@ mod tests {
             second_stage: false,
             logged_tenth: -1,
             samples: std::collections::VecDeque::new(),
+            last_report: std::time::Instant::now(),
         }
+    }
+
+    #[test]
+    fn an_app_gone_quiet_stops_showing() {
+        let ago = |secs| std::time::Instant::now() - std::time::Duration::from_secs(secs);
+        let mut e = entry(TBPF_NORMAL, 0.87);
+        e.last_report = ago(60);
+        assert!(!gone_quiet(&e), "an app is given 90 s");
+        e.last_report = ago(95);
+        assert!(gone_quiet(&e));
+        e.programs = vec!["C:\\Program Files\\Brave\\brave.exe".into()];
+        e.last_report = ago(35);
+        assert!(gone_quiet(&e), "a browser 30 s");
+        e.state = TBPF_PAUSED;
+        assert!(!gone_quiet(&e), "paused stays as the app set it");
+        e.state = TBPF_NORMAL;
+        e.programs = vec!["C:\\Program Files (x86)\\Steam\\steam.exe".into()];
+        e.last_report = ago(600);
+        assert!(!gone_quiet(&e), "Steam's own record decides for Steam");
     }
 
     #[test]
