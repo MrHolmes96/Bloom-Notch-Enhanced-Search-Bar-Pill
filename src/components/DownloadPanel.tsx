@@ -97,7 +97,9 @@ export function DownloadPanel({
 	const value = details ? details.value : progress.value;
 	const label =
 		stage === "installing"
-			? "Installing"
+			? details?.source === "steam"
+				? "Updating files"
+				: "Installing"
 			: stage === "paused"
 				? "Paused"
 				: stage === "error"

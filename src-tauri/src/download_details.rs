@@ -95,6 +95,8 @@ fn details(hwnd: isize) -> Option<DownloadDetails> {
 /// A game's `appmanifest_*.acf`, the parts the panel uses.
 struct Manifest {
     name: String,
+    /// Steam's `StateFlags`.
+    flags: u64,
     to_download: u64,
     downloaded: u64,
     to_stage: u64,
@@ -127,6 +129,7 @@ fn read_manifest(path: &Path) -> Option<Manifest> {
     };
     Some(Manifest {
         name: values.get("name").cloned().unwrap_or_default(),
+        flags: number("StateFlags"),
         to_download: number("BytesToDownload"),
         downloaded: number("BytesDownloaded"),
         to_stage: number("BytesToStage"),
@@ -157,31 +160,132 @@ fn steam_libraries(steam_exe: &str) -> Vec<PathBuf> {
     libraries
 }
 
-/// The game Steam is downloading or updating: of the manifests with work
-/// left, the one Steam wrote last.
+/// Each game's latest state in Steam's own log (`logs/content_log.txt`):
+/// "AppID 1203620 state changed : Update Required,Update Running,...".
+/// `None` when the log can't be read.
+fn steam_states(steam_exe: &str) -> Option<HashMap<String, String>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let root = Path::new(steam_exe).parent()?;
+    let mut file = std::fs::File::open(root.join("logs").join("content_log.txt")).ok()?;
+    let length = file.metadata().ok()?.len();
+    // The end is enough: the latest change of each game.
+    let from = length.saturating_sub(512 * 1024);
+    file.seek(SeekFrom::Start(from)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some(states_in(&String::from_utf8_lossy(&bytes)))
+}
+
+fn states_in(log: &str) -> HashMap<String, String> {
+    let mut states = HashMap::new();
+    for line in log.lines() {
+        let Some(at) = line.find("AppID ") else {
+            continue;
+        };
+        let rest = &line[at + 6..];
+        let Some((app, state)) = rest.split_once(" state changed : ") else {
+            continue;
+        };
+        states.insert(app.trim().to_string(), state.trim().to_string());
+    }
+    states
+}
+
+/// A state Steam is working on the game in: updating, not paused or queued.
+fn running(state: &str) -> bool {
+    state.contains("Update Running") && !state.contains("Update Paused")
+}
+
+/// Steam's `StateFlags` bits for a game it is working on: update running,
+/// started, downloading, staging, committing, preallocating.
+const FLAGS_WORKING: u64 = 256 | 1024 | 1_048_576 | 2_097_152 | 4_194_304 | 524_288;
+const FLAG_PAUSED: u64 = 512;
+
+fn has_work_left(m: &Manifest) -> bool {
+    (m.to_download > 0 && m.downloaded < m.to_download) || (m.to_stage > 0 && m.staged < m.to_stage)
+}
+
+/// The game Steam is downloading or updating now, as Steam itself records
+/// it: the games its content log says it is running an update for, else
+/// (no log to read) the games whose state flags say so. Of those, the one
+/// Steam wrote last. None when Steam is working on nothing: an update
+/// that is queued, unscheduled, paused or finished doesn't count.
 fn active_manifest(steam_exe: &str) -> Option<Manifest> {
-    let mut best: Option<(SystemTime, PathBuf)> = None;
+    let states = steam_states(steam_exe).filter(|s| !s.is_empty());
+    let mut best: Option<(SystemTime, Manifest)> = None;
     for library in steam_libraries(steam_exe) {
         let Ok(entries) = std::fs::read_dir(&library) else {
             continue;
         };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_lowercase();
-            if !name.starts_with("appmanifest_") || !name.ends_with(".acf") {
+            let Some(app) = name
+                .strip_prefix("appmanifest_")
+                .and_then(|n| n.strip_suffix(".acf"))
+            else {
                 continue;
+            };
+            if let Some(states) = &states {
+                if !states.get(app).is_some_and(|state| running(state)) {
+                    continue;
+                }
             }
             let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
                 continue;
             };
-            if best.as_ref().is_none_or(|(at, _)| modified > *at) {
-                best = Some((modified, entry.path()));
+            if best.as_ref().is_some_and(|(at, _)| *at >= modified) {
+                continue;
+            }
+            let Some(manifest) = read_manifest(&entry.path()) else {
+                continue;
+            };
+            let working = if states.is_some() {
+                true
+            } else {
+                manifest.flags & FLAGS_WORKING != 0
+                    && manifest.flags & FLAG_PAUSED == 0
+                    && has_work_left(&manifest)
+            };
+            if working {
+                best = Some((modified, manifest));
             }
         }
     }
-    let manifest = read_manifest(&best?.1)?;
-    let working = (manifest.to_download > 0 && manifest.downloaded < manifest.to_download)
-        || (manifest.to_stage > 0 && manifest.staged < manifest.to_stage);
-    working.then_some(manifest)
+    best.map(|(_, manifest)| manifest)
+}
+
+/// Whether Steam's own record says it is downloading or updating a game,
+/// the deciding word on Steam's progress: Steam can leave its taskbar
+/// progress showing after it has finished. Read at most every 1.5 s.
+pub(crate) fn steam_working(steam_exe: &str) -> bool {
+    static LAST: Mutex<Option<(Instant, bool, String)>> = Mutex::new(None);
+    if let Ok(last) = LAST.lock() {
+        if let Some((at, working, _)) = last.as_ref() {
+            if at.elapsed() < Duration::from_millis(1500) {
+                return *working;
+            }
+        }
+    }
+    let manifest = active_manifest(steam_exe);
+    let working = manifest.is_some();
+    // What Steam's record says, logged when it changes.
+    let said = manifest
+        .as_ref()
+        .map(|m| {
+            format!(
+                "Steam's record: {} downloaded {} of {}, staged {} of {}",
+                m.name, m.downloaded, m.to_download, m.staged, m.to_stage
+            )
+        })
+        .unwrap_or_else(|| "Steam's record: nothing downloading or updating".to_string());
+    if let Ok(mut last) = LAST.lock() {
+        let changed = last.as_ref().is_none_or(|(_, _, before)| *before != said);
+        if changed {
+            crate::taskbar_progress::log_line(&said);
+        }
+        *last = Some((Instant::now(), working, said));
+    }
+    working
 }
 
 fn steam_details(
@@ -213,7 +317,16 @@ fn steam_details(
         }
     }
     if manifest.to_stage > 0 && manifest.staged > 0 {
-        out.updating = Some((manifest.staged as f64 / manifest.to_stage as f64).clamp(0.0, 1.0));
+        let staged = (manifest.staged as f64 / manifest.to_stage as f64).clamp(0.0, 1.0);
+        if manifest.to_download == 0 || manifest.downloaded >= manifest.to_download {
+            // Downloaded: Steam is only updating files now.
+            out.stage = "installing";
+            out.value = Some(staged);
+            out.speed = None;
+            out.time_left = None;
+        } else {
+            out.updating = Some(staged);
+        }
     }
 }
 
@@ -329,6 +442,20 @@ mod tests {
         let m = read_manifest(&path).unwrap();
         assert_eq!(m.to_download, 27_594_260_480);
         assert_eq!(m.staged, 5_100_000_000);
+    }
+
+    #[test]
+    fn steams_log_gives_each_games_latest_state() {
+        let log = "[2026-11-04 02:20:01] AppID 730 state changed : Update Required,Update Running,Update Started,Downloading,\n\
+                   [2026-11-04 02:21:10] AppID 3999540 state changed : Update Required,Update Queued,\n\
+                   [2026-11-04 02:23:40] AppID 730 state changed : Fully Installed,\n";
+        let states = states_in(log);
+        assert!(!running(&states["730"]), "finished");
+        assert!(!running(&states["3999540"]), "queued, not running");
+        let log = "[x] AppID 1203620 state changed : Update Required,Update Running,Update Started,Staging,\n";
+        assert!(running(&states_in(log)["1203620"]));
+        let log = "[x] AppID 1 state changed : Update Required,Update Running,Update Paused,\n";
+        assert!(!running(&states_in(log)["1"]), "paused");
     }
 
     #[test]

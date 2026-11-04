@@ -520,6 +520,29 @@ unsafe fn record_state(hwnd: isize, state: u32) -> bool {
 
 /// Every window showing progress right now.
 pub fn snapshot() -> Vec<Progress> {
+    let shown: Vec<Progress> = all_entries();
+    // Steam's own record decides whether Steam's progress shows (it can
+    // leave its taskbar progress up after finishing). Read outside the lock.
+    shown
+        .into_iter()
+        .filter(|p| steam_of(&p.programs).is_none_or(crate::download_details::steam_working))
+        .collect()
+}
+
+/// Steam's program, when the progress is Steam's.
+fn steam_of(programs: &[String]) -> Option<&str> {
+    programs
+        .iter()
+        .find(|p| p.to_lowercase().ends_with("\\steam.exe"))
+        .map(String::as_str)
+}
+
+/// A line for `taskbar-progress.log`.
+pub(crate) fn log_line(line: &str) {
+    note(line);
+}
+
+fn all_entries() -> Vec<Progress> {
     let Ok(mut entries) = ENTRIES.lock() else {
         return Vec::new();
     };
@@ -584,16 +607,52 @@ pub(crate) struct Detail {
 
 /// The progress shown for `hwnd`, for the dock's download panel.
 pub(crate) fn detail(hwnd: isize) -> Option<Detail> {
-    let entries = ENTRIES.lock().ok()?;
-    let entry = entries.iter().find(|e| e.hwnd == hwnd)?;
-    let (state, value) = shown(entry);
-    Some(Detail {
-        programs: entry.programs.clone(),
-        state,
-        value,
-        time_left: time_left(&entry.samples),
-        pace: pace(&entry.samples),
-    })
+    let detail = {
+        let entries = ENTRIES.lock().ok()?;
+        let entry = entries.iter().find(|e| e.hwnd == hwnd)?;
+        let (state, value) = shown(entry);
+        Detail {
+            programs: entry.programs.clone(),
+            state,
+            value,
+            time_left: time_left(&entry.samples),
+            pace: pace(&entry.samples),
+        }
+    };
+    if steam_of(&detail.programs)
+        .is_some_and(|steam| !crate::download_details::steam_working(steam))
+    {
+        return None;
+    }
+    Some(detail)
+}
+
+/// While Steam shows progress, checks its own record every 2 s and tells the
+/// dock when that changes: Steam finishing hides its bar even when Steam
+/// sends nothing more.
+fn watch_steam() {
+    let _ = std::thread::Builder::new()
+        .name("bloom-steam-progress".into())
+        .spawn(|| {
+            let mut last: Option<bool> = None;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                let steam = ENTRIES.lock().ok().and_then(|entries| {
+                    entries
+                        .iter()
+                        .find_map(|e| steam_of(&e.programs).map(str::to_string))
+                });
+                let Some(steam) = steam else {
+                    last = None;
+                    continue;
+                };
+                let working = crate::download_details::steam_working(&steam);
+                if last.is_some_and(|before| before != working) {
+                    queue(Work::Announce);
+                }
+                last = Some(working);
+            }
+        });
 }
 
 /// What the dock draws for an entry: its own state, or the second stage
@@ -910,6 +969,7 @@ pub(crate) fn start(app: &AppHandle, host: HWND) {
     let _ = APP.set(app.clone());
     HOST.store(host.0 as isize, Ordering::Relaxed);
     start_worker();
+    watch_steam();
     let _ = std::thread::Builder::new()
         .name("bloom-task-list".into())
         .spawn(|| unsafe {
