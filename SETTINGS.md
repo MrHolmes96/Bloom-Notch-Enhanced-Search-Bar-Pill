@@ -203,7 +203,7 @@ Example:
 | `bloom-dock-gap` | number `"0"`–`"40"` | `"6"` | Space in screen pixels between the dock and snapped or maximized windows (Settings > Appearance > Dock Gap). |
 | `bloom-scale`                  | float string         | `"1.0"`   | The one size for everything in older versions. A part without its own size (`bloom-notch-scale`, `bloom-dock-scale`) still uses it; Settings no longer changes it. |
 | `bloom-low-battery-threshold`  | integer string       | `"20"`    | Battery percentage that triggers the low-battery alert pulse (5 to 50, step 5).                      |
-| `bloom-time-format-24h`        | `"true"` / `"false"` | `"false"` | Use 24-hour clock format in the notch. When `"false"`, displays 12-hour format with AM/PM.           |
+| `bloom-time-format-24h`        | `"true"` / `"false"` | `"false"` | Use the 24-hour clock everywhere Bloom shows a time: the notch, the notification center, the search bar and its file preview, notes and Blitzit's sync time (`useClock24h`, read from settings.json and followed live). When `"false"`, the 12-hour clock with AM/PM. |
 
 ### Internal (Do Not Edit Manually)
 

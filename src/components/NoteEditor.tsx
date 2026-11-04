@@ -27,6 +27,7 @@ import {
 	Undo2
 } from "lucide-react";
 import type { NoteItem, TodoSync } from "./NotesPanel";
+import { formatClock, useClock24h } from "../hooks/useClock24h";
 import {
 	linkedItems,
 	listEntries,
@@ -46,14 +47,10 @@ import { noteTitle, plainTextDoc, toMarkdownFile, toTextFile, type DocNode } fro
  * in the form that kind of file can hold (see noteFormat.ts).
  */
 
-/** "17:42", or "26 Oct 17:42" on another day (24-hour clock). */
-function whenText(time: number) {
+/** "17:42", or "26 Oct 17:42" on another day, as Bloom's clock is set. */
+function whenText(time: number, h24: boolean) {
 	const date = new Date(time);
-	const clock = date.toLocaleTimeString(undefined, {
-		hour: "2-digit",
-		minute: "2-digit",
-		hour12: false
-	});
+	const clock = formatClock(date, h24);
 	if (date.toDateString() === new Date().toDateString()) return clock;
 	return `${date.toLocaleDateString(undefined, { day: "numeric", month: "short" })} ${clock}`;
 }
@@ -134,6 +131,7 @@ export default function NoteEditor({
 	onDelete
 }: NoteEditorProps) {
 	const textRef = useRef<HTMLDivElement>(null);
+	const h24 = useClock24h();
 	const [title, setTitle] = useState(note.title ?? "");
 	/** Where the "Add to To-Do" pop-up sits over the selected items. */
 	const [pickAt, setPickAt] = useState<{ top: number; left: number } | null>(null);
@@ -457,7 +455,7 @@ export default function NoteEditor({
 				/>
 				<span className="notes-editor-meta">
 					{status ??
-						`${note.updated ? `Edited ${whenText(note.updated)}` : `Created ${whenText(note.created)}`} · ${
+						`${note.updated ? `Edited ${whenText(note.updated, h24)}` : `Created ${whenText(note.created, h24)}`} · ${
 							state?.characters ?? 0
 						} ${state?.characters === 1 ? "character" : "characters"}`}
 				</span>

@@ -29,6 +29,7 @@ import {
 	type List,
 	type Task
 } from "./blitzitModel";
+import { useClock24h } from "../hooks/useClock24h";
 import "./BlitzitBoard.css";
 
 /**
@@ -107,6 +108,7 @@ export function BlitzitBoard({
 	onPinChange: (pinned: boolean) => void;
 	onOpenSettings: () => void;
 }) {
+	const h24 = useClock24h();
 	const [addingIn, setAddingIn] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
 	const [collapsed, setCollapsed] = useState<string[]>(readCollapsed);
@@ -408,7 +410,7 @@ export function BlitzitBoard({
 					) : (
 						<Cloud />
 					)}
-					<span>{message ?? syncedText(board)}</span>
+					<span>{message ?? syncedText(board, h24)}</span>
 				</button>
 			</aside>
 

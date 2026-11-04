@@ -641,6 +641,21 @@ pub fn launch_portals_as_admin() -> bool {
     // Normal priority, for this launcher and so for Portals: a task Bloom set
     // up before ran below normal (Task Scheduler's default).
     set_priority(None, false);
+    // Portals' files read ahead, alongside it, so it finds them in memory
+    // rather than waiting on the disk everything reads from at sign-in.
+    if let Some(dir) = exe.parent().map(std::path::Path::to_path_buf) {
+        let _ = std::thread::Builder::new()
+            .name("bloom-portals-read-ahead".into())
+            .spawn(move || {
+                let started = std::time::Instant::now();
+                let read = read_ahead(&dir, 400 * 1024 * 1024);
+                crate::startup_timing::mark(&format!(
+                    "Portals' files read ahead ({} MB in {:.1} s)",
+                    read / (1024 * 1024),
+                    started.elapsed().as_secs_f64()
+                ));
+            });
+    }
     start();
     // The hooks are in place before Portals makes its pop-up.
     std::thread::sleep(std::time::Duration::from_millis(150));
@@ -671,6 +686,56 @@ pub fn launch_portals_as_admin() -> bool {
     }
     set_priority(Some(child.id()), false);
     true
+}
+
+/// Reads a program's files once, so Windows keeps them in memory for it:
+/// its code first (what it loads as it starts), then the rest, up to
+/// `budget` bytes. The bytes read.
+fn read_ahead(dir: &std::path::Path, budget: u64) -> u64 {
+    use std::io::Read;
+    let mut files: Vec<(bool, std::path::PathBuf)> = Vec::new();
+    let mut folders = vec![dir.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => folders.push(path),
+                Ok(_) => {
+                    let ext = path
+                        .extension()
+                        .map(|e| e.to_string_lossy().to_lowercase())
+                        .unwrap_or_default();
+                    let code = matches!(
+                        ext.as_str(),
+                        "exe" | "dll" | "node" | "asar" | "pak" | "dat" | "bin" | "json"
+                    );
+                    files.push((!code, path));
+                }
+                Err(_) => {}
+            }
+        }
+    }
+    files.sort_by_key(|f| f.0);
+    let mut buffer = vec![0u8; 1 << 20];
+    let mut read_total: u64 = 0;
+    for (_, path) in files {
+        let Ok(mut file) = std::fs::File::open(&path) else {
+            continue;
+        };
+        while let Ok(read) = file.read(&mut buffer) {
+            if read == 0 {
+                break;
+            }
+            read_total += read as u64;
+            if read_total >= budget {
+                return read_total;
+            }
+        }
+    }
+    read_total
 }
 
 /// Normal (or above normal) priority for this process (`None`) or another.

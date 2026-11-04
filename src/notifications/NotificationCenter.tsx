@@ -6,6 +6,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Bell, BellOff, ChevronDown, PanelRight, ShieldAlert, X } from "lucide-react";
 import { initTheme } from "../theme";
 import { useSettingsSync } from "../hooks/useSettingsSync";
+import { formatClock, useClock24h } from "../hooks/useClock24h";
 import { ToastActions, type ToastButton, type ToastInput } from "./ToastActions";
 import "./Notifications.css";
 import "./NotificationCenter.css";
@@ -67,17 +68,14 @@ function groupByApp(items: Item[]): Group[] {
 	return list;
 }
 
-function formatTime(ms: number) {
+function formatTime(ms: number, h24: boolean) {
 	const date = new Date(ms);
 	const now = new Date();
 	const minutes = Math.floor((now.getTime() - ms) / 60000);
 	if (minutes < 1) return "now";
 	if (minutes < 60) return `${minutes} min ago`;
 	const pad = (n: number) => String(n).padStart(2, "0");
-	const h24 = localStorage.getItem("bloom-time-format-24h") === "true";
-	const clock = h24
-		? `${pad(date.getHours())}:${pad(date.getMinutes())}`
-		: date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true });
+	const clock = formatClock(date, h24);
 	if (date.toDateString() === now.toDateString()) return clock;
 	return `${pad(date.getDate())}-${pad(date.getMonth() + 1)} ${clock}`;
 }
@@ -106,6 +104,7 @@ export default function NotificationCenter() {
 
 	useEffect(() => initTheme(), []);
 	useSettingsSync({ "bloom-notify-radius": (v) => setRadius(Number(v) || 0) });
+	const h24 = useClock24h();
 
 	const refresh = useCallback(async () => {
 		try {
@@ -306,7 +305,7 @@ export default function NotificationCenter() {
 											>
 												<div className="notify-head">
 													<span className="notify-title center-card-title">{item.title}</span>
-													<span className="notify-time">{formatTime(item.time)}</span>
+													<span className="notify-time">{formatTime(item.time, h24)}</span>
 													<button
 														type="button"
 														className="notify-close"

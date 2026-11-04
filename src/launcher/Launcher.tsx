@@ -6,6 +6,7 @@ import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import { Search } from "lucide-react";
 import { initTheme } from "../theme";
 import { useSettingsSync } from "../hooks/useSettingsSync";
+import { formatClock, useClock24h } from "../hooks/useClock24h";
 import type { AppInfo } from "../dockApps";
 import { CONFIG_KEY, loadConfig, parseConfig, type LauncherConfig } from "./config";
 import {
@@ -46,8 +47,8 @@ function useClock(enabled: boolean) {
 		const timer = setInterval(() => setNow(new Date()), 15_000);
 		return () => clearInterval(timer);
 	}, [enabled]);
-	const h24 = localStorage.getItem("bloom-time-format-24h") === "true";
-	return now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: !h24 });
+	const h24 = useClock24h();
+	return formatClock(now, h24);
 }
 
 /** The search bar's own colors (Settings > Search Bar Pill > Look). */

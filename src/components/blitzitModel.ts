@@ -125,7 +125,7 @@ export function isToday(column: Column) {
 	return squash(column.key).includes("today");
 }
 
-export function syncedText(board: Board | null) {
+export function syncedText(board: Board | null, h24: boolean) {
 	if (!board) return "";
 	if (board.offline) {
 		return board.pending > 0
@@ -137,7 +137,7 @@ export function syncedText(board: Board | null) {
 	const time = new Date(board.synced_at).toLocaleTimeString([], {
 		hour: "2-digit",
 		minute: "2-digit",
-		hour12: false
+		hour12: !h24
 	});
 	return `Synced with Blitzit at ${time}`;
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatClock, useClock24h } from "../hooks/useClock24h";
 import { invoke } from "@tauri-apps/api/core";
 import { ResultIcon } from "./icons";
 import type { Result } from "./types";
@@ -22,16 +23,12 @@ function formatSize(bytes: number) {
 	return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
-/** yyyy-MM-dd HH:mm, or with the 12-hour clock if Bloom is set to that. */
-function formatDate(ms: number) {
+/** yyyy-MM-dd and the time as Bloom's clock is set (Settings > General). */
+function formatDate(ms: number, h24: boolean) {
 	const d = new Date(ms);
 	const pad = (n: number) => String(n).padStart(2, "0");
 	const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-	const h24 = localStorage.getItem("bloom-time-format-24h") === "true";
-	const time = h24
-		? `${pad(d.getHours())}:${pad(d.getMinutes())}`
-		: d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true });
-	return `${date} ${time}`;
+	return `${date} ${formatClock(d, h24)}`;
 }
 
 /** The F1 panel: a picture of the file and its size and dates. */
@@ -44,6 +41,7 @@ export function Preview({
 }) {
 	const [thumb, setThumb] = useState<string | null>(null);
 	const [info, setInfo] = useState<FileInfo | null>(null);
+	const h24 = useClock24h();
 
 	useEffect(() => {
 		let alive = true;
@@ -91,13 +89,13 @@ export function Preview({
 					{info.modified && (
 						<>
 							<dt>Modified</dt>
-							<dd>{formatDate(info.modified)}</dd>
+							<dd>{formatDate(info.modified, h24)}</dd>
 						</>
 					)}
 					{info.created && (
 						<>
 							<dt>Created</dt>
-							<dd>{formatDate(info.created)}</dd>
+							<dd>{formatDate(info.created, h24)}</dd>
 						</>
 					)}
 				</dl>

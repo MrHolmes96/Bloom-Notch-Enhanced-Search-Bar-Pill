@@ -27,6 +27,7 @@ import {
 	type List,
 	type Task
 } from "./blitzitModel";
+import { useClock24h } from "../hooks/useClock24h";
 import "./BlitzitPanel.css";
 
 /**
@@ -142,6 +143,7 @@ export function BlitzitPanel({
 	onViewChange: (view: BlitzitView) => void;
 	scale: number;
 }) {
+	const h24 = useClock24h();
 	const [board, setBoard] = useState<Board | null>(null);
 	const [list, setListState] = useState<List | null>(() => readStored<List | null>(LIST_KEY, null));
 	const listRef = useRef(list);
@@ -502,7 +504,7 @@ export function BlitzitPanel({
 		<button
 			type="button"
 			className={`blitzit-icon${board?.offline ? " is-offline" : ""}`}
-			title={`${syncedText(board)}. Click to sync now`}
+			title={`${syncedText(board, h24)}. Click to sync now`}
 			disabled={syncing}
 			onClick={() => void loadFresh(true)}
 		>
@@ -591,7 +593,7 @@ export function BlitzitPanel({
 
 	const statusRow = (statusLine || message) && (
 		<div className={`blitzit-status${message ? " is-message" : ""}`} role="status">
-			{message ?? syncedText(board)}
+			{message ?? syncedText(board, h24)}
 		</div>
 	);
 
