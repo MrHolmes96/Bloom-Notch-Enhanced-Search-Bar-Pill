@@ -166,6 +166,7 @@ unsafe extern "system" fn on_event(
             );
             MOVE_HOOK.store(hook.0 as isize, Ordering::Relaxed);
         }
+        crate::startup_timing::mark("Portals made its loading pop-up (loaded this far)");
         log(&format!(
             "Portals' loading pop-up caught when {stage}: {}",
             if moved {
@@ -639,7 +640,7 @@ pub fn launch_portals_as_admin() -> bool {
     crate::startup_timing::begin("Portals launcher (Bloom's task, as administrator)");
     // Normal priority, for this launcher and so for Portals: a task Bloom set
     // up before ran below normal (Task Scheduler's default).
-    set_normal_priority(None);
+    set_priority(None, false);
     start();
     // The hooks are in place before Portals makes its pop-up.
     std::thread::sleep(std::time::Duration::from_millis(150));
@@ -656,33 +657,42 @@ pub fn launch_portals_as_admin() -> bool {
             return false;
         }
     };
-    set_normal_priority(Some(child.id()));
+    // Above normal while it loads, as Bloom is for its first half minute
+    // after sign-in: else Bloom comes first at every turn while both start.
+    // Normal again once Portals is ready.
+    set_priority(Some(child.id()), true);
     log("Launcher: started Portals as administrator");
-    crate::startup_timing::mark("Portals started (as administrator, normal priority)");
+    crate::startup_timing::mark("Portals started (as administrator, above normal while it loads)");
     let since = std::time::Instant::now();
     while since.elapsed() < std::time::Duration::from_secs(30)
         && !SPLASH_CLOSED.load(Ordering::Relaxed)
     {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
+    set_priority(Some(child.id()), false);
     true
 }
 
-/// Normal priority for this process (`None`) or another one.
-fn set_normal_priority(pid: Option<u32>) {
+/// Normal (or above normal) priority for this process (`None`) or another.
+fn set_priority(pid: Option<u32>, above_normal: bool) {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
-        GetCurrentProcess, OpenProcess, SetPriorityClass, NORMAL_PRIORITY_CLASS,
-        PROCESS_SET_INFORMATION,
+        GetCurrentProcess, OpenProcess, SetPriorityClass, ABOVE_NORMAL_PRIORITY_CLASS,
+        NORMAL_PRIORITY_CLASS, PROCESS_SET_INFORMATION,
+    };
+    let class = if above_normal {
+        ABOVE_NORMAL_PRIORITY_CLASS
+    } else {
+        NORMAL_PRIORITY_CLASS
     };
     unsafe {
         match pid {
             None => {
-                let _ = SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+                let _ = SetPriorityClass(GetCurrentProcess(), class);
             }
             Some(pid) => {
                 if let Ok(process) = OpenProcess(PROCESS_SET_INFORMATION, false, pid) {
-                    let _ = SetPriorityClass(process, NORMAL_PRIORITY_CLASS);
+                    let _ = SetPriorityClass(process, class);
                     let _ = CloseHandle(process);
                 }
             }
