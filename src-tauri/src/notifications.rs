@@ -696,6 +696,20 @@ fn show_card(app: &AppHandle, item: BloomNotification) {
             return;
         }
     }
+    // The card window should be there; if it isn't (its page was lost), it
+    // is made again and the card waits for it.
+    if app.get_webview_window("notifications").is_none() {
+        trace("the card window was gone: made again");
+        if let Ok(mut waiting) = CARDS_WAITING.lock() {
+            waiting.0 = false;
+            waiting.1.push(item);
+        }
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let _ = crate::later_windows::ensure(&app, "notifications");
+        });
+        return;
+    }
     let _ = app.emit_to("notifications", "bloom-notification", item);
 }
 
@@ -842,29 +856,36 @@ fn read_dword(subkey: &str, value: &str) -> Option<u32> {
     Some(data)
 }
 
-/// Whether Windows would have shown this one as a pop-up: not in Do not
-/// disturb, not over a full-screen app, and not an app whose banners are off.
-fn windows_would_show(item: &BloomNotification) -> bool {
+/// Why Windows wouldn't show this one as a pop-up (Do not disturb, a
+/// full-screen app in front, notifications or this app's banners off), or
+/// `None` when it would.
+fn why_not_shown(item: &BloomNotification) -> Option<&'static str> {
     use windows::UI::Notifications::{ToastNotificationManager, ToastNotificationMode};
     let base = "Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings";
     if read_dword(base, "NOC_GLOBAL_SETTING_TOASTS_ENABLED") == Some(0) {
-        return false;
+        return Some("notifications are off in Windows' settings");
     }
     if let Ok(mode) = ToastNotificationManager::GetDefault().and_then(|m| m.NotificationMode()) {
-        if mode != ToastNotificationMode::Unrestricted {
-            return false;
+        if mode == ToastNotificationMode::PriorityOnly {
+            return Some("Windows' Do not disturb is on (priority only)");
+        }
+        if mode == ToastNotificationMode::AlarmsOnly {
+            return Some("Windows' Do not disturb is on (alarms only)");
         }
     }
     if crate::state::CURRENT_FOREGROUND_FULLSCREEN.load(Ordering::Relaxed) {
-        return false;
+        return Some("a full-screen app is in front");
     }
     if !item.aumid.is_empty() {
         let key = format!("{}\\{}", base, item.aumid);
-        if read_dword(&key, "ShowBanner") == Some(0) || read_dword(&key, "Enabled") == Some(0) {
-            return false;
+        if read_dword(&key, "Enabled") == Some(0) {
+            return Some("this app's notifications are off in Windows' settings");
+        }
+        if read_dword(&key, "ShowBanner") == Some(0) {
+            return Some("this app's banners are off in Windows' settings");
         }
     }
-    true
+    None
 }
 
 // ---------------------------------------------------------------- Bloom's history
@@ -1074,8 +1095,13 @@ fn poll(seen: &mut HashSet<u32>, primed: &mut bool, app: &AppHandle) -> Result<(
             continue;
         }
         if let Some(item) = read_notification(&notification) {
-            if windows_would_show(&item) {
-                fresh.push(item);
+            // Each decision logged, so a missing pop-up says why.
+            match why_not_shown(&item) {
+                None => {
+                    trace(&format!("notification from {}: shown as a card", item.app));
+                    fresh.push(item);
+                }
+                Some(why) => trace(&format!("notification from {}: no pop-up, {why}", item.app)),
             }
         }
     }

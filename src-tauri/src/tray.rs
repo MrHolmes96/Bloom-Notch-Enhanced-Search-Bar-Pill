@@ -1749,15 +1749,28 @@ fn normalized_label(label: &str) -> String {
         .collect()
 }
 
+/// Whether a button in Windows' hidden-icons panel is the target's: its
+/// label names the app (its description or program name) or is the icon's
+/// own tooltip, which is what Windows labels the button with. The tooltip
+/// matters for apps whose program is named unlike their icon: NVIDIA's
+/// "NVIDIA Settings" comes from `NVDisplay.Container.exe`, in a driver
+/// folder whose name changes with every driver install.
 unsafe fn matches_icon_label(label: &str, target: &Icon) -> bool {
     let name = normalized_label(label);
+    if name.is_empty() {
+        return false;
+    }
     let friendly = normalized_label(&crate::commands::friendly_process_name(&target.path));
     let stem = std::path::Path::new(&target.path)
         .file_stem()
         .and_then(|s| s.to_str())
         .map(normalized_label)
         .unwrap_or_default();
-    (!friendly.is_empty() && name.contains(&friendly)) || (!stem.is_empty() && name.contains(&stem))
+    let tooltip = normalized_label(&target.tooltip);
+    (!friendly.is_empty() && name.contains(&friendly))
+        || (!stem.is_empty() && name.contains(&stem))
+        || (tooltip.len() >= 3
+            && (name.contains(&tooltip) || tooltip.contains(&name) && name.len() >= 3))
 }
 
 /// Shell_NotifyIconGetRect points at the chevron for hidden icons. The live
