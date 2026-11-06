@@ -34,7 +34,10 @@ body {
 	border-radius: 999px;
 	background: var(--launcher-bg, var(--bloom-bg, rgba(0, 0, 0, 0.92)));
 	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
-	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+	/* Kept inside the window's own margin (6 px above, 12 px at the sides
+	   and below): a shadow reaching past it is cut off square at the window's
+	   edges. */
+	box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
 	backdrop-filter: blur(20px);
 	color: var(--bloom-text, #fff);
 }
@@ -98,7 +101,10 @@ body {
 	border-radius: 22px;
 	background: var(--launcher-bg-expanded, var(--bloom-bg-expanded, rgba(0, 0, 0, 0.92)));
 	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
-	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+	/* Kept inside the window's own margin (6 px above, 12 px at the sides
+	   and below): a shadow reaching past it is cut off square at the window's
+	   edges. */
+	box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
 	backdrop-filter: blur(20px);
 }
 
@@ -199,7 +205,10 @@ body {
 	border-radius: 22px;
 	background: var(--launcher-bg-expanded, var(--bloom-bg-expanded, rgba(0, 0, 0, 0.92)));
 	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
-	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+	/* Kept inside the window's own margin (6 px above, 12 px at the sides
+	   and below): a shadow reaching past it is cut off square at the window's
+	   edges. */
+	box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
 	color: var(--bloom-text, #fff);
 	display: flex;
 	flex-direction: column;
