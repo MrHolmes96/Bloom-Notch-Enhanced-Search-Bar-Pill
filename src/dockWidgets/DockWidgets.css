@@ -315,8 +315,31 @@
 	box-sizing: border-box;
 	border-radius: 10px;
 	border: 2px solid var(--windows-accent, #60cdff);
-	background: color-mix(in srgb, var(--windows-accent, #60cdff) 22%, transparent);
-	z-index: 3;
+	background: color-mix(in srgb, var(--windows-accent, #60cdff) 16%, transparent);
+	/* Over the widget being held, so where it lands always shows. */
+	z-index: 11;
+	pointer-events: none;
+	display: flex;
+	align-items: flex-start;
+	justify-content: center;
+	transition:
+		left 0.12s cubic-bezier(0.32, 0.72, 0, 1),
+		width 0.12s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.dw-drop span {
+	margin-top: -22px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	background: var(--windows-accent, #0078d4);
+	color: #fff;
+	font-size: 10.5px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.dw-drop.is-blocked span {
+	background: rgba(200, 60, 60, 0.95);
 }
 
 .dw-drop.is-blocked {
@@ -548,4 +571,93 @@
 
 .light-mode .dw-item:hover {
 	background: rgba(0, 0, 0, 0.05);
+}
+
+/* ---- the widget being dragged, held where it was picked up */
+.dw-ghost-card {
+	position: fixed;
+	box-sizing: border-box;
+	border-radius: 12px;
+	background: var(--bloom-bg-expanded, rgba(20, 20, 22, 0.96));
+	border: 1px solid color-mix(in srgb, var(--windows-accent, #60cdff) 70%, transparent);
+	box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+	transform: scale(1.04);
+	opacity: 0.9;
+	pointer-events: none;
+	z-index: 10;
+	overflow: hidden;
+	transition: opacity 0.12s ease;
+}
+
+.dw-ghost-card.is-away {
+	opacity: 0.55;
+}
+
+/* How many widgets a dragged group carries. */
+.dw-ghost-count {
+	position: absolute;
+	top: 3px;
+	right: 4px;
+	min-width: 14px;
+	height: 14px;
+	padding: 0 3px;
+	box-sizing: border-box;
+	border-radius: 7px;
+	background: var(--windows-accent, #0078d4);
+	color: #fff;
+	font-size: 9.5px;
+	font-weight: 700;
+	line-height: 14px;
+	text-align: center;
+}
+
+/* ---- a group's widgets, above it while editing */
+.dw-members {
+	position: absolute;
+	transform: translateX(-50%);
+	display: flex;
+	gap: 4px;
+	pointer-events: auto;
+	z-index: 4;
+	white-space: nowrap;
+}
+
+.dw-member {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	padding: 2px 4px 2px 8px;
+	border-radius: 999px;
+	background: var(--bloom-bg-expanded, rgba(20, 20, 22, 0.96));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.14));
+	font-size: 10.5px;
+	cursor: grab;
+	user-select: none;
+	touch-action: none;
+}
+
+.dw-member.is-on {
+	border-color: var(--windows-accent, #60cdff);
+}
+
+.dw-member button {
+	display: grid;
+	place-items: center;
+	width: 14px;
+	height: 14px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: rgba(255, 255, 255, 0.1);
+	color: inherit;
+	cursor: pointer;
+}
+
+.dw-member button:hover {
+	background: rgba(255, 80, 80, 0.7);
+}
+
+.light-mode .dw-member,
+.light-mode .dw-ghost-card {
+	background: rgba(250, 250, 252, 0.97);
 }

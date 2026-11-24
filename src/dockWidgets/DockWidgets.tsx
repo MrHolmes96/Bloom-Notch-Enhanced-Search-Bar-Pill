@@ -10,7 +10,6 @@ import { useMedia, useMetrics, useNow, useTodayTasks } from "./data";
 import {
 	LAYOUT_KEY,
 	WIDGETS,
-	cellAt,
 	fits,
 	gridFor,
 	newId,
@@ -50,15 +49,34 @@ interface Props {
 }
 
 interface Drag {
-	/** From the picker (a new widget) or an item being moved. */
+	/**
+	 * What's dragged: a new widget from the picker (`kind`), a placed item with
+	 * everything in it (`itemId`), or one widget pulled out of a group (`itemId`
+	 * and `kind`).
+	 */
 	kind?: WidgetKind;
 	itemId?: string;
 	fromSide?: Side;
 	size: WidgetSize;
+	/** Where the pointer went down, where it is, and whether it has left. */
+	startX: number;
+	startY: number;
 	x: number;
 	y: number;
 	moved: boolean;
+	/** Where in the widget it was picked up, so it stays under the pointer there. */
+	grabX: number;
+	grabY: number;
 }
+
+/** Where a drag would land: a spot on the grid, or a widget to group with. */
+type Landing =
+	| { side: Side; group: Placed; cell?: undefined; size?: undefined; ok: boolean }
+	| { side: Side; cell: number; size: WidgetSize; ok: boolean; group?: undefined };
+
+/** A wheel gesture over a group (the notch's own rule: one page per gesture). */
+const WHEEL_GESTURE_GAP_MS = 220;
+const WHEEL_PAGE_DISTANCE = 60;
 
 interface Menu {
 	side: Side;
@@ -79,9 +97,12 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 	const [shown, setShown] = useState<Record<string, number>>({});
 	const [drag, setDrag] = useState<Drag | null>(null);
 	const [menu, setMenu] = useState<Menu | null>(null);
+	/** While editing, the group whose widgets are listed above it (the last one pointed at). */
+	const [openGroup, setOpenGroup] = useState<string | null>(null);
 	const pickerRef = useRef<HTMLDivElement | null>(null);
 	const menuRef = useRef<HTMLDivElement | null>(null);
 	const hovered = useRef<string | null>(null);
+	const wheel = useRef<Record<string, { last: number; distance: number; turned: boolean }>>({});
 
 	// ---- the saved layout
 	useEffect(() => {
@@ -177,6 +198,27 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 			...s,
 			[item.id]: ((s[item.id] ?? 0) + by + item.widgets.length) % item.widgets.length
 		}));
+	// As the notch: a gesture (events closer than a pause) turns one page, once
+	// it has gone far enough, so a fast spin or a trackpad flick doesn't skip.
+	const onWheel = (item: Placed, e: React.WheelEvent) => {
+		if (item.widgets.length < 2) return;
+		e.stopPropagation();
+		const gesture = (wheel.current[item.id] ??= { last: 0, distance: 0, turned: false });
+		const now = performance.now();
+		if (now - gesture.last > WHEEL_GESTURE_GAP_MS) {
+			gesture.distance = 0;
+			gesture.turned = false;
+		}
+		gesture.last = now;
+		if (gesture.turned) return;
+		const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+		const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1;
+		gesture.distance += raw * unit;
+		if (Math.abs(gesture.distance) < WHEEL_PAGE_DISTANCE) return;
+		flip(item, gesture.distance > 0 ? 1 : -1);
+		gesture.distance = 0;
+		gesture.turned = true;
+	};
 	useEffect(() => {
 		const turning = [...layout.left, ...layout.right].filter((p) => p.widgets.length > 1 && p.rotate > 0);
 		if (!turning.length) return;
@@ -256,10 +298,14 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 			setEditing(false);
 		});
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				setMenu(null);
-				setEditing(false);
+			if (e.key !== "Escape") return;
+			// A drag first; then the menu and editing.
+			if (dragRef.current) {
+				setDrag(null);
+				return;
 			}
+			setMenu(null);
+			setEditing(false);
 		};
 		window.addEventListener("keydown", onKey);
 		return () => {
@@ -268,52 +314,131 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 		};
 	}, []);
 
-	// ---- dragging (from the picker, or an item while editing)
-	const target = (x: number, y: number) => {
+	// ---- dragging (from the picker, an item, or one widget out of a group)
+	const dragRef = useRef<Drag | null>(null);
+	dragRef.current = drag;
+	const spanOf = (size: WidgetSize) => (size === "large" ? 4 : size === "wide" ? 2 : 1);
+	const widthOf = (size: WidgetSize) => (grid ? spanOf(size) * grid.cell + (spanOf(size) - 1) * grid.gap : 0);
+
+	/**
+	 * Where a drag lands: over another widget, into its group; otherwise the
+	 * grid spot nearest where the dragged widget itself is (its edges, not just
+	 * the pointer), on the side its middle is on. Nothing well above the dock.
+	 */
+	const landing = (d: Drag): Landing | null => {
 		if (!grid || !dock) return null;
-		if (y < window.innerHeight - dock.height - 24 * scale) return null;
-		const side: Side = x < (dock.left + dock.right) / 2 ? "left" : "right";
-		const cell = cellAt(grid, side, x);
+		if (d.y < window.innerHeight - dock.height - 40 * scale) return null;
+		const left = d.x - d.grabX;
+		const middle = left + widthOf(d.size) / 2;
+		const side: Side = middle < (dock.left + dock.right) / 2 ? "left" : "right";
+		const source = d.itemId && d.fromSide ? layout[d.fromSide].find((p) => p.id === d.itemId) : undefined;
 		const over = layout[side].find((p) => {
+			if (p.id === d.itemId) return false;
 			const place = placeOf(grid, side, p);
-			return x >= place.left && x <= place.left + place.width;
+			return d.x >= place.left && d.x <= place.left + place.width;
 		});
-		return { side, cell, over };
+		if (over) {
+			const bringing = d.kind ? [d.kind] : (source?.widgets ?? []);
+			return { side, group: over, ok: bringing.some((k) => !over.widgets.includes(k)) };
+		}
+		// A whole item moving doesn't stand in its own way; one pulled out of a
+		// group leaves the group where it is.
+		const others = layout[side].filter((p) => !(p.id === d.itemId && !d.kind));
+		const cells = grid.cells[side];
+		const pitch = grid.cell + grid.gap;
+		const spot = (size: WidgetSize): Landing | null => {
+			// The spot nearest the widget's own left edge (kept where the pointer
+			// holds it, so a smaller size stays under the pointer too).
+			const at = d.x - Math.min(d.grabX, widthOf(size) - 8 * scale);
+			let best = -1;
+			let bestDistance = Infinity;
+			for (let cell = 0; cell + spanOf(size) <= cells; cell++) {
+				const distance = Math.abs(placeOf(grid, side, { cell, size }).left - at);
+				if (distance < bestDistance) {
+					best = cell;
+					bestDistance = distance;
+				}
+			}
+			if (best < 0) return null;
+			if (fits(others, best, size, cells)) return { side, cell: best, size, ok: true };
+			// Taken: a free spot a cell either way, if the widget is that close to it.
+			for (const cell of [best - 1, best + 1]) {
+				if (fits(others, cell, size, cells) && Math.abs(placeOf(grid, side, { cell, size }).left - at) < pitch) {
+					return { side, cell, size, ok: true };
+				}
+			}
+			return { side, cell: best, size, ok: false };
+		};
+		// A whole item keeps its size; a new one (from the picker, or out of a
+		// group) shrinks to fit the gap it's dropped in.
+		const sizes: WidgetSize[] = d.kind
+			? (["large", "wide", "small"] as WidgetSize[]).filter((s) => spanOf(s) <= spanOf(d.size))
+			: [d.size];
+		let first: Landing | null = null;
+		for (const size of sizes) {
+			const land = spot(size);
+			if (land?.ok) return land;
+			first ??= land;
+		}
+		return first;
+	};
+
+	const startDrag = (e: React.PointerEvent, d: Omit<Drag, "startX" | "startY" | "x" | "y" | "moved">) => {
+		if (e.button !== 0) return;
+		e.preventDefault();
+		e.stopPropagation();
+		setMenu(null);
+		setDrag({ ...d, startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY, moved: false });
 	};
 
 	useEffect(() => {
 		if (!drag) return;
 		const move = (e: PointerEvent) =>
-			setDrag((d) => (d ? { ...d, x: e.clientX, y: e.clientY, moved: d.moved || Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) > 4 } : d));
+			setDrag((d) =>
+				d
+					? {
+							...d,
+							x: e.clientX,
+							y: e.clientY,
+							// From where it started, so a slow drag counts too.
+							moved: d.moved || Math.abs(e.clientX - d.startX) + Math.abs(e.clientY - d.startY) > 4
+						}
+					: d
+			);
 		const up = (e: PointerEvent) => {
-			const d = drag;
+			const d: Drag = { ...drag, x: e.clientX, y: e.clientY };
 			setDrag(null);
-			if (!d || !grid) return;
-			const t = target(e.clientX, e.clientY);
-			if (!t) return;
+			if (!drag.moved || !grid) return;
+			const land = landing(d);
+			if (!land || !land.ok) return;
 			const next: Layout = { version: 1, left: [...layout.left], right: [...layout.right] };
 			const source = d.itemId && d.fromSide ? next[d.fromSide].find((p) => p.id === d.itemId) : undefined;
-			if (t.over && t.over.id !== d.itemId) {
-				// Onto another widget: a group.
-				const add = source ? source.widgets : d.kind ? [d.kind] : [];
-				const merged = [...t.over.widgets, ...add.filter((k) => !t.over!.widgets.includes(k))];
-				next[t.side] = next[t.side].map((p) => (p.id === t.over!.id ? { ...p, widgets: merged } : p));
-				if (source && d.fromSide) next[d.fromSide] = next[d.fromSide].filter((p) => p.id !== source.id);
+			// What leaves where it was: one widget out of its group, or the item.
+			const pull = () => {
+				if (!source || !d.fromSide) return;
+				if (d.kind) {
+					const rest = source.widgets.filter((k) => k !== d.kind);
+					next[d.fromSide] = next[d.fromSide].map((p) => (p.id === source.id ? { ...p, widgets: rest } : p));
+					setShown((s) => ({ ...s, [source.id]: 0 }));
+				} else next[d.fromSide] = next[d.fromSide].filter((p) => p.id !== source.id);
+			};
+			if (land.group) {
+				const group = land.group;
+				const bringing = d.kind ? [d.kind] : (source?.widgets ?? []);
+				const merged = [...group.widgets, ...bringing.filter((k) => !group.widgets.includes(k))];
+				pull();
+				next[land.side] = next[land.side].map((p) => (p.id === group.id ? { ...p, widgets: merged } : p));
+				// Show the first one just added.
+				setShown((s) => ({ ...s, [group.id]: group.widgets.length }));
 				save(next);
 				return;
 			}
-			if (!d.moved && source) return;
-			const size = source?.size ?? d.size;
-			// Dropped with its pointer over its middle: place it so.
-			const span = size === "large" ? 4 : size === "wide" ? 2 : 1;
-			const cell = Math.max(0, t.side === "right" ? t.cell - Math.floor((span - 1) / 2) : t.cell - Math.floor((span - 1) / 2));
-			const others = source && d.fromSide === t.side ? next[t.side].filter((p) => p.id !== source.id) : next[t.side];
-			if (!fits(others, cell, size, grid.cells[t.side])) return;
-			if (source && d.fromSide) next[d.fromSide] = next[d.fromSide].filter((p) => p.id !== source.id);
-			const item: Placed = source
-				? { ...source, cell }
-				: { id: newId(), cell, size, widgets: [d.kind!], rotate: 0 };
-			next[t.side] = [...next[t.side], item];
+			pull();
+			const item: Placed =
+				source && !d.kind
+					? { ...source, cell: land.cell }
+					: { id: newId(), cell: land.cell, size: land.size, widgets: [d.kind!], rotate: 0 };
+			next[land.side] = [...next[land.side], item];
 			save(next);
 		};
 		window.addEventListener("pointermove", move);
@@ -384,21 +509,23 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 						const place = placeOf(grid, shelf.side, item);
 						const index = (shown[item.id] ?? 0) % item.widgets.length;
 						const kind = item.widgets[index];
-						const dragging = drag?.itemId === item.id && drag.moved;
+						// A whole item being moved; one widget pulled out leaves it be.
+						const dragging = drag?.itemId === item.id && drag.moved && !drag.kind;
 						return (
 							<div
 								key={item.id}
 								className={`dw-item dw-item--${item.size}${dragging ? " is-dragging" : ""}`}
 								style={{ left: place.left - shelf.left, width: place.width, height: grid.cell, bottom: grid.pad }}
-								onPointerEnter={() => (hovered.current = item.id)}
-								onPointerLeave={() => (hovered.current = null)}
-								onWheel={(e) => {
-									if (item.widgets.length > 1) flip(item, e.deltaY > 0 ? 1 : -1);
+								onPointerEnter={() => {
+									hovered.current = item.id;
+									if (editing) setOpenGroup(item.widgets.length > 1 ? item.id : null);
 								}}
+								onPointerLeave={() => (hovered.current = null)}
+								onWheel={(e) => onWheel(item, e)}
 								onPointerDown={(e) => {
-									if (!editing || e.button !== 0) return;
-									e.preventDefault();
-									setDrag({ itemId: item.id, fromSide: shelf.side, size: item.size, x: e.clientX, y: e.clientY, moved: false });
+									if (!editing) return;
+									const r = e.currentTarget.getBoundingClientRect();
+									startDrag(e, { itemId: item.id, fromSide: shelf.side, size: item.size, grabX: e.clientX - r.left, grabY: e.clientY - r.top });
 								}}
 								onContextMenu={(e) => {
 									e.preventDefault();
@@ -436,34 +563,113 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 				</div>
 			))}
 
+			{/* A group's widgets, while editing: drag one out (onto the grid or
+			    another widget), click to show it, × to remove it */}
+			{editing &&
+				!drag?.moved &&
+				shelfRects.flatMap((shelf) =>
+					shelf.items
+						.filter((item) => item.id === openGroup && item.widgets.length > 1)
+						.map((item) => {
+							const place = placeOf(grid, shelf.side, item);
+							const index = (shown[item.id] ?? 0) % item.widgets.length;
+							return (
+								<div
+									key={`m${item.id}`}
+									className="dw-members"
+									style={{
+										left: Math.max(8, Math.min(window.innerWidth - 8, place.left + place.width / 2)),
+										bottom: bottomBand + 6 * scale
+									}}
+								>
+									{item.widgets.map((k, i) => (
+										<div
+											key={k}
+											className={`dw-member${i === index ? " is-on" : ""}`}
+											title="Drag out of the group"
+											onPointerDown={(e) => {
+												const size = widgetInfo(k)?.size ?? "small";
+												startDrag(e, {
+													kind: k,
+													itemId: item.id,
+													fromSide: shelf.side,
+													size,
+													grabX: widthOf(size) / 2,
+													grabY: grid.cell / 2
+												});
+											}}
+											onClick={() => setShown((s) => ({ ...s, [item.id]: i }))}
+										>
+											<span>{widgetInfo(k)?.label}</span>
+											<button
+												type="button"
+												title="Remove"
+												onPointerDown={(e) => e.stopPropagation()}
+												onClick={(e) => {
+													e.stopPropagation();
+													const rest = item.widgets.filter((w) => w !== k);
+													change(shelf.side, item.id, (p) => ({ ...p, widgets: rest }));
+													setShown((s) => ({ ...s, [item.id]: 0 }));
+												}}
+											>
+												<X size={9} strokeWidth={2.6} />
+											</button>
+										</div>
+									))}
+								</div>
+							);
+						})
+				)}
+
 			{/* Where a dragged widget would land */}
 			{drag?.moved &&
 				(() => {
-					const t = target(drag.x, drag.y);
-					if (!t) return null;
-					if (t.over && t.over.id !== drag.itemId) {
-						const place = placeOf(grid, t.side, t.over);
-						return <div className="dw-drop dw-drop--group" style={{ left: place.left, width: place.width, height: grid.cell, bottom: grid.pad }} />;
-					}
-					const span = drag.size === "large" ? 4 : drag.size === "wide" ? 2 : 1;
-					const cell = Math.max(0, t.cell - Math.floor((span - 1) / 2));
-					const place = placeOf(grid, t.side, { cell, size: drag.size });
-					const others = drag.itemId && drag.fromSide === t.side ? layout[t.side].filter((p) => p.id !== drag.itemId) : layout[t.side];
-					const ok = fits(others, cell, drag.size, grid.cells[t.side]);
+					const land = landing(drag);
+					if (!land) return null;
+					const place = land.group
+						? placeOf(grid, land.side, land.group)
+: placeOf(grid, land.side, { cell: land.cell, size: land.size });
 					return (
 						<div
-							className={`dw-drop${ok ? "" : " is-blocked"}`}
+							className={`dw-drop${land.group ? " dw-drop--group" : ""}${land.ok ? "" : " is-blocked"}`}
 							style={{ left: place.left, width: place.width, height: grid.cell, bottom: grid.pad }}
-						/>
+						>
+							{land.group && <span>{land.ok ? "Add to group" : "Already there"}</span>}
+						</div>
+					);
+				})()}
+
+			{/* The widget itself, held where it was picked up */}
+			{drag?.moved &&
+				(() => {
+					const source = drag.itemId && drag.fromSide ? layout[drag.fromSide].find((p) => p.id === drag.itemId) : undefined;
+					const kind = drag.kind ?? (source ? source.widgets[(shown[source.id] ?? 0) % source.widgets.length] : undefined);
+					if (!kind) return null;
+					// The size it would land at (shrunk to fit a gap), held where it was picked up.
+					const land = landing(drag);
+					const size = land?.size && land.ok ? land.size : drag.size;
+					const width = widthOf(size);
+					return (
+						<div
+							className={`dw-ghost-card${land ? "" : " is-away"}`}
+							style={{ left: drag.x - Math.min(drag.grabX, width - 8 * scale), top: drag.y - drag.grabY, width, height: grid.cell }}
+						>
+							<div className="dw-face">
+								<Widget kind={kind} size={size} id={source?.id ?? "ghost"} options={source?.options?.[kind]} data={data} />
+							</div>
+							{source && !drag.kind && source.widgets.length > 1 && (
+								<span className="dw-ghost-count">{source.widgets.length}</span>
+							)}
+						</div>
 					);
 				})()}
 
 			{/* The picker */}
 			{editing && (
-				<div ref={pickerRef} className="dw-picker" style={{ bottom: bottomBand + 18 * scale }}>
+				<div ref={pickerRef} className="dw-picker"style={{ bottom: bottomBand + 40 * scale }}>
 					<div className="dw-picker-head">
 						<Layers size={14} />
-						<span>Drag widgets beside the dock. Drop one on another to group them.</span>
+<span>Drag widgets beside the dock. Drop one on another to group them. Point at a group to list its widgets: drag one out, or × to remove it.</span>
 						<button type="button" className="dw-done" onClick={() => setEditing(false)}>
 							<Check size={13} /> Done
 						</button>
@@ -478,10 +684,7 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 											type="button"
 											key={w.kind}
 											className="dw-chip"
-											onPointerDown={(e) => {
-												e.preventDefault();
-												setDrag({ kind: w.kind, size: w.size, x: e.clientX, y: e.clientY, moved: false });
-											}}
+											onPointerDown={(e) => startDrag(e, { kind: w.kind, size: w.size, grabX: widthOf(w.size) / 2, grabY: grid.cell / 2 })}
 										>
 											<Plus size={11} /> {w.label}
 										</button>
@@ -490,13 +693,6 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 							</div>
 						))}
 					</div>
-				</div>
-			)}
-
-			{/* A chip following the pointer while dragging from the picker */}
-			{drag?.moved && drag.kind && (
-				<div className="dw-ghost" style={{ left: drag.x + 10, top: drag.y + 10 }}>
-					{widgetInfo(drag.kind)?.label}
 				</div>
 			)}
 
