@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./Dock.css";
 import { EdgeSurface } from "./components/EdgeSurface";
+import { DockWidgets } from "./dockWidgets/DockWidgets";
 import { initTheme } from "./theme";
 import { useSettingsSync } from "./hooks/useSettingsSync";
 import { reloadIfMirrorWasStale } from "./hooks/settingsMirror";
@@ -1995,6 +1996,12 @@ const Dock = memo(function Dock() {
 			</div>
 
 			<DesktopMenu />
+			<DockWidgets
+				dockRef={dockRef}
+				scale={scale}
+				hidden={!isReady || !isVisible || isHidden}
+				stepAside={dockMode === "smart" && interactionState === "none"}
+			/>
 
 			{contextMenu && (
 				<div

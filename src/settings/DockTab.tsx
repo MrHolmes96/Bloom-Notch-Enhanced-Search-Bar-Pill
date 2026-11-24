@@ -17,8 +17,11 @@ import {
 	FolderPlus,
 	Plus,
 	X,
-	Contrast
+	Contrast,
+	Layers
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { emitTo } from "@tauri-apps/api/event";
 import { SettingRow } from "./SettingRow";
 import { useStoredString } from "./useStoredSetting";
 import { RecycleBinSettings } from "./RecycleBinSettings";
@@ -49,12 +52,13 @@ const startIconTileStyle = (active: boolean): CSSProperties => ({
 });
 
 /** Settings > Dock's sub-sections. */
-export type DockSection = "behavior" | "look" | "extras";
+export type DockSection = "behavior" | "look" | "extras" | "widgets";
 
 const SECTION_LABELS: Record<DockSection, string> = {
 	behavior: "Dock",
 	look: "Look",
-	extras: "Extras"
+	extras: "Extras",
+	widgets: "Widgets Beside the Dock"
 };
 
 interface DockTabProps {
@@ -332,6 +336,30 @@ export function DockTab({
 								onChange={handleStartIconUpload}
 							/>
 						</div>
+					</>
+				)}
+
+				{dockEnabled && section === "widgets" && (
+					<>
+						<SettingRow
+							icon={Layers}
+							label="Edit Widgets"
+							desc="Shows the grid beside the dock and the widgets to drag onto it. Drop one widget on another to make a group; the mouse wheel flips through it. Also in the desktop's right-click menu beside the dock"
+							action
+							onClick={() => void emitTo("dock", "dock-widgets-edit").catch(() => {})}
+						/>
+						<SettingRow
+							icon={Trash2}
+							label="Remove All Widgets"
+							desc="Clears both sides of the dock"
+							action
+							divider={false}
+							onClick={() => {
+								const empty = JSON.stringify({ version: 1, left: [], right: [] });
+								localStorage.setItem("bloom-dock-widgets", empty);
+								void invoke("save_setting", { key: "bloom-dock-widgets", value: empty }).catch(() => {});
+							}}
+						/>
 					</>
 				)}
 

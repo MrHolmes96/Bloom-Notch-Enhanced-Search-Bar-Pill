@@ -137,7 +137,8 @@ const CATEGORIES: {
 		sections: [
 			{ id: "behavior", label: "Behavior", icon: Eye },
 			{ id: "look", label: "Look", icon: Sparkles },
-			{ id: "extras", label: "Extras", icon: HardDrive }
+			{ id: "extras", label: "Extras", icon: HardDrive },
+			{ id: "widgets", label: "Widgets", icon: Layers }
 		]
 	},
 	{

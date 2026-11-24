@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Layers } from "lucide-react";
 import {
 	DisplayIcon,
 	FileIcon,
@@ -151,6 +151,11 @@ export function DesktopMenu() {
 
 	const run = (action: string) => {
 		close();
+		// The widgets beside the dock live in this page.
+		if (action === "widgets") {
+			window.dispatchEvent(new Event("dw-edit"));
+			return;
+		}
 		invoke("desktop_menu_run", { action }).catch(() => {});
 	};
 
@@ -279,6 +284,7 @@ export function DesktopMenu() {
 				<div className="dm-sep" />
 				{item("display", "Display settings", <DisplayIcon />, "display")}
 				{item("personalise", "Personalise", <PersonaliseIcon />, "personalise")}
+				{item("widgets", "Dock widgets", <Layers size={16} strokeWidth={1.6} />, "widgets")}
 				{menu.terminal && (
 					<>
 						<div className="dm-sep" />

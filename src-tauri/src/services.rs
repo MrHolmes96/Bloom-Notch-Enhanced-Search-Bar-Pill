@@ -1463,6 +1463,9 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         (*pos - current.position_ms).abs() > 1000
                     }) {
                         let _ = handle_system.emit("media-update", current.clone());
+                        if let Ok(mut last) = LAST_MEDIA.lock() {
+                            *last = Some(current.clone());
+                        }
                         ANY_MEDIA_PLAYING.store(current.is_playing, Ordering::Relaxed);
                         last_emitted_info = Some((current.title, current.artist, current.is_playing, current.has_media, art_str, current.position_ms, current.duration_ms));
                     }
@@ -1493,6 +1496,8 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
         let mut last_dock_overlap: Option<bool> = None;
         let mut last_notch_overlap: Option<bool> = None;
         let mut last_dock_maximized: Option<bool> = None;
+        let mut last_widgets_covered: Option<(bool, bool)> = None;
+        let mut widgets_said = Instant::now();
         let mut last_fg_maximized = false;
         let mut last_hwnd = HWND(std::ptr::null_mut());
         let mut last_emit = Instant::now();
@@ -1583,6 +1588,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                 let mut should_notch_overlap = false;
                 let mut should_maximized = false;
                 let mut current_is_fs = false;
+                let mut widgets_covered = (false, false);
 
                 // Cheap check every tick: the foreground hwnd doesn't change when
                 // the user clicks maximize, so without this the adaptive dock
@@ -1632,6 +1638,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         should_notch_overlap = state.notch;
                         should_maximized = state.maximized;
                         current_is_fs = state.fullscreen;
+                        widgets_covered = (state.widgets_left, state.widgets_right);
                     }
                 } else {
                     last_hwnd = hwnd;
@@ -1683,6 +1690,25 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     let _ = handle_visibility.emit("dock-overlap", effective_dock_overlap);
                     last_dock_overlap = Some(effective_dock_overlap);
                     last_emit = Instant::now();
+                }
+
+                // The widget shelves beside the dock: whether the window in
+                // front covers each (left, right), as for the dock itself.
+                let widgets_covered = if dock_visible {
+                    widgets_covered
+                } else {
+                    (false, false)
+                };
+                if Some(widgets_covered) != last_widgets_covered
+                    || widgets_said.elapsed() >= Duration::from_secs(3)
+                {
+                    widgets_said = Instant::now();
+                    let _ = handle_visibility.emit_to(
+                        "dock",
+                        "dock-widgets-covered",
+                        [widgets_covered.0, widgets_covered.1],
+                    );
+                    last_widgets_covered = Some(widgets_covered);
                 }
 
                 if Some(should_notch_overlap) != last_notch_overlap
@@ -1819,6 +1845,15 @@ fn back_from_full_screen(app: &AppHandle) {
     });
 }
 
+/// The media last told to the pages (`media_now`, for a page that opens
+/// while nothing changes, such as a paused song).
+static LAST_MEDIA: std::sync::Mutex<Option<MediaInfo>> = std::sync::Mutex::new(None);
+
+#[tauri::command]
+pub fn media_now() -> Option<MediaInfo> {
+    LAST_MEDIA.lock().ok().and_then(|m| m.clone())
+}
+
 /// What the window in front means for the dock and notch.
 #[derive(Clone, Copy, Default)]
 struct OverlapState {
@@ -1830,6 +1865,10 @@ struct OverlapState {
     maximized: bool,
     /// A true full-screen window.
     fullscreen: bool,
+    /// The widget shelves left and right of the dock should get out of the
+    /// way (the same rule as the dock, over each shelf's own area).
+    widgets_left: bool,
+    widgets_right: bool,
 }
 
 impl OverlapState {
@@ -1841,6 +1880,8 @@ impl OverlapState {
             notch: self.notch || other.notch,
             maximized: (self.maximized || other.maximized) && !fullscreen,
             fullscreen,
+            widgets_left: self.widgets_left || other.widgets_left,
+            widgets_right: self.widgets_right || other.widgets_right,
         }
     }
 }
@@ -1919,11 +1960,36 @@ unsafe fn window_overlap_state(hwnd: HWND, cached_scale: f64) -> OverlapState {
     if state.fullscreen || is_maximized {
         state.dock = true;
         state.notch = true;
+        state.widgets_left = true;
+        state.widgets_right = true;
         // Standard maximized windows leave the dock's reserved strip empty on
         // both sides, so the dock can stretch to a full taskbar. True
         // fullscreen windows cover the screen and should not.
         state.maximized = is_maximized && !state.fullscreen;
         return state;
+    }
+
+    // Each widget shelf, as the dock below: covered when the window reaches
+    // into its strip.
+    if let Ok(shelves) = WIDGET_RECTS.lock() {
+        let dock_middle = DOCK_RECT
+            .lock()
+            .ok()
+            .and_then(|g| *g)
+            .map(|d| d.x + d.width / 2);
+        let res_h = (56.0 * cached_scale) as i32;
+        let trigger_y = screen_rect.bottom - res_h;
+        for shelf in shelves.iter() {
+            let s_left = (shelf.x as f64 * cached_scale) as i32;
+            let s_right = s_left + (shelf.width as f64 * cached_scale) as i32;
+            if rect.left < s_right - 4 && rect.right > s_left + 4 && rect.bottom > trigger_y + 4 {
+                if dock_middle.is_some_and(|m| shelf.x + shelf.width / 2 < m) {
+                    state.widgets_left = true;
+                } else {
+                    state.widgets_right = true;
+                }
+            }
+        }
     }
 
     if let Ok(dock_rect_lock) = DOCK_RECT.lock() {
@@ -3002,7 +3068,11 @@ fn close_dock_menu_if_outside(app_handle: &AppHandle, press: windows::Win32::Fou
     };
     let menu = MENU_RECT.lock().ok().and_then(|g| *g);
     let dock = DOCK_RECT.lock().ok().and_then(|g| *g);
-    if inside(menu) || inside(dock) {
+    let on_widget = WIDGET_RECTS
+        .lock()
+        .map(|shelves| shelves.iter().any(|r| inside(Some(*r))))
+        .unwrap_or(false);
+    if inside(menu) || inside(dock) || on_widget {
         return;
     }
     MENU_IS_OPEN.store(false, Ordering::Relaxed);
@@ -3236,6 +3306,24 @@ fn update_dock_interaction(
                         is_click_interactive = true;
                     }
                     dock_span = Some((rx, rx + rw));
+                }
+            }
+
+            // The widget shelves beside the dock take clicks as it does.
+            if !is_click_interactive {
+                if let Ok(shelves) = WIDGET_RECTS.try_lock() {
+                    let scale = window_scale(dock_hwnd);
+                    let pad = (4.0 * scale) as i32;
+                    is_click_interactive = shelves.iter().any(|r| {
+                        let rx = win_pos.x + (r.x as f64 * scale) as i32 - pad;
+                        let ry = win_pos.y + (r.y as f64 * scale) as i32 - pad;
+                        let rw = (r.width as f64 * scale) as i32 + pad * 2;
+                        let rh = (r.height as f64 * scale) as i32 + pad * 2;
+                        cursor.x >= rx
+                            && cursor.x <= rx + rw
+                            && cursor.y >= ry
+                            && cursor.y <= ry + rh
+                    });
                 }
             }
 

@@ -1,0 +1,551 @@
+/* Widgets beside the dock (DockWidgets.tsx): shelves like the dock, attached
+   to the screen's bottom edge, in the dock's own surface and type. */
+.dw-root {
+	position: fixed;
+	inset: 0;
+	pointer-events: none;
+	z-index: 1;
+	font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+	color: var(--bloom-text, #fff);
+}
+
+.dw-shelf {
+	position: absolute;
+	bottom: 0;
+	isolation: isolate;
+	--surface-bg: var(--bloom-bg, rgba(0, 0, 0, 0.8));
+	pointer-events: auto;
+	transition:
+		transform 0.35s cubic-bezier(0.32, 0.72, 0, 1),
+		opacity 0.2s ease;
+}
+
+.dw-shelf.is-hidden {
+	transform: translateY(110%);
+	opacity: 0;
+	pointer-events: none;
+}
+
+.dw-item {
+	position: absolute;
+	box-sizing: border-box;
+	border-radius: 10px;
+	overflow: hidden;
+	cursor: default;
+	user-select: none;
+	transition: background 0.15s ease;
+}
+
+.dw-item:hover {
+	background: rgba(255, 255, 255, 0.06);
+}
+
+.is-editing .dw-item {
+	cursor: grab;
+	outline: 1px dashed rgba(255, 255, 255, 0.22);
+	outline-offset: -1px;
+}
+
+.dw-item.is-dragging {
+	opacity: 0.35;
+}
+
+.dw-face {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0 6px;
+	animation: dw-in 0.25s ease-out;
+}
+
+@keyframes dw-in {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+}
+
+/* A group's place in its turn. */
+.dw-dots {
+	position: absolute;
+	right: 5px;
+	top: 50%;
+	transform: translateY(-50%);
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.dw-dots span {
+	width: 3px;
+	height: 3px;
+	border-radius: 50%;
+	background: rgba(255, 255, 255, 0.3);
+}
+
+.dw-dots span.is-on {
+	background: rgba(255, 255, 255, 0.9);
+}
+
+/* ---- the widgets' content */
+.dw-label {
+	font-size: 10px;
+	line-height: 1.2;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.6));
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.dw-value {
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 1.25;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-variant-numeric: tabular-nums;
+}
+
+.dw-big {
+	font-size: 16px;
+	font-weight: 600;
+	line-height: 1.1;
+	font-variant-numeric: tabular-nums;
+}
+
+.dw-stat {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	width: 100%;
+	justify-content: flex-start;
+	padding-left: 4px;
+}
+
+.dw-stat--small {
+	flex-direction: column;
+	gap: 2px;
+	justify-content: center;
+	padding: 0;
+}
+
+.dw-stat--small .dw-value {
+	font-size: 10.5px;
+}
+
+.dw-stat-text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	flex: 1;
+}
+
+.dw-meter {
+	display: block;
+	height: 3px;
+	margin-top: 3px;
+	border-radius: 2px;
+	background: rgba(255, 255, 255, 0.14);
+	overflow: hidden;
+	flex: 1;
+}
+
+.dw-meter > span {
+	display: block;
+	height: 100%;
+	border-radius: inherit;
+	background: var(--windows-accent, #60cdff);
+	transition: width 0.4s ease;
+}
+
+.dw-net {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	font-size: 11px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.dw-net span {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.dw-clock,
+.dw-date {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 1px;
+	min-width: 0;
+}
+
+.dw-media {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	min-width: 0;
+}
+
+.dw-art {
+	position: relative;
+	width: 28px;
+	height: 28px;
+	flex: none;
+	border-radius: 7px;
+	overflow: hidden;
+	background: rgba(255, 255, 255, 0.08);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+}
+
+.dw-item--small .dw-art {
+	width: 100%;
+	height: 100%;
+	border-radius: 8px;
+}
+
+.dw-art img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.dw-art-state {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.35);
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.dw-item:hover .dw-art-state {
+	opacity: 1;
+}
+
+.dw-media-text {
+	flex: 1;
+}
+
+.dw-icon-button,
+.dw-focus {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	border: none;
+	background: transparent;
+	color: inherit;
+	cursor: pointer;
+	padding: 4px;
+	border-radius: 8px;
+	font: inherit;
+}
+
+.dw-icon-button:hover,
+.dw-focus:hover {
+	background: rgba(255, 255, 255, 0.08);
+}
+
+.dw-icon-button:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
+.dw-focus {
+	width: 100%;
+	height: 100%;
+}
+
+.dw-focus.is-done {
+	color: #3cc35a;
+	animation: dw-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes dw-pulse {
+	50% {
+		opacity: 0.55;
+	}
+}
+
+.dw-progress {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	width: 100%;
+	padding: 0 2px;
+}
+
+.dw-progress-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.dw-progress-row .dw-meter {
+	margin-top: 0;
+}
+
+/* ---- editing */
+.dw-cell {
+	position: absolute;
+	box-sizing: border-box;
+	border-radius: 9px;
+	border: 1px dashed rgba(255, 255, 255, 0.28);
+	background: rgba(0, 0, 0, 0.25);
+	backdrop-filter: blur(6px);
+}
+
+.dw-drop {
+	position: absolute;
+	box-sizing: border-box;
+	border-radius: 10px;
+	border: 2px solid var(--windows-accent, #60cdff);
+	background: color-mix(in srgb, var(--windows-accent, #60cdff) 22%, transparent);
+	z-index: 3;
+}
+
+.dw-drop.is-blocked {
+	border-color: rgba(255, 80, 80, 0.8);
+	background: rgba(255, 80, 80, 0.15);
+}
+
+.dw-drop--group {
+	border-style: dashed;
+}
+
+.dw-remove {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	width: 15px;
+	height: 15px;
+	padding: 0;
+	border: none;
+	border-radius: 50%;
+	background: rgba(255, 69, 58, 0.9);
+	color: #fff;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	z-index: 2;
+}
+
+.dw-picker {
+	position: absolute;
+	left: 50%;
+	transform: translateX(-50%);
+	width: min(860px, calc(100vw - 32px));
+	box-sizing: border-box;
+	padding: 12px 14px;
+	border-radius: 16px;
+	background: var(--bloom-bg-expanded, rgba(20, 20, 22, 0.96));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+	backdrop-filter: blur(30px);
+	pointer-events: auto;
+	animation: dw-in 0.2s ease-out;
+}
+
+.dw-picker-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.7));
+	margin-bottom: 10px;
+}
+
+.dw-picker-head span {
+	flex: 1;
+}
+
+.dw-done {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 5px 12px;
+	border-radius: 8px;
+	border: none;
+	background: var(--windows-accent, #0078d4);
+	color: #fff;
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.dw-picker-sections {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 12px;
+}
+
+.dw-picker-title {
+	display: block;
+	font-size: 10.5px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.5));
+	margin-bottom: 6px;
+}
+
+.dw-picker-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 5px;
+}
+
+.dw-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 5px 9px;
+	border-radius: 999px;
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
+	background: rgba(255, 255, 255, 0.06);
+	color: inherit;
+	font: inherit;
+	font-size: 11.5px;
+	cursor: grab;
+	touch-action: none;
+}
+
+.dw-chip:hover {
+	background: rgba(255, 255, 255, 0.12);
+}
+
+.dw-ghost {
+	position: fixed;
+	padding: 5px 10px;
+	border-radius: 999px;
+	background: var(--windows-accent, #0078d4);
+	color: #fff;
+	font-size: 11.5px;
+	font-weight: 600;
+	pointer-events: none;
+	z-index: 10;
+	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+}
+
+/* ---- a widget's menu */
+.dw-menu-backdrop {
+	position: fixed;
+	inset: 0;
+	pointer-events: auto;
+}
+
+.dw-menu {
+	position: fixed;
+	width: 230px;
+	box-sizing: border-box;
+	padding: 6px;
+	border-radius: 12px;
+	background: var(--bloom-bg-expanded, rgba(30, 30, 32, 0.98));
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+	font-size: 12.5px;
+	pointer-events: auto;
+	z-index: 20;
+	animation: dw-in 0.15s ease-out;
+}
+
+.dw-menu-title {
+	padding: 4px 8px 6px;
+	font-weight: 600;
+}
+
+.dw-menu-label {
+	padding: 6px 8px 2px;
+	font-size: 11px;
+	color: var(--bloom-text-muted, rgba(255, 255, 255, 0.6));
+}
+
+.dw-menu-row {
+	display: flex;
+	gap: 3px;
+	padding: 2px 4px 4px;
+	flex-wrap: wrap;
+}
+
+.dw-seg {
+	flex: 1;
+	padding: 4px 6px;
+	border-radius: 6px;
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.1));
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	font-size: 11.5px;
+	cursor: pointer;
+}
+
+.dw-seg.is-on {
+	background: var(--windows-accent, #0078d4);
+	border-color: transparent;
+	color: #fff;
+}
+
+.dw-seg:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
+.dw-menu-item {
+	display: block;
+	width: 100%;
+	text-align: left;
+	padding: 6px 8px;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+
+.dw-menu-item:hover {
+	background: rgba(255, 255, 255, 0.08);
+}
+
+.dw-danger {
+	color: #ff6b6b;
+}
+
+.dw-select,
+.dw-input {
+	width: calc(100% - 8px);
+	margin: 2px 4px 4px;
+	box-sizing: border-box;
+	padding: 5px 8px;
+	border-radius: 6px;
+	border: 1px solid var(--bloom-border, rgba(255, 255, 255, 0.12));
+	background: rgba(255, 255, 255, 0.06);
+	color: inherit;
+	font: inherit;
+	color-scheme: dark;
+}
+
+.dw-menu-form {
+	display: flex;
+	flex-direction: column;
+}
+
+.light-mode .dw-item:hover {
+	background: rgba(0, 0, 0, 0.05);
+}

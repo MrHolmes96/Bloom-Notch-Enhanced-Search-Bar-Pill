@@ -358,6 +358,8 @@ fn main() {
             window_memory::window_memory_forget_app,
             startup_timing::startup_mark,
             download_details::download_details,
+            commands::set_dock_widget_rects,
+            services::media_now,
             quick_settings::quick_settings_state,
             quick_settings::quick_setting_action,
             notifications::notifications_status,

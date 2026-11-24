@@ -151,6 +151,15 @@ pub fn shelf_drag_icon() -> Option<String> {
     Some(format!("data:image/png;base64,{}", b64))
 }
 
+/// The dock page's widget shelves, where they are now (none when there are
+/// no widgets or they are hidden).
+#[tauri::command]
+pub async fn set_dock_widget_rects(rects: Vec<IntRect>) {
+    if let Ok(mut r) = WIDGET_RECTS.lock() {
+        *r = rects;
+    }
+}
+
 #[tauri::command]
 pub async fn update_dock_rect(rect: IntRect) {
     if let Ok(mut r) = DOCK_RECT.lock() {

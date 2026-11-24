@@ -44,6 +44,7 @@ Edit `settings.json` with any text editor while Bloom is running. Changes are ap
 | `bloom-dock-bin-progress` | `"true"` / `"false"` | `"true"` | Show the progress window while emptying. |
 | `bloom-dock-extras-folders`        | comma-separated ids              | `"downloads"` | Known folders in the dock extras: any of `desktop`, `downloads`, `documents`, `pictures`, `music`, `videos`, or `"none"` for no folders.                                         |
 | `bloom-dock-extras-custom-folders` | JSON array                       | `"[]"`        | User-added folders, e.g. `[{"name":"Projects","path":"D:\\Projects"}]`. Folders that no longer exist are skipped until they return.                                              |
+| `bloom-dock-widgets` | JSON | `{"version":1,"left":[],"right":[]}` | Widgets beside the dock (Settings > Dock > Widgets, or the desktop menu's Dock widgets): per side, items `{id, cell, size: "small"\|"wide"\|"large", widgets: [kind...], rotate: seconds, options}` on a grid of dock-height cells counted from the dock outward. Several widgets in one item make a group the mouse wheel flips through (`rotate` > 0 turns it on its own). Kinds: weather, battery, cpu, ram, disk, net, clock, date, worldclock (`options.worldclock.zone`), media, tasks (Blitzit today), focus (state in localStorage `bloom-dock-focus-<id>`), countdown (`options.countdown.date`/`label`), progress. Shelves follow the dock: hidden with it, and in smart mode while the window in front covers their side (`dock-widgets-covered`). |
 
 ### Notch
 

@@ -46,6 +46,9 @@ pub static DOCK_PAGE_READY: AtomicBool = AtomicBool::new(false);
 pub static NOTCH_IS_VISIBLE: AtomicBool = AtomicBool::new(true);
 pub static MENU_IS_OPEN: AtomicBool = AtomicBool::new(false);
 pub static MENU_RECT: Mutex<Option<IntRect>> = Mutex::new(None);
+/// The widget shelves beside the dock (dock window CSS px): they take clicks
+/// like the dock, and each hides when the window in front covers it.
+pub static WIDGET_RECTS: Mutex<Vec<IntRect>> = Mutex::new(Vec::new());
 pub static ICON_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
 pub static INSTALLED_APPS_CACHE: OnceLock<Mutex<Vec<AppInfo>>> = OnceLock::new();
