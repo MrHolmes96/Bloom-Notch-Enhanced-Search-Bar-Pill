@@ -73,11 +73,18 @@ export interface Placed {
 	/** A group's own turn: seconds between widgets, 0 for none. */
 	rotate: number;
 	/**
-	 * With the notch on screen or the desktop in front: "smart" (the default)
-	 * leaves out what the notch already shows; "show" always shows it all;
-	 * "hide" hides it while the desktop is in front.
+	 * When it steps aside (for a group, the whole group): "smart" (the
+	 * default) hides it in the calm moments (see `smartHide`) and while the
+	 * notch on screen shows the same, and pointing at its spot brings it
+	 * back; "show" always shows it; "hide" hides it while the desktop is in
+	 * front, and pointing doesn't bring it back.
 	 */
 	desktop?: DesktopRule;
+	/**
+	 * Smart's calm moments: "desktop" only while the desktop is in front;
+	 * absent, also while the notch is on screen (a small window in front).
+	 */
+	smartHide?: "desktop";
 	/** Per-widget choices (a world clock's time zone, a countdown's date). */
 	options?: Partial<Record<WidgetKind, Record<string, string>>>;
 }
@@ -115,6 +122,7 @@ export function readLayout(text: string | null | undefined): Layout {
 						widgets,
 						rotate: Math.max(0, Math.min(120, Number(item?.rotate) || 0)),
 						desktop: item?.desktop === "show" || item?.desktop === "hide" ? item.desktop : undefined,
+						smartHide: item?.smartHide === "desktop" ? "desktop" : undefined,
 						options: typeof item?.options === "object" && item.options ? item.options : undefined
 					};
 				})
@@ -256,18 +264,21 @@ export function fromVersion1(layout: Layout, grid: Grid, dock: { left: number; r
 }
 
 /**
- * What an item shows now: everything while editing or set to "show"; nothing
- * on the desktop when set to "hide"; otherwise ("smart") all but what the
- * notch on screen already shows (its clock, its status widgets).
+ * Whether an item is on screen now: "shown"; "smart", hidden until pointed
+ * at; or "gone", hidden. A group is one: hidden only when all of it would be.
  */
-export function showing(
+export type Visibility = "shown" | "smart" | "gone";
+
+export function visibility(
 	item: Placed,
 	editing: boolean,
 	notch: { shown: boolean; kinds: ReadonlySet<string> },
 	onDesktop: boolean
-): WidgetKind[] {
+): Visibility {
 	const rule = item.desktop ?? "smart";
-	if (editing || rule === "show") return item.widgets;
-	if (rule === "hide") return onDesktop ? [] : item.widgets;
-	return notch.shown ? item.widgets.filter((k) => !notch.kinds.has(k)) : item.widgets;
+	if (editing || rule === "show") return "shown";
+	if (rule === "hide") return onDesktop ? "gone" : "shown";
+	const calm = item.smartHide === "desktop" ? onDesktop : onDesktop || notch.shown;
+	const hides = (k: WidgetKind) => calm || (notch.shown && notch.kinds.has(k));
+	return item.widgets.every(hides) ? "smart" : "shown";
 }

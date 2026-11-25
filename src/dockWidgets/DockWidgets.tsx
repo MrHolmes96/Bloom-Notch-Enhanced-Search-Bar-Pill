@@ -14,7 +14,7 @@ import {
 	fits,
 	freeCells,
 	fromVersion1,
-	showing,
+	visibility,
 	gridFor,
 	newId,
 	placeOf,
@@ -24,6 +24,7 @@ import {
 	type Grid,
 	type DesktopRule,
 	type Layout,
+	type Visibility,
 	type Placed,
 	type Side,
 	type WidgetKind,
@@ -57,10 +58,19 @@ interface Props {
 
 /** A widget's choices for the desktop (its menu): the rule, its label, what it does. */
 const DESKTOP_RULES: [DesktopRule, string, string][] = [
-	["smart", "Smart", "Hidden while the notch shows the same (its clock, its status widgets)"],
+	["smart", "Smart", "Hidden in calm moments and while the notch shows the same; pointing at its spot shows it"],
 	["show", "Always", "Always shown"],
-	["hide", "Hide", "Hidden while the desktop is in front"]
+	["hide", "Hide", "Hidden while the desktop is in front; pointing doesn't show it"]
 ];
+
+/** Smart's calm moments (a widget's menu). */
+const SMART_HIDES: [undefined | "desktop", string, string][] = [
+	["desktop", "Desktop", "Only while the desktop is in front"],
+	[undefined, "Desktop + small windows", "Also while a window that leaves the notch on screen is in front"]
+];
+
+/** How long smart widgets stay after the pointer leaves them. */
+const REVEAL_GRACE_MS = 700;
 
 /** The dock's height at rest, kept so the grid is right from the first frame (a cache, not a setting). */
 const REST_HEIGHT_KEY = "bloom-dock-widgets-rest-height";
@@ -263,17 +273,29 @@ function DockWidgetsInner({ dockRef, scale, hidden, stepAside, resting }: Props)
 			void b.then((f) => f());
 		};
 	}, []);
-	/** The layout as shown now: each item with what it shows, empty ones left out. */
-	const view = useMemo<Layout>(() => {
-		const side = (items: Placed[]) =>
-			items
-				.map((p) => {
-					const widgets = showing(p, editing, notch, onDesktop);
-					return widgets.length === p.widgets.length ? p : { ...p, widgets };
-				})
-				.filter((p) => p.widgets.length > 0);
-		return { version: 2, left: side(layout.left), right: side(layout.right) };
-	}, [layout, editing, notch, onDesktop]);
+	// Smart widgets hidden come back while their side is pointed at, and go
+	// again a moment after the pointer leaves.
+	const [revealed, setRevealed] = useState<Record<Side, boolean>>({ left: false, right: false });
+	const unreveal = useRef<Record<Side, number>>({ left: 0, right: 0 });
+	const revealedRef = useRef(revealed);
+	revealedRef.current = revealed;
+	const reveal = (side: Side) => {
+		window.clearTimeout(unreveal.current[side]);
+		unreveal.current[side] = 0;
+		if (!revealedRef.current[side]) setRevealed((r) => ({ ...r, [side]: true }));
+	};
+	// Once, from when the pointer left (moving on elsewhere doesn't hold it).
+	const leave = (side: Side) => {
+		if (!revealedRef.current[side] || unreveal.current[side]) return;
+		unreveal.current[side] = window.setTimeout(() => {
+			unreveal.current[side] = 0;
+			setRevealed((r) => (r[side] ? { ...r, [side]: false } : r));
+		}, REVEAL_GRACE_MS);
+	};
+	const visOf = (side: Side, item: Placed): Visibility => {
+		const vis = visibility(item, editing, notch, onDesktop);
+		return vis === "smart" && revealed[side] ? "shown" : vis;
+	};
 
 	// ---- what the placed widgets need
 	const placed = useMemo(
@@ -328,7 +350,7 @@ function DockWidgetsInner({ dockRef, scale, hidden, stepAside, resting }: Props)
 		gesture.turned = true;
 	};
 	useEffect(() => {
-		const turning = [...view.left, ...view.right].filter((p) => p.widgets.length > 1 && p.rotate > 0);
+		const turning = [...layout.left, ...layout.right].filter((p) => p.widgets.length > 1 && p.rotate > 0);
 		if (!turning.length) return;
 		const timers = turning.map((item) =>
 			window.setInterval(() => {
@@ -336,31 +358,54 @@ function DockWidgetsInner({ dockRef, scale, hidden, stepAside, resting }: Props)
 			}, item.rotate * 1000)
 		);
 		return () => timers.forEach((t) => window.clearInterval(t));
-	}, [view]);
+	}, [layout]);
 
 	// ---- where the shelves are: they take clicks (and the dock window's
 	// whole lower band while editing, for the picker and dragging)
+	// A shelf whose widgets come and go together keeps its shape and slides
+	// away and back; only one mixing shown and hidden widgets is split.
 	const shelfRects = useMemo(() => {
-		if (!grid) return [] as { side: Side; items: Placed[]; left: number; width: number }[];
-		const out: { side: Side; items: Placed[]; left: number; width: number }[] = [];
+		// `smart`: its widgets are smart ones stepping aside now (shown or not), so
+		// pointing at its spot keeps them or brings them back.
+		type Shelf = { side: Side; items: Placed[]; left: number; width: number; vis: Visibility; key: string; smart: boolean };
+		if (!grid) return [] as Shelf[];
+		const out: Shelf[] = [];
+		const push = (side: Side, run: Placed[], vis: Visibility, key: string) => {
+			const places = run.map((p) => placeOf(grid, side, p));
+			const left = Math.min(...places.map((p) => p.left)) - grid.pad;
+			const right = Math.max(...places.map((p) => p.left + p.width)) + grid.pad;
+			const smart = run.every((p) => visibility(p, editing, notch, onDesktop) === "smart");
+			out.push({ side, items: run, left, width: right - left, vis, key, smart });
+		};
 		for (const side of ["left", "right"] as Side[]) {
 			// What the dock reaches into steps aside (it stays where it was placed).
-			const items = view[side].filter((p) => p.cell + SPAN[p.size] <= usable(side));
+			const items = layout[side].filter((p) => p.cell + SPAN[p.size] <= usable(side));
 			for (const run of shelves(items)) {
-				const places = run.map((p) => placeOf(grid, side, p));
-				const left = Math.min(...places.map((p) => p.left)) - grid.pad;
-				const right = Math.max(...places.map((p) => p.left + p.width)) + grid.pad;
-				out.push({ side, items: run, left, width: right - left });
+				const vis = run.map((p) => visOf(side, p));
+				const whole = run.map((p) => p.id).join("-");
+				if (vis.every((v) => v === vis[0])) {
+					push(side, run, vis[0], whole);
+					continue;
+				}
+				let start = 0;
+				for (let i = 1; i <= run.length; i++) {
+					if (i === run.length || vis[i] !== vis[start]) {
+						const part = run.slice(start, i);
+						push(side, part, vis[start], `${whole}:${part.map((p) => p.id).join("-")}`);
+						start = i;
+					}
+				}
 			}
 		}
 		return out;
-	}, [grid, view, free]);
+	}, [grid, layout, free, editing, notch, onDesktop, revealed]);
 
 	useEffect(() => {
 		if (!grid) return;
 		const height = grid.cell + 2 * grid.pad;
+		// Shown shelves, and the spots of smart ones (pointing there brings them back).
 		const rects = shelfRects
-			.filter((s) => !sideHidden(s.side))
+			.filter((s) => !sideHidden(s.side) && s.vis !== "gone")
 			.map((s) => ({
 				x: Math.round(s.left),
 				y: Math.round(window.innerHeight - height),
@@ -368,6 +413,35 @@ function DockWidgetsInner({ dockRef, scale, hidden, stepAside, resting }: Props)
 				height: Math.round(height)
 			}));
 		void invoke("set_dock_widget_rects", { rects }).catch(() => {});
+	}, [shelfRects, grid, hidden, stepAside, covered, editing]);
+
+	// Pointing at a smart shelf's spot (shown or not) brings its side's smart
+	// widgets back, and they go a moment after the pointer leaves: by where
+	// the pointer is, not by the shelves' own enter and leave, which a shelf
+	// sliding in under a still pointer doesn't get.
+	useEffect(() => {
+		if (!grid) return;
+		const top = window.innerHeight - (grid.cell + 2 * grid.pad) - 4;
+		const spots = shelfRects.filter((s) => s.smart && !sideHidden(s.side));
+		const over = (side: Side, x: number, y: number) =>
+			y >= top && spots.some((s) => s.side === side && x >= s.left - 4 && x <= s.left + s.width + 4);
+		const move = (e: PointerEvent) => {
+			for (const side of ["left", "right"] as Side[]) {
+				if (over(side, e.clientX, e.clientY)) reveal(side);
+				else leave(side);
+			}
+		};
+		// The window lets the pointer through once it's off every shelf.
+		const out = () => {
+			leave("left");
+			leave("right");
+		};
+		window.addEventListener("pointermove", move);
+		document.documentElement.addEventListener("pointerleave", out);
+		return () => {
+			window.removeEventListener("pointermove", move);
+			document.documentElement.removeEventListener("pointerleave", out);
+		};
 	}, [shelfRects, grid, hidden, stepAside, covered, editing]);
 
 	useEffect(() => {
@@ -608,12 +682,12 @@ Array.from({ length: usable(side) }, (_, cell) => {
 					})
 				)}
 
-			{shelfRects.map((shelf) => (
+{shelfRects.map((shelf) => (
 				<div
-					key={shelf.items.map((p) => p.id).join("-")}
-					className={`dw-shelf${sideHidden(shelf.side) ? " is-hidden" : ""}`}
+					key={shelf.key}
+					className={`dw-shelf${sideHidden(shelf.side) || shelf.vis !== "shown" ? " is-hidden" : ""}`}
 					style={{ left: shelf.left, width: shelf.width, height: bottomBand, borderRadius: `${18 * scale}px ${18 * scale}px 0 0` }}
-				>
+>
 					<EdgeSurface edge="bottom" flares />
 					{shelf.items.map((item) => {
 						const place = placeOf(grid, shelf.side, item);
@@ -816,7 +890,11 @@ Array.from({ length: usable(side) }, (_, cell) => {
 						style={{ left: Math.min(menu.x, window.innerWidth - 240), bottom: window.innerHeight - menu.y + 6 }}
 						onPointerDown={(e) => e.stopPropagation()}
 					>
-						<div className="dw-menu-title">{widgetInfo(menuKind)?.label}</div>
+						<div className="dw-menu-title">
+							{menuItem.widgets.length > 1
+								? `Group: ${menuItem.widgets.map((k) => widgetInfo(k)?.label).join(", ")}`
+								: widgetInfo(menuKind)?.label}
+						</div>
 						<div className="dw-menu-row">
 							{(["small", "wide", "large"] as WidgetSize[]).map((size) => (
 								<button
@@ -893,7 +971,9 @@ disabled={!fits(layout[menu.side], menuItem.cell, size, usable(menu.side), menuI
 								</button>
 							</>
 						)}
-						<div className="dw-menu-label">On the desktop</div>
+						<div className="dw-menu-label">
+							{menuItem.widgets.length > 1 ? "When it steps aside (the whole group)" : "When it steps aside"}
+						</div>
 						<div className="dw-menu-row">
 							{DESKTOP_RULES.map(([rule, label, hint]) => (
 								<button
@@ -909,6 +989,25 @@ disabled={!fits(layout[menu.side], menuItem.cell, size, usable(menu.side), menuI
 								</button>
 							))}
 						</div>
+						{(menuItem.desktop ?? "smart") === "smart" && (
+							<>
+								<div className="dw-menu-label">Smart hides it on</div>
+								<div className="dw-menu-row">
+									{SMART_HIDES.map(([value, label, hint]) => (
+										<button
+											type="button"
+											key={label}
+											title={hint}
+											className={`dw-seg${menuItem.smartHide === value ? " is-on" : ""}`}
+											onClick={() => change(menu.side, menuItem.id, (p) => ({ ...p, smartHide: value }))}
+										>
+											{label}
+										</button>
+									))}
+								</div>
+								<div className="dw-menu-hint">Point at its spot to show it.</div>
+							</>
+						)}
 						<button type="button" className="dw-menu-item" onClick={() => (setEditing(true), setMenu(null))}>
 							Edit widgets
 						</button>
