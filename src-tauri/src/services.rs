@@ -1509,6 +1509,12 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
         // widgets set to hide on the desktop.
         let mut on_desktop = false;
         let mut last_on_desktop: Option<bool> = None;
+        // No app window showing on the dock's screen (checked every third
+        // pass and when the window in front changes), and what was showing.
+        let mut desktop_is_bare = false;
+        let mut bare_checked = Instant::now();
+        let mut bare_said: Option<String> = None;
+        let mut last_bare_hwnd = HWND::default();
         let my_process_id = std::process::id();
         let mut last_monitor_update = Instant::now() - Duration::from_secs(5);
         let mut cached_scale = 1.0f64;
@@ -1720,6 +1726,24 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     last_widgets_covered = Some(widgets_covered);
                 }
 
+                if hwnd != last_bare_hwnd || bare_checked.elapsed() >= Duration::from_millis(450) {
+                    let (bare, showing) = desktop_bare(my_process_id);
+                    desktop_is_bare = bare;
+                    bare_checked = Instant::now();
+                    last_bare_hwnd = hwnd;
+                    // Why the desktop counts or doesn't, when that changes.
+                    let said = if bare {
+                        "the desktop is bare (no app window showing)".to_string()
+                    } else {
+                        format!("an app window is showing: {}", showing.unwrap_or_default())
+                    };
+                    if bare_said.as_deref() != Some(said.as_str()) {
+                        crate::perf_log::note_to("desktop.log", &said);
+                        bare_said = Some(said);
+                    }
+                }
+                // The desktop clicked, or nothing else on screen.
+                let on_desktop = on_desktop || desktop_is_bare;
                 if Some(on_desktop) != last_on_desktop
                     || widgets_said.elapsed() >= Duration::from_secs(3)
                 {
@@ -2178,6 +2202,166 @@ unsafe fn notch_strip_covered(my_process_id: u32, scale: f64) -> bool {
     };
     let _ = EnumWindows(Some(visit), LPARAM(&mut scan as *mut Scan as isize));
     scan.covered
+}
+
+/// Whether only the desktop is on the dock's screen: no app window (or a
+/// dialog or pop-up of one) showing there, whatever has the focus. After the
+/// last window is minimized the focus can stay on it, or land on a helper
+/// window, so the window in front alone doesn't say the desktop is bare.
+/// When not, what's showing (for `desktop.log`).
+unsafe fn desktop_bare(my_process_id: u32) -> (bool, Option<String>) {
+    use windows::Win32::Foundation::{POINT, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetAncestor, GetClassNameW, GetLayeredWindowAttributes, GetWindow,
+        GetWindowRect, IsIconic, GA_ROOTOWNER, GW_OWNER, LAYERED_WINDOW_ATTRIBUTES_FLAGS,
+        LWA_ALPHA, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
+    };
+
+    struct Scan {
+        screen: RECT,
+        own: u32,
+        showing: Option<HWND>,
+    }
+
+    unsafe fn class_of(hwnd: HWND) -> String {
+        let mut class = [0u16; 64];
+        let length = GetClassNameW(hwnd, &mut class) as usize;
+        String::from_utf16_lossy(&class[..length.min(class.len())])
+    }
+
+    unsafe fn is_app_window(hwnd: HWND) -> bool {
+        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        if ex & WS_EX_TOOLWINDOW.0 != 0 {
+            return false;
+        }
+        if ex & WS_EX_APPWINDOW.0 != 0 {
+            return true;
+        }
+        let owned = GetWindow(hwnd, GW_OWNER).is_ok_and(|o| !o.0.is_null());
+        !owned && ex & WS_EX_NOACTIVATE.0 == 0
+    }
+
+    unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> BOOL {
+        let scan = &mut *(param.0 as *mut Scan);
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return true.into();
+        }
+        let class = class_of(hwnd);
+        if matches!(
+            class.as_str(),
+            "Progman"
+                | "WorkerW"
+                | "Shell_TrayWnd"
+                | "Shell_SecondaryTrayWnd"
+                | "Windows.UI.Core.CoreWindow"
+                | "#32768"
+        ) {
+            return true.into();
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == scan.own {
+            return true.into();
+        }
+        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        if ex & (WS_EX_TRANSPARENT.0 | WS_EX_TOOLWINDOW.0) != 0 {
+            return true.into();
+        }
+        if ex & WS_EX_LAYERED.0 != 0 {
+            let mut alpha = 255u8;
+            let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+            if GetLayeredWindowAttributes(hwnd, None, Some(&mut alpha), Some(&mut flags)).is_ok()
+                && flags.0 & LWA_ALPHA.0 != 0
+                && alpha == 0
+            {
+                return true.into();
+            }
+        }
+        let mut cloaked = 0u32;
+        if DwmGetWindowAttribute(
+            hwnd,
+            windows::Win32::Graphics::Dwm::DWMWA_CLOAKED,
+            &mut cloaked as *mut _ as *mut _,
+            4,
+        )
+        .is_ok()
+            && cloaked != 0
+        {
+            return true.into();
+        }
+        // An app window, or a dialog or pop-up of one that's showing.
+        if !is_app_window(hwnd) {
+            let root = GetAncestor(hwnd, GA_ROOTOWNER);
+            if root.is_invalid()
+                || root == hwnd
+                || !IsWindowVisible(root).as_bool()
+                || IsIconic(root).as_bool()
+                || !is_app_window(root)
+            {
+                return true.into();
+            }
+        }
+        // On the dock's screen, and more than a sliver of it.
+        let mut rect = RECT::default();
+        if DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut rect as *mut _ as *mut _,
+            std::mem::size_of::<RECT>() as u32,
+        )
+        .is_err()
+            && GetWindowRect(hwnd, &mut rect).is_err()
+        {
+            return true.into();
+        }
+        let screen = scan.screen;
+        let width = rect.right.min(screen.right) - rect.left.max(screen.left);
+        let height = rect.bottom.min(screen.bottom) - rect.top.max(screen.top);
+        if width < 64 || height < 64 {
+            return true.into();
+        }
+        scan.showing = Some(hwnd);
+        false.into()
+    }
+
+    let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+        return (false, None);
+    }
+    let mut scan = Scan {
+        screen: info.rcMonitor,
+        own: my_process_id,
+        showing: None,
+    };
+    let _ = EnumWindows(Some(visit), LPARAM(&mut scan as *mut Scan as isize));
+    match scan.showing {
+        None => (true, None),
+        Some(hwnd) => {
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            let program = crate::commands::any_process_path(pid)
+                .and_then(|path| path.rsplit('\\').next().map(str::to_string))
+                .unwrap_or_default();
+            let mut text = [0u16; 128];
+            let length =
+                windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(hwnd, &mut text) as usize;
+            let title = String::from_utf16_lossy(&text[..length.min(text.len())]);
+            (
+                false,
+                Some(format!(
+                    "{program} \u{201c}{title}\u{201d} ({})",
+                    class_of(hwnd)
+                )),
+            )
+        }
+    }
 }
 
 /// A visible app window that can be the one a pop-up belongs to: not Bloom,

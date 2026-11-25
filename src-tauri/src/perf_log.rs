@@ -22,7 +22,12 @@ use tauri::AppHandle;
 static WRITE: Mutex<()> = Mutex::new(());
 
 pub fn note(line: &str) {
-    let Some(path) = crate::tray_host::config_dir().map(|dir| dir.join("perf.log")) else {
+    note_to("perf.log", line);
+}
+
+/// A line in a log of Bloom's data folder (in diagnostics), at most 128 KB.
+pub fn note_to(file: &str, line: &str) {
+    let Some(path) = crate::tray_host::config_dir().map(|dir| dir.join(file)) else {
         return;
     };
     let Ok(_guard) = WRITE.lock() else {
