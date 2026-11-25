@@ -335,12 +335,21 @@ unsafe fn watch_until_exit(
         }
         let answering = bloom_answers(parent_pid);
         misses = if answering { 0 } else { misses + 1 };
-        // Other apps stuck together while Bloom runs: an app waits on the
-        // taskbar (its tray icon, its progress, a strip at the screen's
-        // edge), and Bloom stands in for the taskbar. Whatever the cause,
-        // Bloom steps aside so nothing can keep waiting on it.
+        // Other apps stuck together while Bloom doesn't answer either: an app
+        // waits on the taskbar (its tray icon, its progress, a strip at the
+        // screen's edge), and Bloom stands in for it, so Bloom steps aside.
+        // While Bloom answers, the cause is elsewhere (every time it was
+        // ended so, the apps stayed stuck after: JagexLauncher, Explorer),
+        // and ending it only blinks the screen: noted, Bloom keeps running.
         let hung = hung_apps(parent_pid);
         stuck_apps = if hung.len() >= 2 { stuck_apps + 1 } else { 0 };
+        if answering && stuck_apps == STUCK_APPS_CHECKS {
+            note_crash(&format!(
+                "Apps stopped responding together for {} s or more ({}); Bloom still answered, so it kept running (the cause is outside Bloom)",
+                STUCK_APPS_CHECKS * 2,
+                hung.join(", ")
+            ));
+        }
         last = std::time::Instant::now();
         let (reason, code) = if misses >= FROZEN_CHECKS {
             (
@@ -350,13 +359,12 @@ unsafe fn watch_until_exit(
                 ),
                 FROZEN_EXIT,
             )
-        } else if stuck_apps >= STUCK_APPS_CHECKS {
+        } else if stuck_apps >= STUCK_APPS_CHECKS && !answering {
             (
                 format!(
-                    "Apps stopped responding together for {} s or more ({}); Bloom {}: ended so no app can wait on it, the taskbar put back and Bloom started again",
+                    "Apps stopped responding together for {} s or more ({}); Bloom didn't answer either: ended so no app can wait on it, the taskbar put back and Bloom started again",
                     STUCK_APPS_CHECKS * 2,
-                    hung.join(", "),
-                    if answering { "still answered" } else { "didn't answer either" }
+                    hung.join(", ")
                 ),
                 APPS_STUCK_EXIT,
             )

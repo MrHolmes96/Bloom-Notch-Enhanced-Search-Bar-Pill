@@ -355,7 +355,7 @@ export function DockTab({
 							action
 							divider={false}
 							onClick={() => {
-								const empty = JSON.stringify({ version: 1, left: [], right: [] });
+								const empty = JSON.stringify({ version: 2, left: [], right: [] });
 								localStorage.setItem("bloom-dock-widgets", empty);
 								void invoke("save_setting", { key: "bloom-dock-widgets", value: empty }).catch(() => {});
 							}}

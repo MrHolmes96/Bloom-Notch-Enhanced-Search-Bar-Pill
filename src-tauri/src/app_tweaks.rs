@@ -642,11 +642,19 @@ pub fn launch_portals_as_admin() -> bool {
     // up before ran below normal (Task Scheduler's default).
     set_priority(None, false);
     // Portals' files read ahead, alongside it, so it finds them in memory
-    // rather than waiting on the disk everything reads from at sign-in.
+    // rather than waiting on the disk everything reads from at sign-in. At
+    // background (lowest) disk priority: Bloom's own start reads first. At
+    // normal priority it held Bloom's windows back until it was done (8 s).
     if let Some(dir) = exe.parent().map(std::path::Path::to_path_buf) {
         let _ = std::thread::Builder::new()
             .name("bloom-portals-read-ahead".into())
             .spawn(move || {
+                use windows::Win32::System::Threading::{
+                    GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
+                };
+                unsafe {
+                    let _ = SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+                }
                 let started = std::time::Instant::now();
                 let read = read_ahead(&dir, 400 * 1024 * 1024);
                 crate::startup_timing::mark(&format!(

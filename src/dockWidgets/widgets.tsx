@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentType } from "react";
+import { memo, useEffect, useState, type ComponentType } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
 	ArrowDown,
@@ -376,3 +376,50 @@ function isoWeek(date: Date) {
 function nextNewYear(now: Date) {
 	return new Date(now.getFullYear() + 1, 0, 1);
 }
+
+/**
+ * Whether a widget would look the same with `b`'s data as with `a`'s: only
+ * what that kind shows is compared, so the clock's tick (every second) and
+ * each metrics poll redraw only the widgets they change.
+ */
+function sameFor(kind: WidgetKind, a: WidgetData, b: WidgetData) {
+	const minute = (d: Date) => Math.floor(d.getTime() / 60000);
+	switch (kind) {
+		case "weather":
+			return a.weather === b.weather;
+		case "battery":
+			return a.metrics.battery === b.metrics.battery && a.metrics.charging === b.metrics.charging;
+		case "cpu":
+			return a.metrics.cpu === b.metrics.cpu;
+		case "ram":
+			return a.metrics.ram === b.metrics.ram;
+		case "disk":
+			return a.metrics.disk === b.metrics.disk;
+		case "net":
+			return a.metrics.down === b.metrics.down && a.metrics.up === b.metrics.up;
+		case "clock":
+		case "worldclock":
+		case "progress":
+			return minute(a.now) === minute(b.now) && a.h24 === b.h24;
+		case "date":
+			return a.now.toDateString() === b.now.toDateString();
+		case "media":
+			return a.media === b.media;
+		case "tasks":
+			return a.today === b.today;
+		default:
+			// The focus timer and countdown show seconds.
+			return a.now.getTime() === b.now.getTime() && a.h24 === b.h24;
+	}
+}
+
+/** A widget, redrawn only when what it shows changes. */
+export const WidgetFace = memo(
+	Widget,
+	(a, b) =>
+		a.kind === b.kind &&
+		a.size === b.size &&
+		a.id === b.id &&
+		a.options === b.options &&
+		sameFor(a.kind, a.data, b.data)
+);

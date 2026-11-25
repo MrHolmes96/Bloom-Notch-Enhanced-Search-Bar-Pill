@@ -2,11 +2,14 @@
  * Widgets in the strips beside the dock: what is placed where, and the grid
  * they sit on (see DockWidgets.tsx).
  *
- * Each side is a row of grid cells the dock's height, counted from the dock
- * outward (cell 0 is the one next to the dock), so widgets keep their places
- * next to it as the dock grows or shrinks. An item takes 1, 2 or 4 cells
- * (small, wide, large) and holds one widget, or several as a group that the
- * mouse wheel flips through. Kept in settings.json as `bloom-dock-widgets`.
+ * Each side is a row of grid cells the dock's resting height, counted from
+ * the screen's edge inward (cell 0 is the one at the edge), so a widget stays
+ * exactly where it was placed whatever the dock does: grows with apps,
+ * stretches to a full taskbar, shrinks, bounces. Where the dock reaches into
+ * a widget's cells, that widget steps aside until there's room again. An item
+ * takes 1, 2 or 4 cells (small, wide, large) and holds one widget, or several
+ * as a group that the mouse wheel flips through. Kept in settings.json as
+ * `bloom-dock-widgets` (version 2; version 1 counted from the dock outward).
  */
 
 export type WidgetKind =
@@ -61,7 +64,7 @@ export const SPAN: Record<WidgetSize, number> = { small: 1, wide: 2, large: 4 };
 
 export interface Placed {
 	id: string;
-	/** The first cell it takes, counted from the dock outward. */
+	/** The first cell it takes, counted from the screen's edge inward. */
 	cell: number;
 	size: WidgetSize;
 	/** One widget, or a group the mouse wheel flips through. */
@@ -73,12 +76,13 @@ export interface Placed {
 }
 
 export interface Layout {
-	version: 1;
+	/** 2: cells from the screen's edge; 1 (older): from the dock outward. */
+	version: 1 | 2;
 	left: Placed[];
 	right: Placed[];
 }
 
-export const EMPTY: Layout = { version: 1, left: [], right: [] };
+export const EMPTY: Layout = { version: 2, left: [], right: [] };
 export const LAYOUT_KEY = "bloom-dock-widgets";
 
 const KINDS = new Set(WIDGETS.map((w) => w.kind));
@@ -107,7 +111,8 @@ export function readLayout(text: string | null | undefined): Layout {
 					};
 				})
 				.filter((p): p is Placed => p !== null);
-		return { version: 1, left: settle(side(raw?.left)), right: settle(side(raw?.right)) };
+		const version = raw?.version === 1 ? 1 : 2;
+		return { version, left: settle(side(raw?.left)), right: settle(side(raw?.right)) };
 	} catch {
 		return EMPTY;
 	}
@@ -163,59 +168,81 @@ export interface Grid {
 	/** A cell's size (square) and the space between cells. */
 	cell: number;
 	gap: number;
-	/** The shelf's inner padding (as the dock's). */
+	/** The shelf's inner padding (as the dock's), and its flares' width. */
 	pad: number;
-	/** How many cells fit on each side. */
+	feet: number;
+	/** How many cells fit on each side, edge to middle. */
 	cells: Record<Side, number>;
-	/** Where cell 0 starts: for the left side its right edge, for the right side its left edge. */
+	/** Where cell 0 is: on the left its left edge, on the right its right edge. */
 	origin: Record<Side, number>;
 }
 
 /**
- * The grid beside a dock at `dock` (its left, right and height on screen) in
- * a window `width` wide: cells the dock's inner height, room for the dock's
- * and each shelf's curved feet between them and at the screen's edges.
+ * The grid for a screen `width` wide and a dock `height` tall at rest: cells
+ * from each screen edge in to the middle. Fixed: nothing the dock does moves it.
  */
-export function gridFor(
-	dock: { left: number; right: number; height: number },
-	width: number,
-	scale: number
-): Grid {
+export function gridFor(height: number, width: number, scale: number): Grid {
 	const pad = 8 * scale;
 	const gap = 8 * scale;
 	const feet = 13 * scale;
-	const cell = Math.max(24, dock.height - pad * 2);
+	const cell = Math.max(24, height - pad * 2);
 	const pitch = cell + gap;
-	const leftOrigin = dock.left - feet * 2 - pad;
-	const rightOrigin = dock.right + feet * 2 + pad;
+	const leftOrigin = feet + pad;
+	const rightOrigin = width - feet - pad;
 	const room = (space: number) => Math.max(0, Math.floor((space + gap) / pitch));
+	const half = width / 2;
 	return {
 		cell,
 		gap,
 		pad,
-		cells: {
-			left: room(leftOrigin - feet - pad),
-			right: room(width - feet - pad - rightOrigin)
-		},
+		feet,
+		cells: { left: room(half - leftOrigin), right: room(rightOrigin - half) },
 		origin: { left: leftOrigin, right: rightOrigin }
 	};
 }
 
-/** Where an item sits (left edge and width), in the dock window's CSS pixels. */
+/**
+ * How many cells from each edge are free of the dock where it is now (its
+ * edges and the flares of both it and the shelf, with a pad between).
+ */
+export function freeCells(grid: Grid, dock: { left: number; right: number }) {
+	const pitch = grid.cell + grid.gap;
+	const clear = 2 * grid.feet + grid.pad;
+	const left = Math.floor((dock.left - clear - grid.origin.left - grid.cell) / pitch) + 1;
+	const right = Math.floor((grid.origin.right - grid.cell - (dock.right + clear)) / pitch) + 1;
+	return {
+		left: Math.max(0, Math.min(grid.cells.left, left)),
+		right: Math.max(0, Math.min(grid.cells.right, right))
+	};
+}
+
+/** Where an item is on the screen: its left edge and width. */
 export function placeOf(grid: Grid, side: Side, item: Pick<Placed, "cell" | "size">) {
 	const pitch = grid.cell + grid.gap;
 	const width = SPAN[item.size] * grid.cell + (SPAN[item.size] - 1) * grid.gap;
 	const left =
-		side === "right"
-			? grid.origin.right + item.cell * pitch
-			: grid.origin.left - item.cell * pitch - width;
+		side === "left" ? grid.origin.left + item.cell * pitch : grid.origin.right - item.cell * pitch - width;
 	return { left, width };
 }
 
-/** The cell under `x` on a side (may be out of range). */
-export function cellAt(grid: Grid, side: Side, x: number) {
+/**
+ * A version 1 layout (cells from the dock outward, with the dock's edges at
+ * `dock`) moved to the fixed grid: each item to the cell nearest where it was.
+ */
+export function fromVersion1(layout: Layout, grid: Grid, dock: { left: number; right: number }): Layout {
 	const pitch = grid.cell + grid.gap;
-	return side === "right"
-		? Math.floor((x - grid.origin.right) / pitch)
-		: Math.floor((grid.origin.left - x) / pitch);
+	const clear = 2 * grid.feet + grid.pad;
+	const move = (side: Side, items: Placed[]) =>
+		settle(
+			items.map((p) => {
+				const width = SPAN[p.size] * grid.cell + (SPAN[p.size] - 1) * grid.gap;
+				const left = side === "left" ? dock.left - clear - p.cell * pitch - width : dock.right + clear + p.cell * pitch;
+				const cell =
+					side === "left"
+						? Math.round((left - grid.origin.left) / pitch)
+						: Math.round((grid.origin.right - width - left) / pitch);
+				return { ...p, cell: Math.max(0, cell) };
+			})
+		);
+	return { version: 2, left: move("left", layout.left), right: move("right", layout.right) };
 }

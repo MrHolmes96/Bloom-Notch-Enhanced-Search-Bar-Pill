@@ -2001,6 +2001,7 @@ const Dock = memo(function Dock() {
 				scale={scale}
 				hidden={!isReady || !isVisible || isHidden}
 				stepAside={dockMode === "smart" && interactionState === "none"}
+				resting={isReady && isVisible && isExpanded && !isHidden && !isAdaptive}
 			/>
 
 			{contextMenu && (

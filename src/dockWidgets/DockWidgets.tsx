@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Check, Layers, Plus, X } from "lucide-react";
@@ -9,8 +9,11 @@ import { useWeather } from "../hooks/useWeather";
 import { useMedia, useMetrics, useNow, useTodayTasks } from "./data";
 import {
 	LAYOUT_KEY,
+	SPAN,
 	WIDGETS,
 	fits,
+	freeCells,
+	fromVersion1,
 	gridFor,
 	newId,
 	placeOf,
@@ -24,7 +27,7 @@ import {
 	type WidgetKind,
 	type WidgetSize
 } from "./model";
-import { Widget, ZONES, readFocus, writeFocus, type WidgetData } from "./widgets";
+import { WidgetFace as Widget, ZONES, readFocus, writeFocus, type WidgetData } from "./widgets";
 import "./DockWidgets.css";
 
 /**
@@ -46,7 +49,12 @@ interface Props {
 	hidden: boolean;
 	/** Smart mode with nothing calling the dock up: a covered side hides. */
 	stepAside: boolean;
+	/** The dock is at rest, full size (not hidden, shrunk or stretched): its height sizes the grid. */
+	resting: boolean;
 }
+
+/** The dock's height at rest, kept so the grid is right from the first frame (a cache, not a setting). */
+const REST_HEIGHT_KEY = "bloom-dock-widgets-rest-height";
 
 interface Drag {
 	/**
@@ -88,12 +96,13 @@ interface Menu {
 const ROTATIONS = [0, 5, 10, 30, 60];
 const FOCUS_LENGTHS = [15, 25, 45, 60];
 
-export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
+/** Only what it's given: the dock's own frequent renders don't reach it. */
+export const DockWidgets = memo(DockWidgetsInner);
+
+function DockWidgetsInner({ dockRef, scale, hidden, stepAside, resting }: Props) {
 	const [layout, setLayout] = useState<Layout>(() => readLayout(localStorage.getItem(LAYOUT_KEY)));
 	const [editing, setEditing] = useState(false);
 	const [covered, setCovered] = useState<[boolean, boolean]>([false, false]);
-	const [dock, setDock] = useState<{ left: number; right: number; height: number } | null>(null);
-	const [width, setWidth] = useState(window.innerWidth);
 	const [shown, setShown] = useState<Record<string, number>>({});
 	const [drag, setDrag] = useState<Drag | null>(null);
 	const [menu, setMenu] = useState<Menu | null>(null);
@@ -123,18 +132,71 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 		void invoke("save_setting", { key: LAYOUT_KEY, value: text }).catch(() => {});
 	}, []);
 
-	// ---- where the dock is: the grid hangs off it
+	// ---- the grid: fixed to the screen's edges, its cells the dock's height
+	// at rest (kept, so it's right from the first frame). Where the dock is now
+	// only says how many cells from each edge are free of it; nothing the dock
+	// does moves or resizes a widget.
+	const [restHeight, setRestHeight] = useState<number | null>(() => {
+		const kept = Number(localStorage.getItem(REST_HEIGHT_KEY));
+		return kept >= 30 ? kept : null;
+	});
+	const [width, setWidth] = useState(window.innerWidth);
+	const grid: Grid | null = useMemo(
+		() => (restHeight ? gridFor(restHeight, width, scale) : null),
+		[restHeight, width, scale]
+	);
+	const [free, setFree] = useState<Record<Side, number> | null>(null);
+	const gridRef = useRef(grid);
+	gridRef.current = grid;
+	const restingRef = useRef(resting);
+	restingRef.current = resting;
+	/** The dock's edges now (for moving a version 1 layout over). */
+	const dockEdges = useRef<{ left: number; right: number } | null>(null);
 	useLayoutEffect(() => {
+		let heightTimer = 0;
+		let freeTimer = 0;
+		let pendingHeight = 0;
+		let pendingFree = "";
 		const measure = () => {
+			if (window.innerWidth !== width) setWidth(window.innerWidth);
 			const el = dockRef.current;
-			setWidth(window.innerWidth);
 			if (!el) return;
+			// Its layout size (not the springs' transforms) at its scale, about its middle.
 			const r = el.getBoundingClientRect();
-			if (r.width < 40 || r.height < 30) return;
-			setDock((prev) =>
-				prev && Math.abs(prev.left - r.left) < 0.5 && Math.abs(prev.right - r.right) < 0.5 && Math.abs(prev.height - r.height) < 0.5
-					? prev
-					: { left: r.left, right: r.right, height: r.height }
+			const middle = r.left + r.width / 2;
+			const w = el.offsetWidth * scale;
+			const h = el.offsetHeight * scale;
+			dockEdges.current = { left: middle - w / 2, right: middle + w / 2 };
+			// Its height at rest, once it has held still a moment.
+			if (restingRef.current && h >= 30 && Math.abs(h - pendingHeight) >= 0.5) {
+				pendingHeight = h;
+				window.clearTimeout(heightTimer);
+				heightTimer = window.setTimeout(() => {
+					setRestHeight((prev) => {
+						if (prev !== null && Math.abs(prev - pendingHeight) < 0.5) return prev;
+						try {
+							localStorage.setItem(REST_HEIGHT_KEY, String(pendingHeight));
+						} catch {}
+						return pendingHeight;
+					});
+				}, 400);
+			}
+			// Cells free of it, once a spring has settled (no blinking as it overshoots).
+			const g = gridRef.current;
+			if (!g) return;
+			const next = freeCells(g, dockEdges.current);
+			const key = `${next.left},${next.right}`;
+			if (key === pendingFree) return;
+			const first = pendingFree === "";
+			pendingFree = key;
+			window.clearTimeout(freeTimer);
+			if (first) {
+				setFree(next);
+				return;
+			}
+			freeTimer = window.setTimeout(
+				() => setFree((prev) => (prev && prev.left === next.left && prev.right === next.right ? prev : next)),
+				150
 			);
 		};
 		measure();
@@ -146,9 +208,18 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 			observer.disconnect();
 			window.removeEventListener("resize", measure);
 			window.clearInterval(timer);
+			window.clearTimeout(heightTimer);
+			window.clearTimeout(freeTimer);
 		};
-	}, [dockRef]);
-	const grid: Grid | null = useMemo(() => (dock ? gridFor(dock, width, scale) : null), [dock, width, scale]);
+	}, [dockRef, scale, grid, width]);
+	const usable = (side: Side) => (grid && free ? free[side] : 0);
+
+	// A layout from before (cells from the dock outward) moves to the fixed
+	// grid once, each widget to where it was on the screen.
+	useEffect(() => {
+		if (layout.version !== 1 || !grid || !dockEdges.current || !resting) return;
+		save(fromVersion1(layout, grid, dockEdges.current));
+	}, [layout, grid, resting]);
 
 	// ---- covered by the window in front (smart mode), and edit requests
 	useEffect(() => {
@@ -177,20 +248,18 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 	const ticking = ["clock", "worldclock", "focus", "date", "countdown", "progress"].some((k) => placed.has(k as WidgetKind));
 	const now = useNow(ticking, 1000);
 	const h24 = useClock24h();
-	const data: WidgetData = {
-		metrics,
-		weather: {
+	// The same object while nothing in it changes, so a widget can tell.
+	const weatherData = useMemo(
+		() => ({
 			temperature: weather.temperature,
 			condition: weather.weatherCondition,
 			icon: weather.weatherIcon,
 			city: weather.cityName,
 			unit: weather.tempUnit === "fahrenheit" ? "F" : "C"
-		},
-		media,
-		today,
-		now,
-		h24
-	};
+		}),
+		[weather.temperature, weather.weatherCondition, weather.weatherIcon, weather.cityName, weather.tempUnit]
+	);
+	const data: WidgetData = { metrics, weather: weatherData, media, today, now, h24 };
 
 	// ---- groups: the wheel flips, and a group can turn on its own
 	const flip = (item: Placed, by: number) =>
@@ -236,7 +305,8 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 		if (!grid) return [] as { side: Side; items: Placed[]; left: number; width: number }[];
 		const out: { side: Side; items: Placed[]; left: number; width: number }[] = [];
 		for (const side of ["left", "right"] as Side[]) {
-			const items = layout[side].filter((p) => p.cell + (p.size === "large" ? 4 : p.size === "wide" ? 2 : 1) <= grid.cells[side]);
+			// What the dock reaches into steps aside (it stays where it was placed).
+			const items = layout[side].filter((p) => p.cell + SPAN[p.size] <= usable(side));
 			for (const run of shelves(items)) {
 				const places = run.map((p) => placeOf(grid, side, p));
 				const left = Math.min(...places.map((p) => p.left)) - grid.pad;
@@ -245,11 +315,11 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 			}
 		}
 		return out;
-	}, [grid, layout]);
+	}, [grid, layout, free]);
 
 	useEffect(() => {
-		if (!dock) return;
-		const height = dock.height;
+		if (!grid) return;
+		const height = grid.cell + 2 * grid.pad;
 		const rects = shelfRects
 			.filter((s) => !sideHidden(s.side))
 			.map((s) => ({
@@ -259,7 +329,7 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 				height: Math.round(height)
 			}));
 		void invoke("set_dock_widget_rects", { rects }).catch(() => {});
-	}, [shelfRects, dock, hidden, stepAside, covered, editing]);
+	}, [shelfRects, grid, hidden, stepAside, covered, editing]);
 
 	useEffect(() => {
 		if (!editing && !menu) return;
@@ -279,13 +349,14 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 			}).catch(() => {});
 		};
 		const frame = requestAnimationFrame(report);
-		// Said again: the dock's own menus closing clear it.
+		// Said again: the dock's own menus closing clear it. (Once per change
+		// of menu or editing, not on every render while dragging.)
 		const timer = window.setInterval(report, 500);
 		return () => {
 			cancelAnimationFrame(frame);
 			window.clearInterval(timer);
 		};
-	});
+	}, [editing, menu]);
 	useEffect(() => {
 		if (editing || menu) return;
 		void invoke("set_menu_open", { open: false, rect: null }).catch(() => {});
@@ -326,11 +397,11 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 	 * the pointer), on the side its middle is on. Nothing well above the dock.
 	 */
 	const landing = (d: Drag): Landing | null => {
-		if (!grid || !dock) return null;
-		if (d.y < window.innerHeight - dock.height - 40 * scale) return null;
+		if (!grid) return null;
+		if (d.y < window.innerHeight - (grid.cell + 2 * grid.pad) - 40 * scale) return null;
 		const left = d.x - d.grabX;
 		const middle = left + widthOf(d.size) / 2;
-		const side: Side = middle < (dock.left + dock.right) / 2 ? "left" : "right";
+		const side: Side = middle < window.innerWidth / 2 ? "left" : "right";
 		const source = d.itemId && d.fromSide ? layout[d.fromSide].find((p) => p.id === d.itemId) : undefined;
 		const over = layout[side].find((p) => {
 			if (p.id === d.itemId) return false;
@@ -344,7 +415,7 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 		// A whole item moving doesn't stand in its own way; one pulled out of a
 		// group leaves the group where it is.
 		const others = layout[side].filter((p) => !(p.id === d.itemId && !d.kind));
-		const cells = grid.cells[side];
+		const cells = usable(side);
 		const pitch = grid.cell + grid.gap;
 		const spot = (size: WidgetSize): Landing | null => {
 			// The spot nearest the widget's own left edge (kept where the pointer
@@ -411,7 +482,7 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 			if (!drag.moved || !grid) return;
 			const land = landing(d);
 			if (!land || !land.ok) return;
-			const next: Layout = { version: 1, left: [...layout.left], right: [...layout.right] };
+			const next: Layout = { version: 2, left: [...layout.left], right: [...layout.right] };
 			const source = d.itemId && d.fromSide ? next[d.fromSide].find((p) => p.id === d.itemId) : undefined;
 			// What leaves where it was: one widget out of its group, or the item.
 			const pull = () => {
@@ -451,12 +522,12 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 
 	// ---- changes from the menu
 	const change = (side: Side, id: string, f: (p: Placed) => Placed | null) => {
-		const next: Layout = { version: 1, left: layout.left, right: layout.right };
+		const next: Layout = { version: 2, left: layout.left, right: layout.right };
 		next[side] = layout[side].map((p) => (p.id === id ? f(p) : p)).filter((p): p is Placed => p !== null);
 		save(next);
 	};
 	const setSize = (side: Side, item: Placed, size: WidgetSize) => {
-		if (!grid || !fits(layout[side], item.cell, size, grid.cells[side], item.id)) return false;
+		if (!grid || !fits(layout[side], item.cell, size, usable(side), item.id)) return false;
 		change(side, item.id, (p) => ({ ...p, size }));
 		return true;
 	};
@@ -466,8 +537,8 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 		const others = layout[side].map((p) => (p.id === item.id ? { ...p, widgets: rest } : p));
 		const size = widgetInfo(kind)?.size ?? "small";
 		let cell = 0;
-		while (cell < grid.cells[side] && !fits(others, cell, size, grid.cells[side])) cell += 1;
-		if (cell >= grid.cells[side]) return;
+		while (cell < usable(side) && !fits(others, cell, size, usable(side))) cell += 1;
+		if (cell >= usable(side)) return;
 		save({ ...layout, [side]: [...others, { id: newId(), cell, size, widgets: [kind], rotate: 0 }] });
 	};
 	const setOption = (side: Side, item: Placed, kind: WidgetKind, key: string, value: string) =>
@@ -476,8 +547,8 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 			options: { ...(p.options ?? {}), [kind]: { ...(p.options?.[kind] ?? {}), [key]: value } }
 		}));
 
-	if (!grid || !dock) return null;
-	const bottomBand = dock.height;
+	if (!grid) return null;
+	const bottomBand = grid.cell + 2 * grid.pad;
 	const menuItem = menu ? layout[menu.side].find((p) => p.id === menu.itemId) : undefined;
 	const menuKind = menuItem ? menuItem.widgets[(shown[menuItem.id] ?? 0) % menuItem.widgets.length] : undefined;
 
@@ -486,7 +557,7 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 			{/* The grid, while editing */}
 			{editing &&
 				(["left", "right"] as Side[]).map((side) =>
-					Array.from({ length: grid.cells[side] }, (_, cell) => {
+Array.from({ length: usable(side) }, (_, cell) => {
 						const place = placeOf(grid, side, { cell, size: "small" });
 						return (
 							<div
@@ -713,7 +784,7 @@ export function DockWidgets({ dockRef, scale, hidden, stepAside }: Props) {
 									type="button"
 									key={size}
 									className={`dw-seg${menuItem.size === size ? " is-on" : ""}`}
-									disabled={!fits(layout[menu.side], menuItem.cell, size, grid.cells[menu.side], menuItem.id)}
+disabled={!fits(layout[menu.side], menuItem.cell, size, usable(menu.side), menuItem.id)}
 									onClick={() => setSize(menu.side, menuItem, size)}
 								>
 									{size === "small" ? "Small" : size === "wide" ? "Wide" : "Large"}
