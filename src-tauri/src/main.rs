@@ -26,6 +26,7 @@ mod localsend;
 mod localsend_receive;
 mod maintenance;
 mod notifications;
+mod perf_log;
 mod quick_settings;
 mod recycle_bin;
 mod services;
@@ -359,6 +360,7 @@ fn main() {
             startup_timing::startup_mark,
             download_details::download_details,
             commands::set_dock_widget_rects,
+            perf_log::perf_note,
             services::media_now,
             quick_settings::quick_settings_state,
             quick_settings::quick_setting_action,
@@ -534,7 +536,6 @@ fn main() {
             later_windows::start(app.handle().clone());
             setup_mouse_hook(app.handle().clone());
             setup_display_change_monitor(app.handle().clone());
-            setup_window_change_hook(app.handle().clone());
             {
                 let _ = crate::state::THUMBNAIL_CACHE
                     .set(std::sync::Mutex::new(std::collections::HashMap::new()));
@@ -543,7 +544,29 @@ fn main() {
                 // Initialize before the scan so its results are actually stored.
                 let _ = crate::state::INSTALLED_APPS_CACHE.set(std::sync::Mutex::new(Vec::new()));
             }
-            setup_thumbnail_capture(app.handle().clone());
+            // Windows' window events (every window, tooltip and control any
+            // app makes, shows or hides; the window in front; titles) on a
+            // thread of their own, not Bloom's main thread, which draws the
+            // notch and the dock: each event woke it, and the dock and notch
+            // waited behind them while apps were busy opening windows.
+            {
+                let handle = app.handle().clone();
+                let _ = std::thread::Builder::new()
+                    .name("bloom-window-events".into())
+                    .spawn(move || unsafe {
+                        use windows::Win32::UI::WindowsAndMessaging::{
+                            DispatchMessageW, GetMessageW, TranslateMessage, MSG,
+                        };
+                        setup_window_change_hook(handle.clone());
+                        setup_thumbnail_capture(handle);
+                        let mut msg = MSG::default();
+                        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                            let _ = TranslateMessage(&msg);
+                            DispatchMessageW(&msg);
+                        }
+                    });
+            }
+            perf_log::watch_main_thread(app.handle().clone());
             // The installed-apps list (for the search bar) after the start.
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_secs(4));

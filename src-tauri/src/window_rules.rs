@@ -133,16 +133,22 @@ pub fn choose(app: Option<&AppMem>, class: &str, name: &str) -> Choice {
         return Choice::Use(own_id, place);
     }
     // A named window with no entry of its own yet takes the shared one only
-    // while the app has no other named windows (an app with one window, or
-    // sizes saved before windows were told apart). Otherwise it would take
-    // another window's size, as Steam's Friends List took Steam's.
+    // while the app has no other named windows, and only if that entry is its
+    // own: saved before windows were told apart (no title kept), or under this
+    // very title. Otherwise it would take another window's size, as Steam's
+    // Friends List took Steam's, and a browser's extension pop-up took the
+    // browser's maximised window.
     if !name.is_empty() {
         let others = app
             .windows
             .iter()
             .any(|(id, w)| w.class == class && !w.name.is_empty() && *id != own_id);
         let shared_id = window_id(class, "");
-        if let (false, Some(place)) = (others, app.windows.get(&shared_id).and_then(|w| w.place)) {
+        let shared = app
+            .windows
+            .get(&shared_id)
+            .filter(|w| w.title.is_empty() || w.title == name);
+        if let (false, Some(place)) = (others, shared.and_then(|w| w.place)) {
             return Choice::Use(shared_id, place);
         }
     }
@@ -321,6 +327,27 @@ mod tests {
         // And the new format reads back as written.
         let text = serde_json::to_string(&store).unwrap();
         assert_eq!(read_store(&text), store);
+    }
+
+    #[test]
+    fn a_pop_up_never_takes_the_browsers_size() {
+        let mut brave = AppMem::default();
+        let mut max = place(1300, 1500);
+        max.maximized = true;
+        learn(&mut brave, "Chrome_WidgetWin_1", "News - Brave", max, 1);
+        assert_eq!(
+            choose(
+                Some(&brave),
+                "Chrome_WidgetWin_1",
+                "_crx_elicpjhcidhpjomhibiffojpinpmmpil"
+            ),
+            Choice::Nothing
+        );
+        // Another browser window still opens at the browser's size.
+        assert_eq!(
+            choose(Some(&brave), "Chrome_WidgetWin_1", ""),
+            Choice::Use("Chrome_WidgetWin_1|".into(), max)
+        );
     }
 
     #[test]

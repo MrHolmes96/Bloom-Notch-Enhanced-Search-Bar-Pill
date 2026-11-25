@@ -76,6 +76,7 @@ import { initTheme } from "./theme";
 import "./Settings.css";
 import { GHelperIcon } from "./icons/GHelperIcon";
 
+import { usePerfWatch } from "./hooks/usePerfWatch";
 const appWindow = getCurrentWebviewWindow();
 
 type Icon = typeof Settings;
@@ -248,6 +249,7 @@ function placeFor(tab: string, remembered: Record<string, string>): Place {
 }
 
 function SettingsApp() {
+	usePerfWatch("settings");
 	const [place, setPlace] = useState<Place>(() => placeFor("general", readRemembered()));
 	const [open, setOpen] = useState<Record<string, boolean>>(readOpen);
 	const showPages = (id: string, show: boolean) =>

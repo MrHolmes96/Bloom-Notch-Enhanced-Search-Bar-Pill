@@ -29,6 +29,7 @@ export type WidgetKind =
 	| "progress";
 
 export type WidgetSize = "small" | "wide" | "large";
+export type DesktopRule = "smart" | "show" | "hide";
 export type Side = "left" | "right";
 
 export interface WidgetInfo {
@@ -71,6 +72,12 @@ export interface Placed {
 	widgets: WidgetKind[];
 	/** A group's own turn: seconds between widgets, 0 for none. */
 	rotate: number;
+	/**
+	 * With the notch on screen or the desktop in front: "smart" (the default)
+	 * leaves out what the notch already shows; "show" always shows it all;
+	 * "hide" hides it while the desktop is in front.
+	 */
+	desktop?: DesktopRule;
 	/** Per-widget choices (a world clock's time zone, a countdown's date). */
 	options?: Partial<Record<WidgetKind, Record<string, string>>>;
 }
@@ -107,6 +114,7 @@ export function readLayout(text: string | null | undefined): Layout {
 						size,
 						widgets,
 						rotate: Math.max(0, Math.min(120, Number(item?.rotate) || 0)),
+						desktop: item?.desktop === "show" || item?.desktop === "hide" ? item.desktop : undefined,
 						options: typeof item?.options === "object" && item.options ? item.options : undefined
 					};
 				})
@@ -245,4 +253,21 @@ export function fromVersion1(layout: Layout, grid: Grid, dock: { left: number; r
 			})
 		);
 	return { version: 2, left: move("left", layout.left), right: move("right", layout.right) };
+}
+
+/**
+ * What an item shows now: everything while editing or set to "show"; nothing
+ * on the desktop when set to "hide"; otherwise ("smart") all but what the
+ * notch on screen already shows (its clock, its status widgets).
+ */
+export function showing(
+	item: Placed,
+	editing: boolean,
+	notch: { shown: boolean; kinds: ReadonlySet<string> },
+	onDesktop: boolean
+): WidgetKind[] {
+	const rule = item.desktop ?? "smart";
+	if (editing || rule === "show") return item.widgets;
+	if (rule === "hide") return onDesktop ? [] : item.widgets;
+	return notch.shown ? item.widgets.filter((k) => !notch.kinds.has(k)) : item.widgets;
 }

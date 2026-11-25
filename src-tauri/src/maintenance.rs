@@ -411,6 +411,7 @@ pub fn export_logs(app: Option<&AppHandle>) -> Result<PathBuf, String> {
         "desktop-menu.log",
         "window-memory.log",
         "startup-timing.log",
+        "perf.log",
         "tray-app-hidden.txt",
         "tray-icons.txt",
         "restarts.txt",

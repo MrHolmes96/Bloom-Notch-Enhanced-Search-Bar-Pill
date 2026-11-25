@@ -1,7 +1,7 @@
 import { motion, AnimatePresence, useAnimation } from "framer-motion";
 import { readScale, scaleSyncHandlers } from "./uiScale";
 import { useEffect, useLayoutEffect, useState, useCallback, useRef, memo } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getVersion } from "@tauri-apps/api/app";
@@ -22,6 +22,7 @@ import { CompactMediaPlayer } from "./CompactMediaPlayer";
 import { DeviceKindIcon, MiniBattery, type BtDeviceInfo } from "./components/BluetoothBattery";
 import { useWeather } from "./hooks/useWeather";
 import { useSettingsSync } from "./hooks/useSettingsSync";
+import { usePerfWatch } from "./hooks/usePerfWatch";
 import { useTrailingThrottle } from "./hooks/useTrailingThrottle";
 import { reloadIfMirrorWasStale } from "./hooks/settingsMirror";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -590,6 +591,7 @@ const TitleMarquee = ({ title }: { title: string }) => {
 };
 
 function App() {
+	usePerfWatch("notch");
 	useEffect(() => {
 		return initTheme();
 	}, []);
@@ -2975,6 +2977,21 @@ function App() {
 		musicBelowWidgets ||
 		isHovered ||
 		(!widgetsOnHoverOnly && !(showPowerPulse || showLowBatteryPulse || showUpdatePulse));
+
+	// The dock's widgets hide what the notch already shows (their "smart" rule
+	// for the desktop): whether the notch is on screen, and what it shows at
+	// rest (its clock always; its status widgets unless they wait for a hover).
+	const notchShowsKey = JSON.stringify({
+		shown: isReady && isVisible && !isHidden,
+		kinds: ["clock", ...(widgetsOnHoverOnly ? [] : [...shownWidgets.left, ...shownWidgets.right])]
+	});
+	useEffect(() => {
+		const say = () => void emitTo("dock", "notch-shows", JSON.parse(notchShowsKey)).catch(() => {});
+		say();
+		// Again now and then, for a dock page that loaded after.
+		const timer = window.setInterval(say, 5000);
+		return () => window.clearInterval(timer);
+	}, [notchShowsKey]);
 
 	// The 24-hour clock is ~16px narrower than the 12-hour one.
 	const clock24hTrim = timeFormat24h ? 16 : 0;

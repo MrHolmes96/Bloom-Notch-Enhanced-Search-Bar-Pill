@@ -14,6 +14,7 @@ import {
 	fits,
 	freeCells,
 	fromVersion1,
+	showing,
 	gridFor,
 	newId,
 	placeOf,
@@ -21,6 +22,7 @@ import {
 	shelves,
 	widgetInfo,
 	type Grid,
+	type DesktopRule,
 	type Layout,
 	type Placed,
 	type Side,
@@ -52,6 +54,13 @@ interface Props {
 	/** The dock is at rest, full size (not hidden, shrunk or stretched): its height sizes the grid. */
 	resting: boolean;
 }
+
+/** A widget's choices for the desktop (its menu): the rule, its label, what it does. */
+const DESKTOP_RULES: [DesktopRule, string, string][] = [
+	["smart", "Smart", "Hidden while the notch shows the same (its clock, its status widgets)"],
+	["show", "Always", "Always shown"],
+	["hide", "Hide", "Hidden while the desktop is in front"]
+];
 
 /** The dock's height at rest, kept so the grid is right from the first frame (a cache, not a setting). */
 const REST_HEIGHT_KEY = "bloom-dock-widgets-rest-height";
@@ -236,6 +245,36 @@ function DockWidgetsInner({ dockRef, scale, hidden, stepAside, resting }: Props)
 	const sideHidden = (side: Side) =>
 		!editing && (hidden || (stepAside && covered[side === "left" ? 0 : 1]));
 
+	// ---- on the desktop: what the notch shows, and whether the desktop is in front
+	const [notch, setNotch] = useState<{ shown: boolean; kinds: ReadonlySet<string> }>({ shown: false, kinds: new Set() });
+	const [onDesktop, setOnDesktop] = useState(false);
+	useEffect(() => {
+		const a = listen<{ shown: boolean; kinds: string[] }>("notch-shows", (e) =>
+			setNotch((prev) => {
+				const kinds = new Set(e.payload.kinds);
+				const same =
+					prev.shown === e.payload.shown && prev.kinds.size === kinds.size && [...kinds].every((k) => prev.kinds.has(k));
+				return same ? prev : { shown: e.payload.shown, kinds };
+			})
+		);
+		const b = listen<boolean>("dock-on-desktop", (e) => setOnDesktop(e.payload));
+		return () => {
+			void a.then((f) => f());
+			void b.then((f) => f());
+		};
+	}, []);
+	/** The layout as shown now: each item with what it shows, empty ones left out. */
+	const view = useMemo<Layout>(() => {
+		const side = (items: Placed[]) =>
+			items
+				.map((p) => {
+					const widgets = showing(p, editing, notch, onDesktop);
+					return widgets.length === p.widgets.length ? p : { ...p, widgets };
+				})
+				.filter((p) => p.widgets.length > 0);
+		return { version: 2, left: side(layout.left), right: side(layout.right) };
+	}, [layout, editing, notch, onDesktop]);
+
 	// ---- what the placed widgets need
 	const placed = useMemo(
 		() => new Set([...layout.left, ...layout.right].flatMap((p) => p.widgets)),
@@ -289,7 +328,7 @@ function DockWidgetsInner({ dockRef, scale, hidden, stepAside, resting }: Props)
 		gesture.turned = true;
 	};
 	useEffect(() => {
-		const turning = [...layout.left, ...layout.right].filter((p) => p.widgets.length > 1 && p.rotate > 0);
+		const turning = [...view.left, ...view.right].filter((p) => p.widgets.length > 1 && p.rotate > 0);
 		if (!turning.length) return;
 		const timers = turning.map((item) =>
 			window.setInterval(() => {
@@ -297,7 +336,7 @@ function DockWidgetsInner({ dockRef, scale, hidden, stepAside, resting }: Props)
 			}, item.rotate * 1000)
 		);
 		return () => timers.forEach((t) => window.clearInterval(t));
-	}, [layout]);
+	}, [view]);
 
 	// ---- where the shelves are: they take clicks (and the dock window's
 	// whole lower band while editing, for the picker and dragging)
@@ -306,7 +345,7 @@ function DockWidgetsInner({ dockRef, scale, hidden, stepAside, resting }: Props)
 		const out: { side: Side; items: Placed[]; left: number; width: number }[] = [];
 		for (const side of ["left", "right"] as Side[]) {
 			// What the dock reaches into steps aside (it stays where it was placed).
-			const items = layout[side].filter((p) => p.cell + SPAN[p.size] <= usable(side));
+			const items = view[side].filter((p) => p.cell + SPAN[p.size] <= usable(side));
 			for (const run of shelves(items)) {
 				const places = run.map((p) => placeOf(grid, side, p));
 				const left = Math.min(...places.map((p) => p.left)) - grid.pad;
@@ -315,7 +354,7 @@ function DockWidgetsInner({ dockRef, scale, hidden, stepAside, resting }: Props)
 			}
 		}
 		return out;
-	}, [grid, layout, free]);
+	}, [grid, view, free]);
 
 	useEffect(() => {
 		if (!grid) return;
@@ -854,6 +893,22 @@ disabled={!fits(layout[menu.side], menuItem.cell, size, usable(menu.side), menuI
 								</button>
 							</>
 						)}
+						<div className="dw-menu-label">On the desktop</div>
+						<div className="dw-menu-row">
+							{DESKTOP_RULES.map(([rule, label, hint]) => (
+								<button
+									type="button"
+									key={rule}
+									title={hint}
+									className={`dw-seg${(menuItem.desktop ?? "smart") === rule ? " is-on" : ""}`}
+									onClick={() =>
+										change(menu.side, menuItem.id, (p) => ({ ...p, desktop: rule === "smart" ? undefined : rule }))
+									}
+								>
+									{label}
+								</button>
+							))}
+						</div>
 						<button type="button" className="dw-menu-item" onClick={() => (setEditing(true), setMenu(null))}>
 							Edit widgets
 						</button>

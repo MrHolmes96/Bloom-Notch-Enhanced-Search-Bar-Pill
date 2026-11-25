@@ -9,6 +9,7 @@ import { EdgeSurface } from "./components/EdgeSurface";
 import { DockWidgets } from "./dockWidgets/DockWidgets";
 import { initTheme } from "./theme";
 import { useSettingsSync } from "./hooks/useSettingsSync";
+import { usePerfWatch } from "./hooks/usePerfWatch";
 import { reloadIfMirrorWasStale } from "./hooks/settingsMirror";
 
 import { mergeTrayApps, selectDockTrayApps, type AppInfo, type TrayApp } from "./dockApps";
@@ -173,6 +174,7 @@ function ProgressBar({ progress }: { progress: ShownProgress }) {
 }
 
 const Dock = memo(function Dock() {
+	usePerfWatch("dock");
 	useEffect(() => {
 		return initTheme();
 	}, []);

@@ -710,7 +710,10 @@ fn take_picture(hwnd: HWND) -> bool {
         return true;
     }
     let size = crate::window_capture::PREVIEW_BOX;
-    crate::window_capture::take(hwnd, size, size, false).is_some_and(|shot| shot.usable)
+    let started = std::time::Instant::now();
+    let shot = crate::window_capture::take(hwnd, size, size, false);
+    crate::perf_log::slow_picture(hwnd, started.elapsed());
+    shot.is_some_and(|shot| shot.usable)
 }
 
 /// How long after a switch of the window in front its pictures wait.
@@ -1502,6 +1505,10 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
         let mut last_hwnd = HWND(std::ptr::null_mut());
         let mut last_emit = Instant::now();
         let mut is_known_shell = false;
+        // The desktop is in front (no app window active): for the dock's
+        // widgets set to hide on the desktop.
+        let mut on_desktop = false;
+        let mut last_on_desktop: Option<bool> = None;
         let my_process_id = std::process::id();
         let mut last_monitor_update = Instant::now() - Duration::from_secs(5);
         let mut cached_scale = 1.0f64;
@@ -1622,6 +1629,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         || is_start;
 
                     is_known_shell = is_desktop || is_shell;
+                    on_desktop = is_desktop;
                 }
 
                 if !hwnd.is_invalid() {
@@ -1645,6 +1653,7 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                     should_overlap = false;
                     current_is_fs = false;
                     is_known_shell = false;
+                    on_desktop = true;
                 }
 
                 // Smart mode also steps aside for any app window under the
@@ -1709,6 +1718,13 @@ pub fn setup_system_worker(app_handle: AppHandle) -> Sender<SystemCommand> {
                         [widgets_covered.0, widgets_covered.1],
                     );
                     last_widgets_covered = Some(widgets_covered);
+                }
+
+                if Some(on_desktop) != last_on_desktop
+                    || widgets_said.elapsed() >= Duration::from_secs(3)
+                {
+                    let _ = handle_visibility.emit_to("dock", "dock-on-desktop", on_desktop);
+                    last_on_desktop = Some(on_desktop);
                 }
 
                 if Some(should_notch_overlap) != last_notch_overlap
